@@ -75,22 +75,19 @@ impl LocaleCatalog {
 
         // 3. Vorrangig externe `lang/<code>.ini` von der Festplatte laden und darüberlegen
         let file_code = if is_de { "de" } else { catalog.code.as_str() };
-        if let Some(disk_path) = Self::find_lang_ini_on_disk(file_code) {
-            if let Ok(disk_content) = fs::read_to_string(&disk_path) {
+        if let Some(disk_path) = Self::find_lang_ini_on_disk(file_code)
+            && let Ok(disk_content) = fs::read_to_string(&disk_path) {
                 catalog.parse_and_merge_ini(&disk_content);
             }
-        }
 
-        if let Some(meta_name) = catalog.entries.get("meta.name").cloned() {
-            if !meta_name.trim().is_empty() {
+        if let Some(meta_name) = catalog.entries.get("meta.name").cloned()
+            && !meta_name.trim().is_empty() {
                 catalog.display_name = meta_name.trim().to_string();
             }
-        }
-        if let Some(meta_code) = catalog.entries.get("meta.code").cloned() {
-            if !meta_code.trim().is_empty() {
+        if let Some(meta_code) = catalog.entries.get("meta.code").cloned()
+            && !meta_code.trim().is_empty() {
                 catalog.code = meta_code.trim().to_ascii_lowercase();
             }
-        }
 
         catalog
     }
@@ -117,14 +114,13 @@ impl LocaleCatalog {
                 dirs.push(parent.join("lang"));
             }
         }
-        if let Ok(exe) = std::env::current_exe() {
-            if let Some(exe_dir) = exe.parent() {
+        if let Ok(exe) = std::env::current_exe()
+            && let Some(exe_dir) = exe.parent() {
                 dirs.push(exe_dir.join("lang"));
                 if let Some(parent) = exe_dir.parent() {
                     dirs.push(parent.join("lang"));
                 }
             }
-        }
         dirs.push(Path::new(env!("CARGO_MANIFEST_DIR")).join("lang"));
         dirs
     }

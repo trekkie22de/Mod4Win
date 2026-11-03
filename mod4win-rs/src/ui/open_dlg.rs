@@ -278,14 +278,13 @@ impl OpenDialogState {
 
         match &self.context {
             OpenBrowseContext::Directory(dir) => {
-                if let Some(parent) = dir.parent() {
-                    if parent != dir {
+                if let Some(parent) = dir.parent()
+                    && parent != dir {
                         self.mid_dirs.push(OpenDirItem {
                             label: "<..>".to_string(),
                             kind: OpenDirKind::Parent(parent.to_path_buf()),
                         });
                     }
-                }
 
                 let mut subdirs = Vec::new();
                 let mut mols = Vec::new();
@@ -1130,8 +1129,8 @@ impl Mod4WinApp {
                     self.open_dlg.left_cursor = idx;
                     if is_double_click {
                         // Doppelklick auf Datei links -> zur Playlist hinzufügen
-                        if let Some(f) = self.open_dlg.left_files.get(idx).cloned() {
-                            if let Some(p) = f.resolve_to_path() {
+                        if let Some(f) = self.open_dlg.left_files.get(idx).cloned()
+                            && let Some(p) = f.resolve_to_path() {
                                 self.open_dlg.right_playlist.push(OpenPlaylistItem {
                                     path: p,
                                     display_name: f.display_name.clone(),
@@ -1143,7 +1142,6 @@ impl Mod4WinApp {
                                 self.open_dlg.status_msg =
                                     format!("Added {} to playlist.", f.display_name);
                             }
-                        }
                     } else if classic_input {
                         // 1995er Verhalten (`--classic-input`): Klick toggelt die Auswahl
                         self.open_dlg.left_files[idx].selected =

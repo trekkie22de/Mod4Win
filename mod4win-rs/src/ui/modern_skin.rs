@@ -812,7 +812,7 @@ impl Mod4WinApp {
                 surf.height = expected_h;
                 surf.needs_aspect_snap = false;
 
-                let _ = surf.window.set_min_inner_size(Some(super::winit::dpi::LogicalSize::new(
+                surf.window.set_min_inner_size(Some(super::winit::dpi::LogicalSize::new(
                     (expected_w as f64) * 0.25,
                     (expected_h as f64) * 0.25,
                 )));
@@ -878,8 +878,8 @@ impl Mod4WinApp {
         // Wenn das Hauptfenster (`Main`) bewegt wird: Alle aktuell direkt oder transitiv an `Main`
         // angedockten Unterfenster (`Info`, `InstrumentInfo`, `Effects`, `QuickSelect`, `OpenDialog`) ermitteln.
         let mut docked_followers: Vec<(super::winit::window::WindowId, WindowKind, i32, i32)> = Vec::new();
-        if moved_kind == WindowKind::Main {
-            if let Some((old_mx, old_my)) = old_pos {
+        if moved_kind == WindowKind::Main
+            && let Some((old_mx, old_my)) = old_pos {
                 let mut cluster_rects: Vec<(i32, i32, i32, i32)> = vec![(old_mx, old_my, dw, dh)];
                 let candidates: Vec<(super::winit::window::WindowId, WindowKind, i32, i32, i32, i32)> =
                     self.windows
@@ -932,7 +932,6 @@ impl Mod4WinApp {
                     }
                 }
             }
-        }
 
         let mut nx = pos_x;
         let mut ny = pos_y;
@@ -1006,20 +1005,18 @@ impl Mod4WinApp {
         if (nx != pos_x || ny != pos_y)
             && (nx - pos_x).abs() <= MODERN_SNAP_THRESHOLD
             && (ny - pos_y).abs() <= MODERN_SNAP_THRESHOLD
-        {
-            if let Some(moved_surf) = self.windows.get(&moved_id) {
-                let _ = moved_surf
+            && let Some(moved_surf) = self.windows.get(&moved_id) {
+                moved_surf
                     .window
                     .set_outer_position(super::winit::dpi::PhysicalPosition::new(nx, ny));
             }
-        }
         if let Some(moved_surf) = self.windows.get_mut(&moved_id) {
             moved_surf.last_outer_pos = Some((nx, ny));
         }
 
         // 3. Wenn `Main` verschoben wurde: Alle angedockten Unterfenster synchron um `(dx, dy)` mitbewegen!
-        if moved_kind == WindowKind::Main {
-            if let Some((old_mx, old_my)) = old_pos {
+        if moved_kind == WindowKind::Main
+            && let Some((old_mx, old_my)) = old_pos {
                 let dx = nx - old_mx;
                 let dy = ny - old_my;
                 if dx != 0 || dy != 0 {
@@ -1028,7 +1025,7 @@ impl Mod4WinApp {
                         let new_fy = fy + dy;
                         if let Some(fsurf) = self.windows.get_mut(&fid) {
                             fsurf.last_outer_pos = Some((new_fx, new_fy));
-                            let _ = fsurf
+                            fsurf
                                 .window
                                 .set_outer_position(super::winit::dpi::PhysicalPosition::new(new_fx, new_fy));
                         }
@@ -1036,7 +1033,6 @@ impl Mod4WinApp {
                     }
                 }
             }
-        }
         self.suppress_move_snap = false;
 
         (nx, ny)
@@ -1276,11 +1272,11 @@ impl Mod4WinApp {
         draw_modern_lcd_box(frame, dw, dh, 383, 30, 152, 66);
 
         // Links im Status-LCD: 14-teilige vertikale CPU-Last-LED-Kette (gekoppelt an gedämpfte cpu_load 0%..100%)
-        let cpu_pct_bar = state.cpu_telemetry.display_cpu_percent.min(100) as u32;
+        let cpu_pct_bar = state.cpu_telemetry.display_cpu_percent.min(100);
         let lit_cpu_segs = if cpu_pct_bar == 0 {
             0
         } else {
-            ((cpu_pct_bar * 14 + 99) / 100).clamp(1, 14)
+            (cpu_pct_bar * 14).div_ceil(100).clamp(1, 14)
         };
         for idx in 0..14u32 {
             let from_bottom = 13 - idx;
@@ -1443,7 +1439,7 @@ impl Mod4WinApp {
         };
         // Bei Mono (`stereo < 2`) ist das Ausgangssignal auf beiden Kanälen identisch
         if state.sound_settings.stereo < 2 {
-            let mono_val = (vu_l_val + vu_r_val + 1) / 2;
+            let mono_val = (vu_l_val + vu_r_val).div_ceil(2);
             vu_l_val = mono_val;
             vu_r_val = mono_val;
         }
@@ -1519,7 +1515,7 @@ impl Mod4WinApp {
         let raw_preamp = (state.sound_settings.pre_amp & 0x7F).min(40) as i32;
         let db_val = raw_preamp - 20; // -20 .. +20 dB
         let norm = ((20 - db_val) as f32 / 40.0).clamp(0.0, 1.0);
-        let hw = (36 + ((32 * (20 - raw_preamp)) / 20)).clamp(0, 71) as i32;
+        let hw = (36 + ((32 * (20 - raw_preamp)) / 20)).clamp(0, 71);
 
         // Durchgehender vertikaler Farbverlauf-Balken wie im Original (`PREAMP.bmp`: Rot -> Orange/Gelb -> Grün um 0 dB -> Gelb/Orange -> Rot)
         let bar_x = 544i32;
@@ -1541,16 +1537,16 @@ impl Mod4WinApp {
             let (base_r, base_g, base_b) = if dist < 0.5 {
                 let t = dist * 2.0; // Grün (#10e838) -> Gelb/Orange (#f5b810)
                 (
-                    (16.0 + (245.0 - 16.0) * t) as f32,
-                    (232.0 + (184.0 - 232.0) * t) as f32,
-                    (56.0 + (16.0 - 56.0) * t) as f32,
+                    (16.0 + (245.0 - 16.0) * t),
+                    (232.0 + (184.0 - 232.0) * t),
+                    (56.0 + (16.0 - 56.0) * t),
                 )
             } else {
                 let t = (dist - 0.5) * 2.0; // Gelb/Orange (#f5b810) -> Rot (#f02814)
                 (
-                    (245.0 + (240.0 - 245.0) * t) as f32,
-                    (184.0 + (40.0 - 184.0) * t) as f32,
-                    (16.0 + (20.0 - 16.0) * t) as f32,
+                    (245.0 + (240.0 - 245.0) * t),
+                    (184.0 + (40.0 - 184.0) * t),
+                    (16.0 + (20.0 - 16.0) * t),
                 )
             };
             // Wie in DrawPreAmp: Bereich zwischen 0 dB (ry=36) und Fader-Stellung (hw) leuchtet voll, Rest dezent abgedunkelt
@@ -2128,11 +2124,10 @@ impl Mod4WinApp {
                         },
                     )
                 };
-                if let Some(mod_path) = mod_path_opt {
-                    if let Ok((file_data, ext_opt)) =
+                if let Some(mod_path) = mod_path_opt
+                    && let Ok((file_data, ext_opt)) =
                         super::archive_mol::read_module_bytes_universal(&mod_path)
-                    {
-                        if let Ok(m) = crate::engine::loader::load_module_with_ext(
+                        && let Ok(m) = crate::engine::loader::load_module_with_ext(
                             &file_data,
                             ext_opt.as_deref(),
                         ) {
@@ -2145,8 +2140,6 @@ impl Mod4WinApp {
                                 true,
                             );
                         }
-                    }
-                }
             } else {
                 self.preamp_dragging = true;
                 self.update_preamp_from_y(vy);
@@ -2482,7 +2475,7 @@ impl Mod4WinApp {
         dh: u32,
         state: &UiSharedState,
     ) {
-        let num_ch = state.num_channels.clamp(4, 32) as usize;
+        let num_ch = state.num_channels.clamp(4, 32);
         let title = format!("[11] Effects Analyzer (Channels 1-{})", num_ch);
         draw_modern_window_shell(frame, dw, dh, false, &title, false, false);
 
@@ -2621,7 +2614,7 @@ impl Mod4WinApp {
             .lock()
             .unwrap()
             .num_channels
-            .clamp(4, 32) as usize;
+            .clamp(4, 32);
         let dw = 350u32.max(115 + (num_ch as u32) * 20);
         if vy < 24 {
             if vx >= (dw as i32 - 26) {
@@ -3120,11 +3113,10 @@ impl Mod4WinApp {
                         st.playlist_idx = 0;
                         st.playing_track_detached = false;
                         st.rebuild_number_list();
-                        if st.ini_config.play_on_load {
-                            if let Some(first) = st.playlist.first().cloned() {
+                        if st.ini_config.play_on_load
+                            && let Some(first) = st.playlist.first().cloned() {
                                 st.pending_load_file = Some(first);
                             }
-                        }
                     }
                     let fname = mol_path
                         .file_name()
@@ -4592,7 +4584,7 @@ mod tests {
         render_mod4win_matrix20(&mut frame, 360, 30, 0, 0, 360, 28, "GIANA SISTERS !");
         let mut has_bright_green = false;
         let mut has_diag_dim = false;
-        for px in frame.chunks_exact(4) {
+        for px in frame.as_chunks::<4>().0 {
             if px[0] == 0x00 && px[1] == 0xff && px[2] == 0x00 {
                 has_bright_green = true;
             }

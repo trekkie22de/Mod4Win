@@ -262,7 +262,7 @@ impl LiveAudioProcessor {
             match mix_out {
                 MixOutputBuffer::Pcm16(samples) => {
                     if is_stereo {
-                        for pair in samples.chunks_exact(2) {
+                        for pair in samples.as_chunks::<2>().0 {
                             self.frame_queue.push_back((pair[0], pair[1]));
                         }
                     } else {
@@ -273,7 +273,7 @@ impl LiveAudioProcessor {
                 }
                 MixOutputBuffer::Pcm8(bytes) => {
                     if is_stereo {
-                        for pair in bytes.chunks_exact(2) {
+                        for pair in bytes.as_chunks::<2>().0 {
                             let l = pcm8_to_i16(pair[0]);
                             let r = pcm8_to_i16(pair[1]);
                             self.frame_queue.push_back((l, r));
@@ -328,7 +328,7 @@ impl LiveAudioProcessor {
         match mix_out {
             MixOutputBuffer::Pcm16(samples) => {
                 if is_stereo {
-                    for pair in samples.chunks_exact(2) {
+                    for pair in samples.as_chunks::<2>().0 {
                         self.frame_queue.push_back((pair[0], pair[1]));
                     }
                 } else {
@@ -339,7 +339,7 @@ impl LiveAudioProcessor {
             }
             MixOutputBuffer::Pcm8(bytes) => {
                 if is_stereo {
-                    for pair in bytes.chunks_exact(2) {
+                    for pair in bytes.as_chunks::<2>().0 {
                         let l = pcm8_to_i16(pair[0]);
                         let r = pcm8_to_i16(pair[1]);
                         self.frame_queue.push_back((l, r));
@@ -602,9 +602,9 @@ pub fn sync_ui_commands(
         }
     }
 
-    if let Some(new_path) = ui.pending_load_file.take() {
-        if let Ok((file_data, ext_opt)) = read_module_bytes_universal(&new_path) {
-            if let Ok(new_mod) = load_module_with_ext(&file_data, ext_opt.as_deref()) {
+    if let Some(new_path) = ui.pending_load_file.take()
+        && let Ok((file_data, ext_opt)) = read_module_bytes_universal(&new_path)
+            && let Ok(new_mod) = load_module_with_ext(&file_data, ext_opt.as_deref()) {
                 let mod_name_len = new_mod.state.mi.mod_name_len as usize;
                 let mod_name = String::from_utf8_lossy(&new_mod.state.mi.mod_name[..mod_name_len.min(40)])
                     .trim()
@@ -709,12 +709,10 @@ pub fn sync_ui_commands(
                 }
                 ui.is_paused = false;
             }
-        }
-    }
 
-    if let Some(wav_out_path) = ui.pending_export_wav.take() {
-        if let Some(ref mod_path) = ui.current_file_path {
-            if let Ok(file_data) = fs::read(mod_path) {
+    if let Some(wav_out_path) = ui.pending_export_wav.take()
+        && let Some(ref mod_path) = ui.current_file_path
+            && let Ok(file_data) = fs::read(mod_path) {
                 let ext = mod_path.extension().and_then(|e| e.to_str());
                 if let Ok(export_mod) = load_module_with_ext(&file_data, ext) {
                     ui.is_exporting_wav = true;
@@ -745,8 +743,6 @@ pub fn sync_ui_commands(
                     ui.is_exporting_wav = false;
                 }
             }
-        }
-    }
 }
 
 /// Berechnet die exakte Gesamtdauer (`mi.total_time`), die Pattern-Startzeiten (`pattern_times`)
@@ -755,7 +751,7 @@ pub fn sync_ui_commands(
 /// über `kanal_init(false)` sauber auf den Songanfang zurück.
 #[inline(never)]
 pub fn compute_module_total_time_ms_on_seq(seq: &mut Sequencer) -> i32 {
-    if seq.module.state.mi.num_patterns <= 0 || seq.module.state.mi.num_tracks <= 0 {
+    if seq.module.state.mi.num_patterns == 0 || seq.module.state.mi.num_tracks == 0 {
         return 0;
     }
     let saved_repeat = seq.module.state.repeat_song;
@@ -787,7 +783,7 @@ mod tests {
         if is_16bit_inst {
             module.sample_mem = vec![0u8; ((base_ofs as usize) + 260) * 2];
             for i in 0..256 {
-                let val_i16 = ((SIN_TABLE[i] as i8 as i16) * 200).clamp(-32000, 32000);
+                let val_i16 = ((SIN_TABLE[i] as i16) * 200).clamp(-32000, 32000);
                 let bytes = val_i16.to_le_bytes();
                 let byte_idx = ((base_ofs as usize) + i) * 2;
                 module.sample_mem[byte_idx] = bytes[0];

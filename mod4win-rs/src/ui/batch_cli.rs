@@ -36,6 +36,7 @@ pub struct RenderWavCliOptions {
 /// Lädt die Rohbytes und Dateiendung eines Tracker-Moduls – entweder direkt von der Festplatte,
 /// aus einem `.ZIP`-Archiv (`archiv.zip` -> erstes unterstütztes Modul) oder über die Notation
 /// `archiv.zip::datei.xm` bzw. `archiv.zip/datei.xm`.
+#[allow(clippy::type_complexity)]
 pub fn load_input_module_bytes(
     input_spec: &str,
 ) -> Result<(Vec<u8>, Option<String>, String), Box<dyn std::error::Error>> {
@@ -113,8 +114,7 @@ pub fn load_input_module_bytes(
                 .and_then(|e| e.to_str())
                 .map(|s| s.eq_ignore_ascii_case("zip"))
                 .unwrap_or(false)
-        {
-            if let Ok(rel) = p.strip_prefix(parent_path) {
+            && let Ok(rel) = p.strip_prefix(parent_path) {
                 let entry_part = rel.to_string_lossy();
                 let zip_bytes = fs::read(parent_path)?;
                 let entries = parse_zip_entries(&zip_bytes);
@@ -140,7 +140,6 @@ pub fn load_input_module_bytes(
                     ));
                 }
             }
-        }
         anc = parent_path.parent();
     }
 
@@ -307,7 +306,7 @@ pub fn parse_wav_bytes_i16(raw: &[u8]) -> Result<ParsedWavData, String> {
                 }
             } else {
                 samples.reserve(payload.len() / 2);
-                for chunk in payload.chunks_exact(2) {
+                for chunk in payload.as_chunks::<2>().0 {
                     samples.push(i16::from_le_bytes([chunk[0], chunk[1]]));
                 }
             }

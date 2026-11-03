@@ -380,7 +380,7 @@ impl Mod4WinApp {
         // 10. 3D-Buttons (Transport, 2x4-Funktionsblock und Titelleiste)
         let is_stopped = !state.is_playing && !state.is_paused;
         let scan_blink_on = !state.intro_scan
-            || ((self.about_opened_at.elapsed().as_millis() / 350) % 2 == 0);
+            || (self.about_opened_at.elapsed().as_millis() / 350).is_multiple_of(2);
         let is_play_active = state.is_playing && !state.is_paused && scan_blink_on;
         let is_pause_active = state.is_paused;
 
@@ -624,14 +624,13 @@ impl Mod4WinApp {
         }
 
         // 12. Sicherheitsabfrage (`OurMessageBox` / `TModalWindow` in `winunit.pas`) für `F7` (Remove) und `F8` (Delete)
-        if let Some(action) = self.confirm_action {
-            if !self.is_window_open(WindowKind::ConfirmDialog) {
+        if let Some(action) = self.confirm_action
+            && !self.is_window_open(WindowKind::ConfirmDialog) {
                 let (cw, _) = self.confirm_dialog_size(action);
                 let cx = ((dw as i32) - (cw as i32)) / 2;
                 let cy = 5;
                 self.render_confirm_dialog_at(frame, dw, dh, cx, cy, cw, 124, action, state);
             }
-        }
     }
 
     pub(crate) fn confirm_dialog_size(&self, action: ConfirmAction) -> (u32, u32) {
@@ -940,7 +939,7 @@ impl Mod4WinApp {
 
         let is_stopped = !state.is_playing && !state.is_paused;
         let scan_blink_on = !state.intro_scan
-            || ((self.about_opened_at.elapsed().as_millis() / 350) % 2 == 0);
+            || (self.about_opened_at.elapsed().as_millis() / 350).is_multiple_of(2);
         let is_play_active = state.is_playing && !state.is_paused && scan_blink_on;
         let is_pause_active = state.is_paused;
 
@@ -1180,7 +1179,7 @@ impl Mod4WinApp {
 
         // Wir rendern in einen temporären 308x40 Puffer für sauberes vertikales Clipping an den Rändern des Scroller-Displays
         let mut scr_buf = vec![0u8; (scr_w * scr_h * 4) as usize];
-        for b in scr_buf.chunks_exact_mut(4) {
+        for b in scr_buf.as_chunks_mut::<4>().0 {
             b[3] = 255;
         }
         for (i, line) in credits.iter().enumerate() {
@@ -1235,11 +1234,10 @@ impl Mod4WinApp {
                 None
             }
         });
-        if action == ConfirmAction::DeleteFromDisk {
-            if let Some(ref p) = cur_path {
+        if action == ConfirmAction::DeleteFromDisk
+            && let Some(ref p) = cur_path {
                 let _ = std::fs::remove_file(p);
             }
-        }
         if !state.playing_track_detached
             && !state.playlist.is_empty()
             && state.playlist_idx < state.playlist.len()
@@ -1334,11 +1332,9 @@ impl Mod4WinApp {
                 self.confirm_action = None;
                 self.close_window(WindowKind::ConfirmDialog);
                 self.execute_confirm_action(action);
-                return;
             } else if (bx_no..=bx_no + 62).contains(&vx) {
                 self.confirm_action = None;
                 self.close_window(WindowKind::ConfirmDialog);
-                return;
             }
         }
     }
@@ -1352,8 +1348,8 @@ impl Mod4WinApp {
         is_double_click: bool,
     ) {
         // 0a. Wenn gerade eine F7/F8 Sicherheitsabfrage offen ist (Fallback im Hauptfenster):
-        if let Some(action) = self.confirm_action {
-            if !self.kind_to_id.contains_key(&WindowKind::ConfirmDialog) {
+        if let Some(action) = self.confirm_action
+            && !self.kind_to_id.contains_key(&WindowKind::ConfirmDialog) {
                 let cw: i32 = match action {
                     ConfirmAction::DeleteFromDisk => 284,
                     ConfirmAction::RemoveFromPlaylist => 398,
@@ -1378,7 +1374,6 @@ impl Mod4WinApp {
                 }
                 return;
             }
-        }
 
         // 0b. Wenn das System-Menü offen ist:
         if self.sys_menu_open {
@@ -1735,11 +1730,10 @@ impl Mod4WinApp {
                     },
                 )
             };
-            if let Some(mod_path) = mod_path_opt {
-                if let Ok((file_data, ext_opt)) =
+            if let Some(mod_path) = mod_path_opt
+                && let Ok((file_data, ext_opt)) =
                     super::archive_mol::read_module_bytes_universal(&mod_path)
-                {
-                    if let Ok(m) =
+                    && let Ok(m) =
                         crate::engine::loader::load_module_with_ext(&file_data, ext_opt.as_deref())
                     {
                         UiSharedState::start_or_resolve_peak_search(
@@ -1751,8 +1745,6 @@ impl Mod4WinApp {
                             true,
                         );
                     }
-                }
-            }
             return;
         }
 

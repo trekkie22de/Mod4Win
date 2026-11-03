@@ -273,14 +273,13 @@ impl Mod4WinIniConfig {
         if local.exists() {
             return local;
         }
-        if let Ok(exe) = std::env::current_exe() {
-            if let Some(dir) = exe.parent() {
+        if let Ok(exe) = std::env::current_exe()
+            && let Some(dir) = exe.parent() {
                 let candidate = dir.join("MOD4WIN.INI");
                 if candidate.exists() {
                     return candidate;
                 }
             }
-        }
         local
     }
 
@@ -336,20 +335,18 @@ impl Mod4WinIniConfig {
                             cfg.device_id = if id == DEV_HDD { DEV_HDD } else { DEV_SOUNDCARD };
                         }
                     }
-                    "DEVICENAME" => {
-                        if !val.is_empty() {
+                    "DEVICENAME"
+                        if !val.is_empty() => {
                             cfg.device_name = val.to_string();
                         }
-                    }
                     _ => {}
                 },
                 "SAMPLING" => match key.to_ascii_uppercase().as_str() {
                     "SAMPLERATE" => {
-                        if let Ok(sr) = val.parse::<u32>() {
-                            if (4000..=96000).contains(&sr) {
+                        if let Ok(sr) = val.parse::<u32>()
+                            && (4000..=96000).contains(&sr) {
                                 cfg.sample_rate = sr;
                             }
-                        }
                     }
                     "BITSPERSAMPLE" => {
                         if let Ok(b) = val.parse::<u8>() {
@@ -514,21 +511,19 @@ impl Mod4WinIniConfig {
                         }
                     }
                     "GUISCALE" | "SCALEFACTOR" => {
-                        if let Ok(sc) = val.parse::<f64>() {
-                            if sc.is_finite() {
+                        if let Ok(sc) = val.parse::<f64>()
+                            && sc.is_finite() {
                                 cfg.gui_scale = sc.clamp(0.5, 4.0);
                             }
-                        }
                     }
                     _ => {}
                 },
                 "WINDOWS" => {
-                    if let Some((xs, ys)) = val.split_once(',') {
-                        if let (Ok(x), Ok(y)) = (xs.trim().parse::<i32>(), ys.trim().parse::<i32>()) {
+                    if let Some((xs, ys)) = val.split_once(',')
+                        && let (Ok(x), Ok(y)) = (xs.trim().parse::<i32>(), ys.trim().parse::<i32>()) {
                             cfg.window_positions
                                 .insert(key.to_ascii_uppercase(), (x.max(0), y.max(0)));
                         }
-                    }
                 }
                 "PACKER" => match key.to_ascii_uppercase().as_str() {
                     "SHOWWINDOW" => cfg.show_pack_window = val != "0",
@@ -550,32 +545,27 @@ impl Mod4WinIniConfig {
                     _ => {}
                 },
                 "HOTKEYS" => {
-                    if let Some(id_str) = key.strip_prefix("KEY").or_else(|| key.strip_prefix("Key")) {
-                        if let Ok(act_id) = id_str.parse::<u8>() {
-                            if let Some((k_name, st_str)) = val.rsplit_once('|') {
-                                if let Ok(st_val) = st_str.trim().parse::<u8>() {
-                                    if let Some(hk) =
+                    if let Some(id_str) = key.strip_prefix("KEY").or_else(|| key.strip_prefix("Key"))
+                        && let Ok(act_id) = id_str.parse::<u8>()
+                            && let Some((k_name, st_str)) = val.rsplit_once('|')
+                                && let Ok(st_val) = st_str.trim().parse::<u8>()
+                                    && let Some(hk) =
                                         cfg.hotkeys.iter_mut().find(|h| h.action_id == act_id)
                                     {
                                         hk.key_name = k_name.trim().to_string();
                                         hk.state = st_val & 0x07;
                                     }
-                                }
-                            }
-                        }
-                    }
                 }
                 "LANGUAGE" => {
-                    if key.eq_ignore_ascii_case("LANGUAGE") {
-                        if let Ok(l) = val.parse::<u8>() {
+                    if key.eq_ignore_ascii_case("LANGUAGE")
+                        && let Ok(l) = val.parse::<u8>() {
                             cfg.language = l.min(6);
                         }
-                    }
                 }
                 "PLAYLIST" => {
-                    if let Some(num_str) = key.strip_prefix("FILE").or_else(|| key.strip_prefix("File")) {
-                        if let Ok(idx) = num_str.parse::<usize>() {
-                            if !val.is_empty() {
+                    if let Some(num_str) = key.strip_prefix("FILE").or_else(|| key.strip_prefix("File"))
+                        && let Ok(idx) = num_str.parse::<usize>()
+                            && !val.is_empty() {
                                 // Kein synchroner Disk-Syscall (`exists()` / `read_dir()`) pro Playlist-Zeile beim INI-Start!
                                 // Bei 8.700+ oder 999.999 Einträgen würde `GetFileAttributesW` sonst Sekunden bis Minuten blockieren.
                                 #[cfg(target_os = "windows")]
@@ -586,8 +576,6 @@ impl Mod4WinIniConfig {
                                 );
                                 playlist_entries.push((idx, p));
                             }
-                        }
-                    }
                 }
                 "PEAKS" => {
                     if let Ok(pa) = val.parse::<u8>() {
@@ -772,7 +760,7 @@ impl Mod4WinIniConfig {
         }
         // Fallback: Binäre `MOD4WIN.PKS` durchsuchen (8 Bytes pro Eintrag: fSize: u32, Check: u16, PreAmp: u16)
         if let Ok(bytes) = fs::read(pks_path) {
-            for chunk in bytes.chunks_exact(8) {
+            for chunk in bytes.as_chunks::<8>().0 {
                 let f_size = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
                 let check = u16::from_le_bytes([chunk[4], chunk[5]]);
                 let preamp = u16::from_le_bytes([chunk[6], chunk[7]]);
@@ -793,7 +781,7 @@ impl Mod4WinIniConfig {
         // Aktualisiere oder hänge den 8-Byte `tPeakStruct`-Datensatz in `MOD4WIN.PKS` an
         let mut data = fs::read(pks_path).unwrap_or_default();
         let mut updated = false;
-        for chunk in data.chunks_exact_mut(8) {
+        for chunk in data.as_chunks_mut::<8>().0 {
             let f_size = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
             let check = u16::from_le_bytes([chunk[4], chunk[5]]);
             if f_size == file_size && check == crc {
@@ -861,11 +849,10 @@ pub fn export_module_to_wav_file(
     ini_cfg: &mut Mod4WinIniConfig,
     wav_path: &Path,
 ) -> Result<usize, Box<dyn std::error::Error>> {
-    if let Some(parent) = wav_path.parent() {
-        if !parent.as_os_str().is_empty() && !parent.exists() {
+    if let Some(parent) = wav_path.parent()
+        && !parent.as_os_str().is_empty() && !parent.exists() {
             let _ = fs::create_dir_all(parent);
         }
-    }
 
     let sr = ini_cfg.sample_rate.clamp(4000, 96000);
     let ch = ini_cfg.channels.clamp(1, 2);

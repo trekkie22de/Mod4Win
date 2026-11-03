@@ -1,3 +1,10 @@
+#![allow(
+    clippy::chunks_exact_to_as_chunks,
+    clippy::collapsible_if,
+    clippy::type_complexity,
+    clippy::write_with_newline
+)]
+
 #[cfg(not(all(
     any(target_os = "windows", target_os = "linux"),
     any(target_arch = "x86", target_arch = "x86_64")

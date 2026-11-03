@@ -93,7 +93,7 @@ impl BmpImage {
         }
 
         let mut rgba_data = vec![0u8; (img_width * img_height * 4) as usize];
-        let row_stride = (((img_width as usize * bpp as usize) + 31) / 32) * 4;
+        let row_stride = (img_width as usize * bpp as usize).div_ceil(32) * 4;
 
         if bytes.len() < pixel_offset {
             return Err("Pixel-Offset liegt außerhalb der Datei".into());

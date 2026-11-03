@@ -148,7 +148,7 @@ impl Mod4WinApp {
     /// Baut das Effekt-Fenster (`bm12` / `ana.pas`) prozedural exakt wie im Pascal-Code auf.
     pub(crate) fn render_effects_window(&self, frame: &mut [u8], dw: u32, dh: u32, state: &UiSharedState) {
         let active_cols = state.active_effect_columns();
-        let num_ch = state.num_channels.max(4).min(32);
+        let num_ch = state.num_channels.clamp(4, 32);
         let w = dw as i32;
         let col_grey = [192, 192, 192, 255];
         let col_white = [255, 255, 255, 255];
@@ -310,7 +310,7 @@ impl Mod4WinApp {
         let (num_ch, dey) = {
             let state = self.shared_state.lock().unwrap();
             (
-                state.num_channels.max(4).min(32),
+                state.num_channels.clamp(4, 32),
                 state.active_effect_columns().len() as i32,
             )
         };

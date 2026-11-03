@@ -622,13 +622,11 @@ impl Mod4WinApp {
             if let Some(pos) = new_items
                 .iter()
                 .position(|(orig_idx, _)| *orig_idx == state_snapshot.playlist_idx)
-            {
-                if pos < self.quick_select_scroll || pos >= self.quick_select_scroll + vis_rows {
+                && (pos < self.quick_select_scroll || pos >= self.quick_select_scroll + vis_rows) {
                     self.quick_select_scroll = pos
                         .saturating_sub(vis_rows / 2)
                         .min(new_items.len().saturating_sub(vis_rows));
                 }
-            }
             return;
         }
 

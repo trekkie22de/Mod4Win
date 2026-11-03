@@ -142,11 +142,10 @@ impl FileSelectState {
         self.cursor = 0;
         self.file_scroll = 0;
         self.file_cursor = 0;
-        if let Some(parent) = self.current_dir.parent() {
-            if parent != self.current_dir {
+        if let Some(parent) = self.current_dir.parent()
+            && parent != self.current_dir {
                 self.entries.push(FileSelectEntry::Parent(parent.to_path_buf()));
             }
-        }
         let mut subdirs = Vec::new();
         let mut files = Vec::new();
         let wants_exe = matches!(
@@ -1224,7 +1223,7 @@ impl Mod4WinApp {
             self.locale = LocaleCatalog::load_for_language_id(self.setup_cfg.language);
             self.help_dlg.set_language(self.setup_cfg.language);
         }
-        let _st_snapshot = {
+        {
             let mut st = self.shared_state.lock().unwrap();
             let old_peaks = st.ini_config.peaks.clone();
             let old_win_pos = st.ini_config.window_positions.clone();

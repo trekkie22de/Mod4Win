@@ -2,6 +2,11 @@
     all(target_os = "windows", not(feature = "diff-suite")),
     windows_subsystem = "windows"
 )]
+#![allow(
+    clippy::too_many_arguments,
+    clippy::needless_range_loop,
+    clippy::field_reassign_with_default
+)]
 
 use std::env;
 #[cfg(not(feature = "retro-win32"))]
@@ -565,13 +570,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     #[cfg(feature = "diff-suite")]
     {
-        if let Some(ref list) = diff_suite_wavs {
-            if list.is_empty() {
-                eprintln!(
-                    "Verwendung:\n  Einzeldatei: [<modul_datei>] --diff-suite <referenz.wav|ffmpeg> [-ido <0..6>] (oder 3 WAV-Pfade)\n  Ganzer Ordner: --batch-diff <mod_quellordner> [<ergebnis_ordner>] [--workers <N>]"
-                );
-                std::process::exit(1);
-            }
+        if let Some(ref list) = diff_suite_wavs
+            && list.is_empty()
+        {
+            eprintln!(
+                "Verwendung:\n  Einzeldatei: [<modul_datei>] --diff-suite <referenz.wav|ffmpeg> [-ido <0..6>] (oder 3 WAV-Pfade)\n  Ganzer Ordner: --batch-diff <mod_quellordner> [<ergebnis_ordner>] [--workers <N>]"
+            );
+            std::process::exit(1);
         }
         if file_arg.is_none() && diff_suite_wavs.is_some() {
             file_arg = Some("M:\\Audio\\MOD_MID_SID\\MOD\\XM\\PAHGIANA.XM".to_string());
@@ -639,8 +644,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let is_diff_suite_active = false;
 
     let mut restored_from_state_saver = false;
-    if file_arg.is_none() && !no_gui && !is_diff_suite_active && ini_cfg.state_saver {
-        if !ini_cfg.saved_playlist.is_empty() {
+    if file_arg.is_none() && !no_gui && !is_diff_suite_active && ini_cfg.state_saver
+        && !ini_cfg.saved_playlist.is_empty() {
             let idx = ini_cfg
                 .saved_playlist_idx
                 .min(ini_cfg.saved_playlist.len().saturating_sub(1));
@@ -653,7 +658,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
-    }
 
     if file_arg.is_none() && no_gui {
         eprintln!(
@@ -967,7 +971,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let is_stereo = channels >= 2;
 
         let err_fn = |err| eprintln!("Audio-Stream-Fehler: {}", err);
-        let stream_config: StreamConfig = default_config.clone().into();
+        let stream_config: StreamConfig = default_config.into();
         let sr_f32 = (sample_rate as f32).max(8000.0);
 
         let stream = match default_config.sample_format() {
@@ -981,7 +985,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let mut pending_settings: Option<SoundSettings> = None;
 
                 device.build_output_stream(
-                    stream_config.clone(),
+                    stream_config,
                     move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
                         if finished_clone.load(Ordering::Relaxed) {
                             data.fill(0.0);
@@ -1074,7 +1078,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let mut pending_settings: Option<SoundSettings> = None;
 
                 device.build_output_stream(
-                    stream_config.clone(),
+                    stream_config,
                     move |data: &mut [i16], _: &cpal::OutputCallbackInfo| {
                         if finished_clone.load(Ordering::Relaxed) {
                             data.fill(0);
@@ -1337,11 +1341,10 @@ fn run_console_loop(finished: &Arc<AtomicBool>, sequencer_mutex: &Arc<Mutex<Sequ
                         0x49 => -5, // PageUp
                         _ => 0,
                     };
-                    if delta != 0 {
-                        if let Ok(mut seq) = sequencer_mutex.lock() {
+                    if delta != 0
+                        && let Ok(mut seq) = sequencer_mutex.lock() {
                             seq.step_order(delta);
                         }
-                    }
                 }
             }
         }

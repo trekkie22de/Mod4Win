@@ -204,7 +204,7 @@ fn push_res_record(
     out.extend_from_slice(&0u32.to_le_bytes());
     // Resource payload padded to 4-byte DWORD alignment
     out.extend_from_slice(data);
-    while out.len() % 4 != 0 {
+    while !out.len().is_multiple_of(4) {
         out.push(0);
     }
 }
@@ -231,8 +231,7 @@ fn main() {
             let root_path = rdir.join(&filename);
             println!("cargo:rerun-if-changed={}", root_path.display());
             if let (Ok(m_crate), Ok(m_root)) = (fs::metadata(&crate_path), fs::metadata(&root_path))
-            {
-                if let (Ok(t_crate), Ok(t_root)) = (m_crate.modified(), m_root.modified()) {
+                && let (Ok(t_crate), Ok(t_root)) = (m_crate.modified(), m_root.modified()) {
                     if t_root > t_crate {
                         let _ = fs::copy(&root_path, &crate_path);
                         src_path = root_path;
@@ -240,7 +239,6 @@ fn main() {
                         let _ = fs::copy(&crate_path, &root_path);
                     }
                 }
-            }
         }
 
         let html_bytes = fs::read(&src_path)

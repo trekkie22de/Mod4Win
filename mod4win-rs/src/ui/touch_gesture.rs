@@ -345,9 +345,8 @@ impl Mod4WinApp {
             && !self.touch_gesture.long_press_fired
             && !self.preamp_dragging
             && self.pressed_btn.is_none()
-        {
-            if let Some(started) = self.touch_gesture.press_started_at {
-                if started.elapsed().as_millis() as u64 >= LONG_PRESS_DURATION_MS {
+            && let Some(started) = self.touch_gesture.press_started_at
+                && started.elapsed().as_millis() as u64 >= LONG_PRESS_DURATION_MS {
                     let (vx, vy) = self.touch_gesture.start_pos;
                     let (lx, ly) = self.touch_gesture.last_pos;
                     if (lx - vx).abs() < DRAG_SCROLL_THRESHOLD_PX
@@ -360,8 +359,6 @@ impl Mod4WinApp {
                         }
                     }
                 }
-            }
-        }
 
         // 2. Kinetic-Scrolling (Trägheits-Nachlauf)
         if !self.touch_gesture.is_pressed && self.touch_gesture.velocity_rows_per_sec.abs() >= 0.8 {

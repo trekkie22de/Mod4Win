@@ -519,8 +519,8 @@ impl UiSharedState {
         let pks_path = Mod4WinIniConfig::default_pks_path();
         {
             let mut st = shared_state.lock().unwrap();
-            if !force_rescan && st.ini_config.state_saver {
-                if let Some(cached_pa) = st.ini_config.find_peak(file_size_bytes, &mod_title, &pks_path) {
+            if !force_rescan && st.ini_config.state_saver
+                && let Some(cached_pa) = st.ini_config.find_peak(file_size_bytes, &mod_title, &pks_path) {
                     let pa = cached_pa.min(40);
                     st.sound_settings.pre_amp = (st.sound_settings.pre_amp & 0x80) | pa;
                     st.ini_config.pre_amplification = pa;
@@ -528,7 +528,6 @@ impl UiSharedState {
                     st.peak_search = None;
                     return;
                 }
-            }
             let profile = CpuProfile::from_u8(st.ini_config.cpu_sim_profile);
             let duration_secs = match profile {
                 CpuProfile::I386Sx16 => 3.20,
@@ -690,10 +689,7 @@ impl UiSharedState {
 
     /// Setzt den aktiven UI-Skin (`2.40 Classic` oder `Modern`) und hält `ini_config.skin_mode` synchron.
     pub fn set_skin_mode(&mut self, mode: SkinMode) {
-        let normalized = match mode {
-            SkinMode::Modern => SkinMode::Modern,
-            SkinMode::Classic240 => SkinMode::Classic240,
-        };
+        let normalized = mode;
         self.skin_mode = normalized;
         self.ini_config.skin_mode = normalized.to_u8();
     }
@@ -886,8 +882,8 @@ impl UiSharedState {
             }
         }
         let resolved = super::archive_mol::resolve_path_case_insensitive(path);
-        if resolved.is_dir() {
-            if let Ok(entries) = std::fs::read_dir(&resolved) {
+        if resolved.is_dir()
+            && let Ok(entries) = std::fs::read_dir(&resolved) {
                 let mut subdirs = Vec::new();
                 let mut files = Vec::new();
                 for entry in entries.flatten() {
@@ -916,7 +912,6 @@ impl UiSharedState {
                     Self::collect_tracker_files(&d, out);
                 }
             }
-        }
     }
 
     /// Baut die Permutationsliste `number_list` neu auf (`numberlist` in `mod4win.pas`).
@@ -967,10 +962,10 @@ impl UiSharedState {
     pub fn toggle_intro_scan(&mut self) {
         self.intro_scan = !self.intro_scan;
         if self.intro_scan {
-            if self.playlist.len() <= 1 {
-                if let Some(ref cur_path) = self.current_file_path {
-                    if let Some(parent_dir) = cur_path.parent() {
-                        if let Ok(entries) = std::fs::read_dir(parent_dir) {
+            if self.playlist.len() <= 1
+                && let Some(ref cur_path) = self.current_file_path
+                    && let Some(parent_dir) = cur_path.parent()
+                        && let Ok(entries) = std::fs::read_dir(parent_dir) {
                             let mut list: Vec<PathBuf> = entries
                                 .filter_map(|e| e.ok().map(|d| d.path()))
                                 .filter(|p| Self::is_tracker_file(p))
@@ -984,9 +979,6 @@ impl UiSharedState {
                                 self.rebuild_number_list();
                             }
                         }
-                    }
-                }
-            }
             if !self.is_playing || self.is_paused {
                 self.is_playing = true;
                 self.is_paused = false;
@@ -1371,8 +1363,8 @@ pub(crate) fn force_win32_window_size(window: &Window, phys_w: u32, phys_h: u32)
     #[cfg(all(target_os = "windows", not(feature = "retro-win32")))]
     {
         use super::winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
-        if let Ok(handle) = window.window_handle() {
-            if let RawWindowHandle::Win32(h) = handle.as_raw() {
+        if let Ok(handle) = window.window_handle()
+            && let RawWindowHandle::Win32(h) = handle.as_raw() {
                 const SWP_NOMOVE: u32 = 0x0002;
                 const SWP_NOZORDER: u32 = 0x0004;
                 const SWP_NOACTIVATE: u32 = 0x0010;
@@ -1388,7 +1380,6 @@ pub(crate) fn force_win32_window_size(window: &Window, phys_w: u32, phys_h: u32)
                     );
                 }
             }
-        }
     }
     #[cfg(feature = "retro-win32")]
     window.force_size(phys_w, phys_h);
@@ -1401,8 +1392,8 @@ pub(crate) fn raise_win32_window_noactivate(window: &Window) {
     #[cfg(all(target_os = "windows", not(feature = "retro-win32")))]
     {
         use super::winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
-        if let Ok(handle) = window.window_handle() {
-            if let RawWindowHandle::Win32(h) = handle.as_raw() {
+        if let Ok(handle) = window.window_handle()
+            && let RawWindowHandle::Win32(h) = handle.as_raw() {
                 const HWND_TOP: isize = 0;
                 const SWP_NOSIZE: u32 = 0x0001;
                 const SWP_NOMOVE: u32 = 0x0002;
@@ -1419,7 +1410,6 @@ pub(crate) fn raise_win32_window_noactivate(window: &Window) {
                     );
                 }
             }
-        }
     }
     #[cfg(feature = "retro-win32")]
     window.raise_noactivate();
@@ -1455,7 +1445,7 @@ fn detect_resize_direction(
 
         let on_left = phys_x >= 0.0 && phys_x < edge && !in_titlebar_band;
         let on_right = phys_x <= w && phys_x > w - edge && !in_titlebar_band;
-        let on_top = phys_y >= 0.0 && phys_y < 3.0;
+        let on_top = (0.0..3.0).contains(&phys_y);
         let on_bottom = phys_y <= h && phys_y > h - edge;
 
         let corner_left = phys_x >= 0.0 && phys_x < corner;
@@ -1793,7 +1783,7 @@ impl Mod4WinApp {
             PressedButton::InfoMinus | PressedButton::InstMinus => {
                 if self.selected_instrument > 1 {
                     self.selected_instrument -= 1;
-                    if (self.selected_instrument as usize) <= self.info_inst_offset {
+                    if self.selected_instrument <= self.info_inst_offset {
                         self.info_inst_offset = self.info_inst_offset.saturating_sub(31);
                     }
                 }
@@ -2071,11 +2061,10 @@ impl Mod4WinApp {
 
     /// Fordert ein sofortiges Neuzeichnen des Hauptfensters an (z. B. nach Öffnen/Schließen von Unterfenstern).
     pub(crate) fn request_main_redraw(&self) {
-        if let Some(&main_id) = self.kind_to_id.get(&WindowKind::Main) {
-            if let Some(surf) = self.windows.get(&main_id) {
+        if let Some(&main_id) = self.kind_to_id.get(&WindowKind::Main)
+            && let Some(surf) = self.windows.get(&main_id) {
                 surf.window.request_redraw();
             }
-        }
     }
 
     /// Entfernt den Playlist-Eintrag `orig_idx` und rückt den Auswahl-Cursor (`quick_select_cursor`)
@@ -2151,13 +2140,12 @@ impl Mod4WinApp {
     }
 
     pub(crate) fn open_window(&mut self, event_loop: &ActiveEventLoop, kind: WindowKind) {
-        if let Some(&existing_id) = self.kind_to_id.get(&kind) {
-            if let Some(surf) = self.windows.get(&existing_id) {
+        if let Some(&existing_id) = self.kind_to_id.get(&kind)
+            && let Some(surf) = self.windows.get(&existing_id) {
                 surf.window.focus_window();
                 surf.window.request_redraw();
                 return;
             }
-        }
 
         let state = self.shared_state.lock().unwrap().clone();
         if kind == WindowKind::OpenDialog {
@@ -2182,16 +2170,14 @@ impl Mod4WinApp {
                     self.quick_select_scroll = 0;
                 }
             } else {
-                if let Some(cur) = &state.current_file_path {
-                    if let Some(parent) = cur.parent() {
-                        if parent.is_dir()
+                if let Some(cur) = &state.current_file_path
+                    && let Some(parent) = cur.parent()
+                        && parent.is_dir()
                             && matches!(self.open_dlg.context, OpenBrowseContext::Directory(_))
                         {
                             self.open_dlg.context =
                                 OpenBrowseContext::Directory(parent.to_path_buf());
                         }
-                    }
-                }
                 self.open_dlg.sync_from_playlist(&state.playlist);
                 self.open_dlg.refresh_browser();
             }
@@ -2294,7 +2280,7 @@ impl Mod4WinApp {
                 .window_positions
                 .get(win_key)
                 .copied()
-                .or_else(|| match kind {
+                .or(match kind {
                     WindowKind::Main if self.is_mini => {
                         Some((state.ini_config.x_mini, state.ini_config.y_mini))
                     }
@@ -2447,11 +2433,10 @@ impl Mod4WinApp {
                 .remove(&id)
                 .and_then(|surf| surf.window.outer_position().ok().map(|p| (p.x, p.y)))
         });
-        if let Some((px, py)) = closed_pos {
-            if !matches!(kind, WindowKind::FileMenu | WindowKind::ConfirmDialog) {
+        if let Some((px, py)) = closed_pos
+            && !matches!(kind, WindowKind::FileMenu | WindowKind::ConfirmDialog) {
                 self.record_window_position(kind, px, py);
             }
-        }
         let clamped_scale = self.scale_factor.clamp(0.5, 4.0);
         self.setup_cfg.gui_scale = clamped_scale;
         if let Ok(mut state) = self.shared_state.lock() {
@@ -2595,8 +2580,8 @@ impl Mod4WinApp {
             (st.current_file_path.clone(), st.ini_config.clone())
         };
 
-        if let Some(mod_path) = mod_path_opt {
-            if let Ok(file_data) = std::fs::read(&mod_path) {
+        if let Some(mod_path) = mod_path_opt
+            && let Ok(file_data) = std::fs::read(&mod_path) {
                 let ext = mod_path.extension().and_then(|e| e.to_str());
                 if let Ok(export_mod) = load_module_with_ext(&file_data, ext) {
                     match export_module_to_wav_file(
@@ -2638,7 +2623,6 @@ impl Mod4WinApp {
                     }
                 }
             }
-        }
         let mut st = self.shared_state.lock().unwrap();
         st.is_exporting_wav = false;
     }
@@ -2884,7 +2868,7 @@ impl Mod4WinApp {
 
         // Rechtsklick im Effekt-Fenster (außer auf Kanalnummern / Header) schließt es
         if kind == WindowKind::Effects && button == MouseButton::Right {
-            let num_ch = self.shared_state.lock().unwrap().num_channels.max(4).min(32);
+            let num_ch = self.shared_state.lock().unwrap().num_channels.clamp(4, 32);
             let ch_end_y = 80 + (num_ch as i32) * 9;
             if (8..=23).contains(&vx) && (80..ch_end_y).contains(&vy) {
                 let ch_idx = ((vy - 80) / 9) as usize;
@@ -3182,8 +3166,8 @@ impl ApplicationHandler for Mod4WinApp {
             }
             WindowEvent::Resized(new_size) => {
                 let mut updated_scale = None;
-                if let Some(surf) = self.windows.get_mut(&id) {
-                    if new_size.width > 0 && new_size.height > 0 {
+                if let Some(surf) = self.windows.get_mut(&id)
+                    && new_size.width > 0 && new_size.height > 0 {
                         if let Some(rdir) = surf.active_resize_dir {
                             let base_w = surf.width.max(1) as f64;
                             let base_h = surf.height.max(1) as f64;
@@ -3224,7 +3208,6 @@ impl ApplicationHandler for Mod4WinApp {
                         }
                         surf.window.request_redraw();
                     }
-                }
                 if let Some(sc) = updated_scale {
                     self.scale_factor = sc;
                     self.setup_cfg.gui_scale = sc;
@@ -3390,15 +3373,14 @@ impl ApplicationHandler for Mod4WinApp {
                             let vx = px as i32;
                             let vy = py as i32;
                             if kind == WindowKind::OpenDialog {
-                                if let Some(dir_idx) = self.open_dlg.classic_drag_dir.take() {
-                                    if (12..=182).contains(&vx) && (62..=301).contains(&vy) {
+                                if let Some(dir_idx) = self.open_dlg.classic_drag_dir.take()
+                                    && (12..=182).contains(&vx) && (62..=301).contains(&vy) {
                                         self.navigate_open_dir_item(dir_idx);
                                     }
-                                }
-                            } else if kind == WindowKind::FileManager {
-                                if let Some(dir_idx) = self.file_man_dlg.classic_drag_dir.take() {
-                                    if (10..=175).contains(&vx) && (114..=274).contains(&vy) {
-                                        if let Some(entry) = self.file_man_dlg.dirs.get(dir_idx).cloned() {
+                            } else if kind == WindowKind::FileManager
+                                && let Some(dir_idx) = self.file_man_dlg.classic_drag_dir.take()
+                                    && (10..=175).contains(&vx) && (114..=274).contains(&vy)
+                                        && let Some(entry) = self.file_man_dlg.dirs.get(dir_idx).cloned() {
                                             match entry {
                                                 FileSelectEntry::Parent(p) | FileSelectEntry::Subdir(_, p) => {
                                                     self.file_man_dlg.target_dir = p;
@@ -3414,9 +3396,6 @@ impl ApplicationHandler for Mod4WinApp {
                                                 _ => {}
                                             }
                                         }
-                                    }
-                                }
-                            }
                         } else {
                             self.open_dlg.classic_drag_dir = None;
                             self.file_man_dlg.classic_drag_dir = None;

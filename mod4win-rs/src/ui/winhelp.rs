@@ -98,17 +98,15 @@ impl HelpTopic {
 
     /// Anzeigename für die Titelleiste.
     pub fn display_title(&self) -> String {
-        if let Some(t) = &self.title {
-            if !t.trim().is_empty() {
+        if let Some(t) = &self.title
+            && !t.trim().is_empty() {
                 return t.trim().to_string();
             }
-        }
         for b in &self.blocks {
-            if let HelpBlock::Heading(h) = b {
-                if !h.trim().is_empty() {
+            if let HelpBlock::Heading(h) = b
+                && !h.trim().is_empty() {
                     return h.trim().to_string();
                 }
-            }
         }
         self.id.clone()
     }
@@ -203,11 +201,10 @@ impl WinHelpBook {
                 return parsed;
             }
         }
-        if lang_code != "de" {
-            if let Some(html) = Self::decompress_embedded_help_html("de") {
+        if lang_code != "de"
+            && let Some(html) = Self::decompress_embedded_help_html("de") {
                 return parse_help_html(&html);
             }
-        }
         Vec::new()
     }
 
@@ -365,6 +362,7 @@ impl WinHelpBook {
         } else {
             "NEW IN MOD4WIN 3.0 BETA:"
         };
+        #[allow(clippy::type_complexity)]
         let bullets: [(&str, &str, Option<(&str, bool)>); 6] = if is_ger {
             [
                 (
@@ -516,14 +514,13 @@ impl WinHelpBook {
         if let Some(root) = Path::new(env!("CARGO_MANIFEST_DIR")).parent() {
             dirs.push(root.join("help"));
         }
-        if let Ok(exe) = std::env::current_exe() {
-            if let Some(exe_dir) = exe.parent() {
+        if let Ok(exe) = std::env::current_exe()
+            && let Some(exe_dir) = exe.parent() {
                 dirs.push(exe_dir.join("help"));
                 if let Some(parent) = exe_dir.parent() {
                     dirs.push(parent.join("help"));
                 }
             }
-        }
         dirs.push(Path::new(env!("CARGO_MANIFEST_DIR")).join("help"));
         dirs
     }
@@ -1141,22 +1138,10 @@ pub fn parse_help_html(html: &str) -> Vec<HelpTopic> {
             .unwrap_or_else(|| vec![id.clone()]);
         let title = extract_attr(open_tag, "title")
             .or_else(|| extract_attr(open_tag, "data-title"))
-            .and_then(|t| {
-                if t.trim().is_empty() {
-                    None
-                } else {
-                    Some(t)
-                }
-            });
+            .filter(|t| !t.trim().is_empty());
         let browse_seq = extract_attr(open_tag, "browse")
             .or_else(|| extract_attr(open_tag, "data-browse"))
-            .and_then(|b| {
-                if b.trim().is_empty() {
-                    None
-                } else {
-                    Some(b)
-                }
-            });
+            .filter(|b| !b.trim().is_empty());
 
         let blocks = parse_html_section_blocks(sec_body);
         topics.push(HelpTopic {
@@ -1201,20 +1186,8 @@ pub fn parse_help_html(html: &str) -> Vec<HelpTopic> {
                     .collect()
             })
             .unwrap_or_else(|| vec![id.clone()]);
-        let title = extract_attr(open_tag, "data-title").and_then(|t| {
-            if t.trim().is_empty() {
-                None
-            } else {
-                Some(t)
-            }
-        });
-        let browse_seq = extract_attr(open_tag, "data-browse").and_then(|b| {
-            if b.trim().is_empty() {
-                None
-            } else {
-                Some(b)
-            }
-        });
+        let title = extract_attr(open_tag, "data-title").filter(|t| !t.trim().is_empty());
+        let browse_seq = extract_attr(open_tag, "data-browse").filter(|b| !b.trim().is_empty());
 
         let blocks = parse_html_section_blocks(sec_body);
         topics.push(HelpTopic {
@@ -1762,11 +1735,10 @@ fn strip_rtf_to_plain(s: &str, is_greek: bool) -> String {
         let b = bytes[i];
         if b == b'{' {
             depth += 1;
-            if i + 2 < bytes.len() && bytes[i + 1] == b'\\' && bytes[i + 2] == b'*' {
-                if ignore_depth.is_none() {
+            if i + 2 < bytes.len() && bytes[i + 1] == b'\\' && bytes[i + 2] == b'*'
+                && ignore_depth.is_none() {
                     ignore_depth = Some(depth);
                 }
-            }
             i += 1;
             continue;
         }
@@ -1793,15 +1765,14 @@ fn strip_rtf_to_plain(s: &str, is_greek: bool) -> String {
             }
             match bytes[i] {
                 b'\'' if i + 2 < bytes.len() => {
-                    if let Ok(hex) = std::str::from_utf8(&bytes[i + 1..i + 3]) {
-                        if let Ok(val) = u8::from_str_radix(hex, 16) {
+                    if let Ok(hex) = std::str::from_utf8(&bytes[i + 1..i + 3])
+                        && let Ok(val) = u8::from_str_radix(hex, 16) {
                             out.push(if is_greek {
                                 cp1253_to_char(val)
                             } else {
                                 cp1252_to_char(val)
                             });
                         }
-                    }
                     i += 3;
                 }
                 b'{' | b'}' | b'\\' => {
@@ -1867,12 +1838,11 @@ fn parse_single_rtf_topic(raw: &str, is_greek: bool) -> Option<HelpTopic> {
             if txt.is_empty() {
                 return;
             }
-            if let Some(last) = cur_spans.last_mut() {
-                if last.bold == bold && last.link.is_none() {
+            if let Some(last) = cur_spans.last_mut()
+                && last.bold == bold && last.link.is_none() {
                     last.text.push_str(&txt);
                     return;
                 }
-            }
             cur_spans.push(HelpSpan {
                 text: txt,
                 bold,
@@ -1900,8 +1870,8 @@ fn parse_single_rtf_topic(raw: &str, is_greek: bool) -> Option<HelpTopic> {
         // Prüfe auf eingebettete `{bmc <name>.shg}` oder `{bmct <name>.shg}` Grafik im Absatz
         let full_line: String = cur_spans.iter().map(|sp| sp.text.as_str()).collect();
         for bmc_prefix in ["{bmc ", "{bmct ", "{bml ", "{bmr "] {
-            if let Some(bmc_pos) = full_line.find(bmc_prefix) {
-                if let Some(end_pos) = full_line[bmc_pos..].find('}') {
+            if let Some(bmc_pos) = full_line.find(bmc_prefix)
+                && let Some(end_pos) = full_line[bmc_pos..].find('}') {
                     let shg_file = &full_line[bmc_pos + bmc_prefix.len()..bmc_pos + end_pos];
                     if let Some(bm_key) = map_shg_to_bm_key(shg_file) {
                         blocks.push(HelpBlock::Bitmap {
@@ -1913,7 +1883,6 @@ fn parse_single_rtf_topic(raw: &str, is_greek: bool) -> Option<HelpTopic> {
                         return;
                     }
                 }
-            }
         }
 
         // Bereinige etwaige führende `#$K+` Footnote-Präfix-Reste im ersten Span
@@ -2017,9 +1986,9 @@ fn parse_single_rtf_topic(raw: &str, is_greek: bool) -> Option<HelpTopic> {
             }
             match bytes[i] {
                 b'\'' if i + 2 < bytes.len() => {
-                    if !cur_style.ignore_group {
-                        if let Ok(hex) = std::str::from_utf8(&bytes[i + 1..i + 3]) {
-                            if let Ok(val) = u8::from_str_radix(hex, 16) {
+                    if !cur_style.ignore_group
+                        && let Ok(hex) = std::str::from_utf8(&bytes[i + 1..i + 3])
+                            && let Ok(val) = u8::from_str_radix(hex, 16) {
                                 let ch = if cur_style.is_symbol_font && val == 0xB7 {
                                     cur_bullet = true;
                                     '\0'
@@ -2038,8 +2007,6 @@ fn parse_single_rtf_topic(raw: &str, is_greek: bool) -> Option<HelpTopic> {
                                     }
                                 }
                             }
-                        }
-                    }
                     i += 3;
                 }
                 b'{' | b'}' | b'\\' => {
@@ -2233,8 +2200,8 @@ fn parse_single_rtf_topic(raw: &str, is_greek: bool) -> Option<HelpTopic> {
                                 }
                                 in_table_row = false;
                             }
-                            "par" | "line" => {
-                                if !st.ignore_group && !in_table_row {
+                            "par" | "line"
+                                if !st.ignore_group && !in_table_row => {
                                     let b_flag = st.bold;
                                     flush_paragraph(
                                         &mut blocks,
@@ -2248,7 +2215,6 @@ fn parse_single_rtf_topic(raw: &str, is_greek: bool) -> Option<HelpTopic> {
                                         &mut cur_para_max_fs,
                                     );
                                 }
-                            }
                             _ => {}
                         }
                     }
@@ -2936,7 +2902,7 @@ impl HelpViewerState {
                     (cy1 - cy0) as u32,
                     [192, 192, 192, 255],
                 );
-                if sy + bh as i32 - 1 >= vp_y + 2 && sy + bh as i32 - 1 < vp_y + vp_h as i32 - 2 {
+                if sy + bh as i32 > vp_y + 2 && sy + bh as i32 - 1 < vp_y + vp_h as i32 - 2 {
                     fill_rect(
                         frame,
                         dw,
@@ -2982,7 +2948,7 @@ impl HelpViewerState {
                 if sy >= vp_y + 2 && sy < vp_y + vp_h as i32 - 2 {
                     fill_rect(frame, dw, dh, sx, sy, rw, 1, [160, 160, 160, 255]);
                 }
-                if sy + rh as i32 - 1 >= vp_y + 2 && sy + rh as i32 - 1 < vp_y + vp_h as i32 - 2 {
+                if sy + rh as i32 > vp_y + 2 && sy + rh as i32 - 1 < vp_y + vp_h as i32 - 2 {
                     fill_rect(
                         frame,
                         dw,
@@ -3032,8 +2998,8 @@ impl HelpViewerState {
         );
 
         // 5. Grün umrandetes 1995er Popup-Fenster (falls ein Hotspot oder Popup-Link angeklickt wurde)
-        if let Some(pop_id) = &self.popup_topic_id {
-            if let Some(pop_topic) = self.book.get_topic(pop_id) {
+        if let Some(pop_id) = &self.popup_topic_id
+            && let Some(pop_topic) = self.book.get_topic(pop_id) {
                 let pop_layout = self.layout_topic(pop_topic, assets, 376);
                 let pw = 400u32;
                 let ph = (pop_layout.total_height as u32 + 20).clamp(56, 360);
@@ -3068,7 +3034,6 @@ impl HelpViewerState {
                     }
                 }
             }
-        }
 
         // 6. Klassisches Windows 3.1 `Datei` / `File`-Dropdown-Menü (Sprachumschaltung + Beenden)
         if self.file_menu_open {
@@ -3175,8 +3140,8 @@ impl HelpViewerState {
                             let sx = px + 10 + sp.x;
                             let sy = py + 8 + sp.y;
                             let sw = sp.w.max(4);
-                            if vx >= sx && vx < sx + sw && vy >= sy && vy <= sy + 13 {
-                                if let Some(t) = self.book.get_topic(target_id).cloned() {
+                            if vx >= sx && vx < sx + sw && vy >= sy && vy <= sy + 13
+                                && let Some(t) = self.book.get_topic(target_id).cloned() {
                                     if !*is_popup && t.is_full_page() {
                                         self.open_topic(&t.id);
                                     } else {
@@ -3184,7 +3149,6 @@ impl HelpViewerState {
                                     }
                                     return HelpClickResult::Handled;
                                 }
-                            }
                         }
                     }
                 }
@@ -3269,9 +3233,9 @@ impl HelpViewerState {
                 {
                     let rel_x = doc_x - lb.x;
                     let rel_y = doc_y - lb.y;
-                    if let Some(hs_block) = assets.block(&lb.bm_key) {
-                        if let Some(hs) = hs_block.hit_test(rel_x, rel_y) {
-                            if let Some(target_topic) = self.book.get_topic(&hs.id).cloned() {
+                    if let Some(hs_block) = assets.block(&lb.bm_key)
+                        && let Some(hs) = hs_block.hit_test(rel_x, rel_y)
+                            && let Some(target_topic) = self.book.get_topic(&hs.id).cloned() {
                                 if target_topic.is_full_page() {
                                     self.open_topic(&target_topic.id);
                                 } else {
@@ -3280,8 +3244,6 @@ impl HelpViewerState {
                                 }
                                 return HelpClickResult::Handled;
                             }
-                        }
-                    }
                 }
             }
 
@@ -3292,8 +3254,7 @@ impl HelpViewerState {
                         && doc_x < sp.x + sw
                         && doc_y >= sp.y
                         && doc_y <= sp.y + 13
-                    {
-                        if let Some(target_topic) = self.book.get_topic(target_id).cloned() {
+                        && let Some(target_topic) = self.book.get_topic(target_id).cloned() {
                             if !*is_popup && target_topic.is_full_page() {
                                 self.open_topic(&target_topic.id);
                             } else {
@@ -3302,12 +3263,17 @@ impl HelpViewerState {
                             }
                             return HelpClickResult::Handled;
                         }
-                    }
                 }
             }
         }
 
         HelpClickResult::Handled
+    }
+}
+
+impl Default for HelpViewerState {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

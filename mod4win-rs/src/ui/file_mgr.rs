@@ -139,11 +139,10 @@ impl FileManagerState {
         self.dest_files.clear();
         self.dir_scroll = 0;
         self.dir_cursor = 0;
-        if let Some(parent) = self.target_dir.parent() {
-            if parent != self.target_dir {
+        if let Some(parent) = self.target_dir.parent()
+            && parent != self.target_dir {
                 self.dirs.push(FileSelectEntry::Parent(parent.to_path_buf()));
             }
-        }
         let mut subdirs = Vec::new();
         let mut dfiles = Vec::new();
         if let Ok(rd) = std::fs::read_dir(&self.target_dir) {
@@ -181,8 +180,8 @@ impl FileManagerState {
                     .into_owned();
                 return;
             }
-        } else if sel_count == 0 {
-            if let Some(f) = self.files.get(self.file_cursor) {
+        } else if sel_count == 0
+            && let Some(f) = self.files.get(self.file_cursor) {
                 self.target_path_edit = self
                     .target_dir
                     .join(&f.display_name)
@@ -190,7 +189,6 @@ impl FileManagerState {
                     .into_owned();
                 return;
             }
-        }
         self.target_path_edit = self.target_dir.to_string_lossy().into_owned();
     }
 }

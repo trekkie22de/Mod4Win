@@ -107,7 +107,7 @@ impl Mod4WinApp {
             if is_cur {
                 fill_rect(frame, dw, dh, 17, ry, 284, 12, col_green);
             }
-            let lbl_str = loc.hotkey_label(item.action_id, &item.label);
+            let lbl_str = loc.hotkey_label(item.action_id, item.label);
             let disp: String = lbl_str.chars().take(34).collect();
             draw_oem_text(
                 frame,
@@ -276,8 +276,8 @@ impl Mod4WinApp {
         }
 
         // Klick auf die grünen LEDs `Control` (45..135), `Shift` (145..220), `Alt` (245..305) bei y = 184..199
-        if (184..=199).contains(&vy) {
-            if let Some(binding) = self.hotkey_dlg.working_keys.get_mut(self.hotkey_dlg.cursor) {
+        if (184..=199).contains(&vy)
+            && let Some(binding) = self.hotkey_dlg.working_keys.get_mut(self.hotkey_dlg.cursor) {
                 let next_state = if (45..=135).contains(&vx) {
                     Some(binding.state ^ 1)
                 } else if (145..=220).contains(&vx) {
@@ -298,7 +298,6 @@ impl Mod4WinApp {
                     return;
                 }
             }
-        }
 
         // Untere Buttons (y = 217..240): OK (162..202), Cancel (203..243), Default (244..284), Help (285..326)
         if (217..=240).contains(&vy) {
@@ -374,8 +373,8 @@ impl Mod4WinApp {
                 _ => {}
             }
         }
-        if let Key::Character(ch) = &event.logical_key {
-            if let Some(c) = ch.chars().next() {
+        if let Key::Character(ch) = &event.logical_key
+            && let Some(c) = ch.chars().next() {
                 let up = c.to_ascii_uppercase();
                 if up.is_ascii_alphanumeric() {
                     return Some((up as u16, up.to_string()));
@@ -388,7 +387,6 @@ impl Mod4WinApp {
                     _ => {}
                 }
             }
-        }
         None
     }
 
@@ -1064,8 +1062,8 @@ impl Mod4WinApp {
                 let st = self.shared_state.lock().unwrap();
                 self.is_modern_skin(&st)
             };
-            if !is_modern {
-                if let Key::Character(ch) = &event.logical_key {
+            if !is_modern
+                && let Key::Character(ch) = &event.logical_key {
                     let right_list = self.open_dlg.active_list == 2;
                     if ch == "+" {
                         self.open_dlg.open_selection_mask(right_list, false);
@@ -1086,7 +1084,6 @@ impl Mod4WinApp {
                         return;
                     }
                 }
-            }
         }
 
         // Modernes `Strg + A` zum Auswählen aller Einträge der aktiven Liste (Playlist-Dock, QuickSelect, Open-Dialog & File-Manager):
@@ -1096,9 +1093,9 @@ impl Mod4WinApp {
                 && (self.kind_to_id.contains_key(&WindowKind::QuickSelect)
                     || self.kind_to_id.contains_key(&WindowKind::OpenDialog))
         };
-        if !classic_input && ctrl && !shift && !alt {
-            if let Key::Character(ch) = &event.logical_key {
-                if ch.eq_ignore_ascii_case("a") {
+        if !classic_input && ctrl && !shift && !alt
+            && let Key::Character(ch) = &event.logical_key
+                && ch.eq_ignore_ascii_case("a") {
                     if self.kind_to_id.contains_key(&WindowKind::FileManager)
                         && self.active_window_kind == WindowKind::FileManager
                     {
@@ -1150,8 +1147,6 @@ impl Mod4WinApp {
                     // `Strg + A` ist systemweit reserviert und darf niemals das About-Fenster (`A`) öffnen!
                     return;
                 }
-            }
-        }
 
         // Wenn die Quick Selection (`QuickSelect`) oder im Modern Skin das Playlist-Dock (`OpenDialog`) offen ist:
         // Enter startet den markierten Song, Entf (`Delete`) entfernt ihn (bzw. leert nach `Strg+A` die Playlist), Escape schließt
@@ -1375,8 +1370,8 @@ impl Mod4WinApp {
         let inst_open = self.kind_to_id.contains_key(&WindowKind::InstrumentInfo);
         let eff_open = self.kind_to_id.contains_key(&WindowKind::Effects);
 
-        if (info_open || inst_open) && !ctrl && !shift && !alt {
-            if let PhysicalKey::Code(code) = event.physical_key {
+        if (info_open || inst_open) && !ctrl && !shift && !alt
+            && let PhysicalKey::Code(code) = event.physical_key {
                 match code {
                     KeyCode::NumpadAdd => {
                         let max_inst = self.shared_state.lock().unwrap().instruments.len().max(1);
@@ -1427,7 +1422,6 @@ impl Mod4WinApp {
                     _ => {}
                 }
             }
-        }
 
         // 0g. Benutzerdefinierte Hotkeys aus `state.ini_config.hotkeys` (`KEYSEL.PAS`) prüfen:
         if let Some((_, kname)) = Self::key_event_to_vkey_and_name(event) {
@@ -1449,11 +1443,10 @@ impl Mod4WinApp {
                     .find(|hk| hk.key_name.eq_ignore_ascii_case(&kname) && hk.state == st_bits)
                     .map(|hk| hk.action_id)
             };
-            if let Some(act_id) = matched_action_id {
-                if self.execute_hotkey_event(event_loop, act_id) {
+            if let Some(act_id) = matched_action_id
+                && self.execute_hotkey_event(event_loop, act_id) {
                     return;
                 }
-            }
         }
 
         // 1. Numpad / und Numpad * für PreAmp sowie 1..0 für Kanal-Mute

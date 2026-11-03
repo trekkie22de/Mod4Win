@@ -210,16 +210,14 @@ pub fn load_mol_file(mol_path: &Path) -> Vec<PathBuf> {
                                     .map(|(_, p)| p.clone())
                                     .unwrap_or_else(|| dir_path.clone());
                                 let mut zip_path = resolve_path_case_insensitive(&a_dir.join(arc_name));
-                                if !zip_path.exists() {
-                                    if let Some(found_zip) = find_file_case_insensitive(&base_dir, arc_name) {
+                                if !zip_path.exists()
+                                    && let Some(found_zip) = find_file_case_insensitive(&base_dir, arc_name) {
                                         zip_path = found_zip;
                                     }
-                                }
-                                if zip_path.exists() {
-                                    if let Some(extracted) = extract_zip_entry_by_name(&zip_path, &file_name) {
+                                if zip_path.exists()
+                                    && let Some(extracted) = extract_zip_entry_by_name(&zip_path, &file_name) {
                                         result.push(extracted);
                                     }
-                                }
                             }
                         }
                     }
@@ -329,11 +327,10 @@ fn find_file_case_insensitive(dir: &Path, target_name: &str) -> Option<PathBuf> 
     let entries = fs::read_dir(dir).ok()?;
     for e in entries.flatten() {
         let p = e.path();
-        if let Some(name) = p.file_name().and_then(|n| n.to_str()) {
-            if name.eq_ignore_ascii_case(target_name) {
+        if let Some(name) = p.file_name().and_then(|n| n.to_str())
+            && name.eq_ignore_ascii_case(target_name) {
                 return Some(p);
             }
-        }
     }
     None
 }
@@ -866,11 +863,10 @@ pub fn extract_zip_entry(zip_path: &Path, entry: &ZipEntryInfo) -> Option<PathBu
     let out_path = cache_dir.join(&entry.file_name);
 
     // Wenn bereits mit passender Größe entpackt, direkt wiederverwenden
-    if let Ok(meta) = fs::metadata(&out_path) {
-        if meta.len() as usize == entry.uncompressed_size && entry.uncompressed_size > 0 {
+    if let Ok(meta) = fs::metadata(&out_path)
+        && meta.len() as usize == entry.uncompressed_size && entry.uncompressed_size > 0 {
             return Some(out_path);
         }
-    }
 
     let data = fs::read(zip_path).ok()?;
     let decoded = extract_zip_entry_bytes(&data, entry)?;
@@ -891,11 +887,10 @@ pub fn extract_all_tracker_files_from_zip(zip_path: &Path) -> Vec<PathBuf> {
     let entries = list_zip_entries(zip_path);
     let mut out = Vec::new();
     for entry in &entries {
-        if UiSharedState::is_tracker_file(Path::new(&entry.file_name)) {
-            if let Some(p) = extract_zip_entry(zip_path, entry) {
+        if UiSharedState::is_tracker_file(Path::new(&entry.file_name))
+            && let Some(p) = extract_zip_entry(zip_path, entry) {
                 out.push(p);
             }
-        }
     }
     out
 }
@@ -1324,7 +1319,7 @@ pub fn decode_lha_lh1(input: &[u8], expected_size: usize) -> Option<Vec<u8>> {
             let mut leaf_idx = 0usize;
             for node in 0..T {
                 if son[node] >= T {
-                    freq[leaf_idx] = (freq[node] + 1) / 2;
+                    freq[leaf_idx] = freq[node].div_ceil(2);
                     son[leaf_idx] = son[node];
                     leaf_idx += 1;
                 }
@@ -1611,15 +1606,11 @@ pub fn inflate_raw_deflate(input: &[u8], expected_size: usize) -> Option<Vec<u8>
                             }
                             17 => {
                                 let rep = br.read_bits(3) as usize + 3;
-                                for _ in 0..rep {
-                                    all_lengths.push(0);
-                                }
+                                all_lengths.resize(all_lengths.len() + rep, 0);
                             }
                             18 => {
                                 let rep = br.read_bits(7) as usize + 11;
-                                for _ in 0..rep {
-                                    all_lengths.push(0);
-                                }
+                                all_lengths.resize(all_lengths.len() + rep, 0);
                             }
                             _ => return None,
                         }
@@ -1695,15 +1686,14 @@ pub fn read_module_bytes_universal(path: &Path) -> std::io::Result<(Vec<u8>, Opt
         if let Some(found) = entries.iter().find(|e| {
             e.full_name.eq_ignore_ascii_case(&entry_name)
                 || e.file_name.eq_ignore_ascii_case(&entry_name)
-        }) {
-            if let Some(bytes) = extract_zip_entry_bytes(&data, found) {
+        })
+            && let Some(bytes) = extract_zip_entry_bytes(&data, found) {
                 let ext = Path::new(&found.file_name)
                     .extension()
                     .and_then(|e| e.to_str())
                     .map(|s| s.to_string());
                 return Ok((bytes, ext));
             }
-        }
         return Err(std::io::Error::new(
             std::io::ErrorKind::NotFound,
             "ZIP entry not found",

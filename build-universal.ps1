@@ -25,7 +25,10 @@ if (-not (Test-Path $WinBin)) {
 
 if ((-not (Test-Path $LinX64)) -or (-not (Test-Path $LinArm64))) {
     Write-Host "[Build] Linux Release-Binaries fehlen – starte build-linux.ps1..." -ForegroundColor Yellow
-    $BuildLinuxScript = Join-Path $RootDir "build-linux.ps1"
+    $BuildLinuxScript = Join-Path $CrateDir "build-linux.ps1"
+    if (-not (Test-Path $BuildLinuxScript)) {
+        $BuildLinuxScript = Join-Path $RootDir "build-linux.ps1"
+    }
     & $BuildLinuxScript
     if ($LASTEXITCODE -ne 0) { throw "Linux Cross-Build fehlgeschlagen!" }
 }
