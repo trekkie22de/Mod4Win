@@ -27,7 +27,9 @@ use crate::engine::sequencer::Sequencer;
 use crate::engine::types::SoundSettings;
 
 // Re-Exporte aus den spezialisierten UI-Submodulen
-pub use super::effects_win::{check_effect_active, effect_id_from_cmd_op, note_to_str};
+pub use super::effects_win::{
+    check_effect_active, effect_id_from_cmd_op, effect_name_by_id, note_to_str,
+};
 pub use super::file_mgr::{ArchiveSetupState, FileManItem, FileManagerState};
 pub use super::help_win::{
     HelpClickResult, HelpViewerState, HELP_WINDOW_HEIGHT, HELP_WINDOW_WIDTH,
@@ -1856,8 +1858,10 @@ impl Mod4WinApp {
                 }
                 WindowKind::Effects => {
                     let num_ch = state.num_channels.clamp(4, 32) as u32;
+                    let num_fx = state.active_effect_columns().len().max(1) as u32;
                     let w = 350.max(115 + num_ch * 20);
-                    return (w, 270);
+                    let h = 90 + num_fx * 15;
+                    return (w, h);
                 }
                 WindowKind::QuickSelect | WindowKind::OpenDialog => {
                     return (MODERN_PLAYLIST_W, MODERN_PLAYLIST_H);

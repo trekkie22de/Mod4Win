@@ -13,7 +13,7 @@ use super::app::{
 #[cfg(any(not(target_os = "windows"), feature = "retro-win32"))]
 use super::app::FileSelectTarget;
 use super::cpu_sim::CpuProfile;
-use super::effects_win::effect_id_from_cmd_op;
+use super::effects_win::{effect_id_from_cmd_op, effect_name_by_id};
 use super::ini_config::{Mod4WinIniConfig, DEV_HDD, DEV_SOUNDCARD};
 use super::theme_modern::SkinMode;
 use super::widgets::{
@@ -2555,24 +2555,11 @@ impl Mod4WinApp {
             [0x0f, 0x3d, 0x26, 255],
         );
 
-        // Die 12 Mod-Effekt-Kategorien aus `mockup.html` inkl. aller normalisierten `effect_ids::*` (0..=67)
-        let fx_names: [(&str, &[u8]); 12] = [
-            ("Arpeggio", &[0, 32, 33]),
-            ("Port. Up", &[1, 17, 34, 36, 40, 53]),
-            ("Port. Down", &[2, 18, 35, 37, 41, 54]),
-            ("Tone Port.", &[3, 5, 42]),
-            ("Vibrato", &[4, 6, 20, 44, 45, 48, 59]),
-            ("Vol. Slide", &[5, 6, 7, 10, 26, 27, 46, 47, 49, 52, 55, 64]),
-            ("Pan Slide", &[8, 24, 56, 61, 62, 66]),
-            ("Sample Offs", &[9]),
-            ("Retrig Note", &[25, 28, 29, 43, 55, 63]),
-            ("Set Volume", &[12, 38, 57, 65, 67]),
-            ("Pat. Break", &[11, 13, 22, 30]),
-            ("Set Speed", &[15, 50, 51, 58, 60]),
-        ];
-
-        for (row_idx, (fx_name, match_ids)) in fx_names.iter().enumerate() {
+        // Dynamische Liste der im geladenen Modul tatsächlich genutzten Effekte (`0..=67`, analog zu `ana.pas`)
+        let active_cols = state.active_effect_columns();
+        for (row_idx, &eff_id) in active_cols.iter().enumerate() {
             let ry = 83 + (row_idx as i32) * 15;
+            let fx_name = effect_name_by_id(eff_id);
             draw_modern_ui_text(frame, dw, dh, 14, ry + 2, fx_name, [0x79, 0xd9, 0xa5, 255]);
             for ch in 0..num_ch {
                 let cx = 104 + (ch as i32) * col_w + 1;
@@ -2584,9 +2571,7 @@ impl Mod4WinApp {
                 } else {
                     effect_id_from_cmd_op(cmd, op)
                 };
-                let is_lit = active_id
-                    .map(|id| match_ids.contains(&id))
-                    .unwrap_or(false);
+                let is_lit = active_id == Some(eff_id);
                 let dot_col = if is_lit {
                     if (row_idx + ch) % 5 == 0 {
                         COL_LCD_AMBER
@@ -2603,19 +2588,21 @@ impl Mod4WinApp {
 
     pub(crate) fn handle_modern_effects_click(
         &mut self,
-        _event_loop: &ActiveEventLoop,
+        event_loop: &ActiveEventLoop,
         vx: i32,
         vy: i32,
         button: MouseButton,
         window: &Arc<Window>,
     ) {
-        let num_ch = self
-            .shared_state
-            .lock()
-            .unwrap()
-            .num_channels
-            .clamp(4, 32);
+        let (num_ch, num_fx) = {
+            let st = self.shared_state.lock().unwrap();
+            (
+                st.num_channels.clamp(4, 32),
+                st.active_effect_columns().len().max(1) as u32,
+            )
+        };
         let dw = 350u32.max(115 + (num_ch as u32) * 20);
+        let dh = 90 + num_fx * 15;
         if vy < 24 {
             if vx >= (dw as i32 - 26) {
                 self.close_window(WindowKind::Effects);
@@ -2625,7 +2612,7 @@ impl Mod4WinApp {
             return;
         }
         let col_w = ((dw as i32 - 114).max(num_ch as i32 * 14) / (num_ch as i32)).max(14);
-        if (32..=262).contains(&vy) && vx >= 100 {
+        if (32..=(dh as i32 - 8)).contains(&vy) && vx >= 100 {
             let ch_idx = ((vx - 104) / col_w) as usize;
             if ch_idx < num_ch {
                 let mut state = self.shared_state.lock().unwrap();
@@ -2640,6 +2627,20 @@ impl Mod4WinApp {
                     state.channel_muted[ch_idx] = !state.channel_muted[ch_idx];
                 }
                 state.channel_muted_dirty = true;
+                return;
+            }
+        }
+        if button == MouseButton::Left && (12..100).contains(&vx) {
+            if (32..=79).contains(&vy) {
+                // Klick auf "EFFECT" / "VOL L/R": Alle Kanäle anschalten (analog zu "Chn" im Classic Skin)
+                let mut state = self.shared_state.lock().unwrap();
+                state.channel_muted = [false; 32];
+                state.channel_muted_dirty = true;
+                return;
+            }
+            if (80..=(dh as i32 - 8)).contains(&vy) {
+                // Klick auf Effektname: Effekt-Erklärungsfenster öffnen (analog zu Classic Skin)
+                self.open_window(event_loop, WindowKind::EffectsHelp);
                 return;
             }
         }
