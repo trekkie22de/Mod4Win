@@ -1,0 +1,2274 @@
+﻿{
+  "bm0": {
+    "bitmap": "bm0.bmp",
+    "png": "bm0.png",
+    "width": 542,
+    "height": 135,
+    "bpp": 4,
+    "hotspots": [
+      {
+        "name": "Hotspot 26",
+        "id": "Main_Mixer",
+        "x": 405,
+        "y": 1,
+        "width": 32,
+        "height": 17
+      },
+      {
+        "name": "Hotspot 2",
+        "id": "Main_Setup",
+        "x": 438,
+        "y": 1,
+        "width": 32,
+        "height": 17
+      },
+      {
+        "name": "Hotspot 3",
+        "id": "Main_Help",
+        "x": 471,
+        "y": 1,
+        "width": 32,
+        "height": 17
+      },
+      {
+        "name": "Hotspot 32",
+        "id": "Main_swtomini",
+        "x": 523,
+        "y": 1,
+        "width": 18,
+        "height": 17
+      },
+      {
+        "name": "Hotspot 4",
+        "id": "Main_Info",
+        "x": 9,
+        "y": 27,
+        "width": 322,
+        "height": 24
+      },
+      {
+        "name": "Hotspot 29",
+        "id": "Main_nameswitch",
+        "x": 339,
+        "y": 26,
+        "width": 22,
+        "height": 26
+      },
+      {
+        "name": "Hotspot 5",
+        "id": "Main_ModTime",
+        "x": 10,
+        "y": 59,
+        "width": 77,
+        "height": 36
+      },
+      {
+        "name": "Hotspot 6",
+        "id": "Main_Track",
+        "x": 94,
+        "y": 59,
+        "width": 54,
+        "height": 36
+      },
+      {
+        "name": "Hotspot 7",
+        "id": "Main_Tracks",
+        "x": 158,
+        "y": 59,
+        "width": 54,
+        "height": 36
+      },
+      {
+        "name": "Hotspot 8",
+        "id": "Main_Pattern",
+        "x": 224,
+        "y": 59,
+        "width": 41,
+        "height": 36
+      },
+      {
+        "name": "Hotspot 9",
+        "id": "Main_Patterns",
+        "x": 274,
+        "y": 59,
+        "width": 40,
+        "height": 36
+      },
+      {
+        "name": "Hotspot 10",
+        "id": "Main_ShuffleView",
+        "x": 315,
+        "y": 60,
+        "width": 34,
+        "height": 11
+      },
+      {
+        "name": "Hotspot 11",
+        "id": "Main_Repview",
+        "x": 315,
+        "y": 71,
+        "width": 34,
+        "height": 11
+      },
+      {
+        "name": "Hotspot 12",
+        "id": "Main_Rep1View",
+        "x": 350,
+        "y": 71,
+        "width": 9,
+        "height": 11
+      },
+      {
+        "name": "Hotspot 13",
+        "id": "Main_ScanView",
+        "x": 315,
+        "y": 82,
+        "width": 44,
+        "height": 11
+      },
+      {
+        "name": "Hotspot 19",
+        "id": "Main_Stop",
+        "x": 9,
+        "y": 102,
+        "width": 50,
+        "height": 25
+      },
+      {
+        "name": "Hotspot 20",
+        "id": "Main_Play",
+        "x": 59,
+        "y": 102,
+        "width": 50,
+        "height": 25
+      },
+      {
+        "name": "Hotspot 21",
+        "id": "Main_Pause",
+        "x": 109,
+        "y": 102,
+        "width": 50,
+        "height": 25
+      },
+      {
+        "name": "Hotspot 22",
+        "id": "Main_Prev",
+        "x": 159,
+        "y": 102,
+        "width": 50,
+        "height": 25
+      },
+      {
+        "name": "Hotspot 23",
+        "id": "Main_FR",
+        "x": 209,
+        "y": 102,
+        "width": 50,
+        "height": 25
+      },
+      {
+        "name": "Hotspot 24",
+        "id": "Main_FF",
+        "x": 259,
+        "y": 102,
+        "width": 50,
+        "height": 25
+      },
+      {
+        "name": "Hotspot 25",
+        "id": "Main_Next",
+        "x": 309,
+        "y": 102,
+        "width": 50,
+        "height": 25
+      },
+      {
+        "name": "Hotspot 17",
+        "id": "Main_Percnt",
+        "x": 368,
+        "y": 27,
+        "width": 8,
+        "height": 53
+      },
+      {
+        "name": "Hotspot 14",
+        "id": "Main_SR",
+        "x": 374,
+        "y": 27,
+        "width": 35,
+        "height": 17
+      },
+      {
+        "name": "Hotspot 15",
+        "id": "Main_Bits",
+        "x": 410,
+        "y": 28,
+        "width": 30,
+        "height": 17
+      },
+      {
+        "name": "Hotspot 18",
+        "id": "main_Clip",
+        "x": 441,
+        "y": 28,
+        "width": 28,
+        "height": 17
+      },
+      {
+        "name": "Hotspot 16",
+        "id": "Main_MS",
+        "x": 470,
+        "y": 28,
+        "width": 31,
+        "height": 17
+      },
+      {
+        "name": "Hotspot 40",
+        "id": "Main_channels",
+        "x": 374,
+        "y": 45,
+        "width": 36,
+        "height": 17
+      },
+      {
+        "name": "Hotspot 15",
+        "id": "main_BPM",
+        "x": 412,
+        "y": 46,
+        "width": 26,
+        "height": 16
+      },
+      {
+        "name": "Hotspot 14",
+        "id": "main_panning",
+        "x": 441,
+        "y": 46,
+        "width": 24,
+        "height": 16
+      },
+      {
+        "name": "Hotspot 13",
+        "id": "main_IDO",
+        "x": 471,
+        "y": 46,
+        "width": 30,
+        "height": 21
+      },
+      {
+        "name": "Hotspot 17",
+        "id": "Main_Percnt",
+        "x": 374,
+        "y": 63,
+        "width": 34,
+        "height": 17
+      },
+      {
+        "name": "Hotspot 18",
+        "id": "Main_BuffTime",
+        "x": 409,
+        "y": 63,
+        "width": 36,
+        "height": 17
+      },
+      {
+        "name": "Hotspot 49",
+        "id": "main_tmode",
+        "x": 450,
+        "y": 69,
+        "width": 51,
+        "height": 11
+      },
+      {
+        "name": "Hotspot 26",
+        "id": "Main_Shuffle",
+        "x": 369,
+        "y": 90,
+        "width": 32,
+        "height": 17
+      },
+      {
+        "name": "Hotspot 27",
+        "id": "Main_Repeat",
+        "x": 402,
+        "y": 90,
+        "width": 32,
+        "height": 17
+      },
+      {
+        "name": "Hotspot 28",
+        "id": "Main_Scan",
+        "x": 435,
+        "y": 90,
+        "width": 32,
+        "height": 17
+      },
+      {
+        "name": "Hotspot 27",
+        "id": "Main_BtnTime",
+        "x": 468,
+        "y": 90,
+        "width": 32,
+        "height": 17
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "Main_Open",
+        "x": 369,
+        "y": 108,
+        "width": 32,
+        "height": 17
+      },
+      {
+        "name": "Hotspot 35",
+        "id": "Main_filemenbtn",
+        "x": 402,
+        "y": 108,
+        "width": 32,
+        "height": 17
+      },
+      {
+        "name": "Hotspot 46",
+        "id": "main_infobtn",
+        "x": 435,
+        "y": 108,
+        "width": 32,
+        "height": 17
+      },
+      {
+        "name": "Hotspot 47",
+        "id": "main_effects",
+        "x": 468,
+        "y": 108,
+        "width": 32,
+        "height": 17
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "main_PreAmp",
+        "x": 507,
+        "y": 26,
+        "width": 27,
+        "height": 101
+      }
+    ]
+  },
+  "bm1": {
+    "bitmap": "bm1.bmp",
+    "png": "bm1.png",
+    "width": 309,
+    "height": 58,
+    "bpp": 4,
+    "hotspots": [
+      {
+        "name": "Hotspot 8",
+        "id": "mini_title",
+        "x": 59,
+        "y": 2,
+        "width": 169,
+        "height": 15
+      },
+      {
+        "name": "Hotspot 9",
+        "id": "mini_restore",
+        "x": 290,
+        "y": 1,
+        "width": 18,
+        "height": 17
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "mini_titleno",
+        "x": 6,
+        "y": 23,
+        "width": 40,
+        "height": 15
+      },
+      {
+        "name": "Hotspot 2",
+        "id": "mini_time",
+        "x": 6,
+        "y": 38,
+        "width": 40,
+        "height": 15
+      },
+      {
+        "name": "Hotspot 3",
+        "id": "main_stop",
+        "x": 51,
+        "y": 25,
+        "width": 50,
+        "height": 25
+      },
+      {
+        "name": "Hotspot 4",
+        "id": "main_play",
+        "x": 101,
+        "y": 25,
+        "width": 50,
+        "height": 25
+      },
+      {
+        "name": "Hotspot 5",
+        "id": "main_pause",
+        "x": 151,
+        "y": 25,
+        "width": 50,
+        "height": 25
+      },
+      {
+        "name": "Hotspot 6",
+        "id": "main_prev",
+        "x": 201,
+        "y": 25,
+        "width": 50,
+        "height": 25
+      },
+      {
+        "name": "Hotspot 7",
+        "id": "main_next",
+        "x": 251,
+        "y": 25,
+        "width": 50,
+        "height": 25
+      }
+    ]
+  },
+  "bm2": {
+    "bitmap": "bm2.bmp",
+    "png": "bm2.png",
+    "width": 365,
+    "height": 306,
+    "bpp": 4,
+    "hotspots": [
+      {
+        "name": "Hotspot 3",
+        "id": "fm_status",
+        "x": 12,
+        "y": 285,
+        "width": 339,
+        "height": 13
+      },
+      {
+        "name": "Hotspot 6",
+        "id": "main_help",
+        "x": 309,
+        "y": 253,
+        "width": 43,
+        "height": 22
+      },
+      {
+        "name": "Hotspot 5",
+        "id": "fm_quit",
+        "x": 253,
+        "y": 253,
+        "width": 42,
+        "height": 22
+      },
+      {
+        "name": "Hotspot 4",
+        "id": "fm_ok",
+        "x": 197,
+        "y": 252,
+        "width": 41,
+        "height": 22
+      },
+      {
+        "name": "Hotspot 2",
+        "id": "fm_dirs",
+        "x": 197,
+        "y": 116,
+        "width": 154,
+        "height": 129
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "fm_files",
+        "x": 12,
+        "y": 114,
+        "width": 172,
+        "height": 160
+      },
+      {
+        "name": "Hotspot 10",
+        "id": "fm_in",
+        "x": 52,
+        "y": 82,
+        "width": 300,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 9",
+        "id": "fm_nach",
+        "x": 51,
+        "y": 63,
+        "width": 302,
+        "height": 16
+      },
+      {
+        "name": "Hotspot 8",
+        "id": "fm_aus",
+        "x": 53,
+        "y": 47,
+        "width": 301,
+        "height": 13
+      },
+      {
+        "name": "Hotspot 7",
+        "id": "fm_von",
+        "x": 51,
+        "y": 28,
+        "width": 303,
+        "height": 13
+      }
+    ]
+  },
+  "bm3": {
+    "bitmap": "bm3.bmp",
+    "png": "bm3.png",
+    "width": 166,
+    "height": 212,
+    "bpp": 4,
+    "hotspots": [
+      {
+        "name": "Hotspot 3",
+        "id": "selbox_selection",
+        "x": 15,
+        "y": 9,
+        "width": 136,
+        "height": 13
+      },
+      {
+        "name": "Hotspot 2",
+        "id": "selbox_list",
+        "x": 6,
+        "y": 6,
+        "width": 153,
+        "height": 174
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "selbox_sort",
+        "x": 18,
+        "y": 185,
+        "width": 142,
+        "height": 21
+      }
+    ]
+  },
+  "bm4": {
+    "bitmap": "bm4.bmp",
+    "png": "bm4.png",
+    "width": 526,
+    "height": 338,
+    "bpp": 4,
+    "hotspots": [
+      {
+        "name": "Hotspot 1",
+        "id": "setup_name",
+        "x": 10,
+        "y": 28,
+        "width": 482,
+        "height": 23
+      },
+      {
+        "name": "Hotspot 2",
+        "id": "setup_bname",
+        "x": 499,
+        "y": 27,
+        "width": 19,
+        "height": 26
+      },
+      {
+        "name": "Hotspot 3",
+        "id": "setup_sr",
+        "x": 12,
+        "y": 73,
+        "width": 30,
+        "height": 25
+      },
+      {
+        "name": "Hotspot 4",
+        "id": "setup_bsr",
+        "x": 46,
+        "y": 72,
+        "width": 19,
+        "height": 26
+      },
+      {
+        "name": "Hotspot 5",
+        "id": "setup_bits",
+        "x": 89,
+        "y": 73,
+        "width": 20,
+        "height": 24
+      },
+      {
+        "name": "Hotspot 6",
+        "id": "setup_ms",
+        "x": 141,
+        "y": 65,
+        "width": 20,
+        "height": 35
+      },
+      {
+        "name": "Hotspot 7",
+        "id": "setup_buffs",
+        "x": 205,
+        "y": 73,
+        "width": 30,
+        "height": 25
+      },
+      {
+        "name": "Hotspot 8",
+        "id": "setup_bbuffs",
+        "x": 239,
+        "y": 72,
+        "width": 19,
+        "height": 26
+      },
+      {
+        "name": "Hotspot 9",
+        "id": "setup_mem",
+        "x": 270,
+        "y": 73,
+        "width": 56,
+        "height": 25
+      },
+      {
+        "name": "Hotspot 19",
+        "id": "setup_IDO",
+        "x": 351,
+        "y": 73,
+        "width": 20,
+        "height": 24
+      },
+      {
+        "name": "Hotspot 50",
+        "id": "setup_panning",
+        "x": 380,
+        "y": 73,
+        "width": 20,
+        "height": 24
+      },
+      {
+        "name": "Hotspot 50",
+        "id": "setup_Clip",
+        "x": 409,
+        "y": 73,
+        "width": 20,
+        "height": 24
+      },
+      {
+        "name": "Hotspot 19",
+        "id": "setup_loadstate",
+        "x": 468,
+        "y": 73,
+        "width": 20,
+        "height": 24
+      },
+      {
+        "name": "Hotspot 14",
+        "id": "setup_tmode",
+        "x": 9,
+        "y": 116,
+        "width": 508,
+        "height": 18
+      },
+      {
+        "name": "Hotspot 15",
+        "id": "setup_ratech",
+        "x": 9,
+        "y": 134,
+        "width": 508,
+        "height": 18
+      },
+      {
+        "name": "Hotspot 16",
+        "id": "setup_pausesetup",
+        "x": 9,
+        "y": 152,
+        "width": 508,
+        "height": 18
+      },
+      {
+        "name": "Hotspot 17",
+        "id": "setup_playonload",
+        "x": 9,
+        "y": 170,
+        "width": 508,
+        "height": 18
+      },
+      {
+        "name": "Hotspot 18",
+        "id": "setup_moveonclick",
+        "x": 9,
+        "y": 188,
+        "width": 508,
+        "height": 18
+      },
+      {
+        "name": "Hotspot 20",
+        "id": "setup_recpath",
+        "x": 9,
+        "y": 220,
+        "width": 508,
+        "height": 25
+      },
+      {
+        "name": "Hotspot 20",
+        "id": "setup_recaskname",
+        "x": 9,
+        "y": 245,
+        "width": 508,
+        "height": 20
+      },
+      {
+        "name": "Hotspot 20",
+        "id": "setup_mixer",
+        "x": 9,
+        "y": 276,
+        "width": 508,
+        "height": 27
+      },
+      {
+        "name": "Hotspot 35",
+        "id": "setup_hotkeys",
+        "x": 10,
+        "y": 309,
+        "width": 62,
+        "height": 21
+      },
+      {
+        "name": "Hotspot 24",
+        "id": "setup_arcs",
+        "x": 71,
+        "y": 309,
+        "width": 62,
+        "height": 21
+      },
+      {
+        "name": "Hotspot 24",
+        "id": "setup_register",
+        "x": 132,
+        "y": 309,
+        "width": 62,
+        "height": 21
+      },
+      {
+        "name": "Hotspot 5",
+        "id": "setup_language",
+        "x": 213,
+        "y": 309,
+        "width": 122,
+        "height": 21
+      },
+      {
+        "name": "Hotspot 10",
+        "id": "setup_ok",
+        "x": 351,
+        "y": 309,
+        "width": 42,
+        "height": 21
+      },
+      {
+        "name": "Hotspot 11",
+        "id": "setup_save",
+        "x": 392,
+        "y": 309,
+        "width": 42,
+        "height": 21
+      },
+      {
+        "name": "Hotspot 12",
+        "id": "setup_no",
+        "x": 433,
+        "y": 309,
+        "width": 42,
+        "height": 21
+      },
+      {
+        "name": "Hotspot 13",
+        "id": "main_help",
+        "x": 474,
+        "y": 309,
+        "width": 42,
+        "height": 21
+      }
+    ]
+  },
+  "bm5": {
+    "bitmap": "bm5.bmp",
+    "png": "bm5.png",
+    "width": 524,
+    "height": 172,
+    "bpp": 4,
+    "hotspots": [
+      {
+        "name": "Hotspot 8",
+        "id": "main_help",
+        "x": 472,
+        "y": 140,
+        "width": 42,
+        "height": 23
+      },
+      {
+        "name": "Hotspot 7",
+        "id": "arcopt_quit",
+        "x": 432,
+        "y": 141,
+        "width": 40,
+        "height": 22
+      },
+      {
+        "name": "Hotspot 6",
+        "id": "arcopt_ok",
+        "x": 389,
+        "y": 140,
+        "width": 42,
+        "height": 23
+      },
+      {
+        "name": "Hotspot 30",
+        "id": "arcopt_arcwnd",
+        "x": 10,
+        "y": 105,
+        "width": 502,
+        "height": 24
+      },
+      {
+        "name": "Hotspot 34",
+        "id": "arcopt_more",
+        "x": 466,
+        "y": 33,
+        "width": 43,
+        "height": 73
+      },
+      {
+        "name": "Hotspot 33",
+        "id": "arcopt_arcbtns",
+        "x": 441,
+        "y": 32,
+        "width": 25,
+        "height": 73
+      },
+      {
+        "name": "Hotspot 32",
+        "id": "arcopt_arcedit",
+        "x": 172,
+        "y": 32,
+        "width": 264,
+        "height": 72
+      },
+      {
+        "name": "Hotspot 31",
+        "id": "arcopt_puswitch",
+        "x": 60,
+        "y": 31,
+        "width": 110,
+        "height": 72
+      }
+    ]
+  },
+  "bm6": {
+    "bitmap": "bm6.bmp",
+    "png": "bm6.png",
+    "width": 337,
+    "height": 150,
+    "bpp": 4,
+    "hotspots": [
+      {
+        "name": "Hotspot 7",
+        "id": "main_help",
+        "x": 287,
+        "y": 120,
+        "width": 40,
+        "height": 20
+      },
+      {
+        "name": "Hotspot 6",
+        "id": "arcparm_reset",
+        "x": 247,
+        "y": 120,
+        "width": 38,
+        "height": 20
+      },
+      {
+        "name": "Hotspot 5",
+        "id": "arcparm_quit",
+        "x": 205,
+        "y": 119,
+        "width": 41,
+        "height": 22
+      },
+      {
+        "name": "Hotspot 4",
+        "id": "arcparm_ok",
+        "x": 164,
+        "y": 119,
+        "width": 39,
+        "height": 20
+      },
+      {
+        "name": "Hotspot 3",
+        "id": "arcparm_edit3",
+        "x": 119,
+        "y": 85,
+        "width": 203,
+        "height": 15
+      },
+      {
+        "name": "Hotspot 2",
+        "id": "arcparm_edit2",
+        "x": 121,
+        "y": 58,
+        "width": 201,
+        "height": 18
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "arcparm_edit1",
+        "x": 119,
+        "y": 36,
+        "width": 205,
+        "height": 14
+      }
+    ]
+  },
+  "bm7": {
+    "bitmap": "bm7.bmp",
+    "png": "bm7.png",
+    "width": 480,
+    "height": 250,
+    "bpp": 4,
+    "hotspots": [
+      {
+        "name": "Hotspot 13",
+        "id": "main_help",
+        "x": 287,
+        "y": 219,
+        "width": 42,
+        "height": 21
+      },
+      {
+        "name": "Hotspot 8",
+        "id": "keysel_reset",
+        "x": 246,
+        "y": 220,
+        "width": 40,
+        "height": 20
+      },
+      {
+        "name": "Hotspot 7",
+        "id": "keysel_no",
+        "x": 206,
+        "y": 221,
+        "width": 40,
+        "height": 19
+      },
+      {
+        "name": "Hotspot 6",
+        "id": "keysel_ok",
+        "x": 164,
+        "y": 220,
+        "width": 41,
+        "height": 19
+      },
+      {
+        "name": "Hotspot 3",
+        "id": "keysel_tflags",
+        "x": 225,
+        "y": 184,
+        "width": 76,
+        "height": 17
+      },
+      {
+        "name": "Hotspot 3",
+        "id": "keysel_tflags",
+        "x": 138,
+        "y": 184,
+        "width": 76,
+        "height": 17
+      },
+      {
+        "name": "Hotspot 3",
+        "id": "keysel_tflags",
+        "x": 48,
+        "y": 183,
+        "width": 76,
+        "height": 17
+      },
+      {
+        "name": "Hotspot 2",
+        "id": "keysel_taste",
+        "x": 119,
+        "y": 168,
+        "width": 97,
+        "height": 13
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "keysel_eventbox",
+        "x": 18,
+        "y": 34,
+        "width": 300,
+        "height": 118
+      }
+    ]
+  },
+  "bm8": {
+    "bitmap": "bm8.bmp",
+    "png": "bm8.png",
+    "width": 317,
+    "height": 270,
+    "bpp": 4,
+    "hotspots": [
+      {
+        "name": "Hotspot 7",
+        "id": "fsel_status",
+        "x": 11,
+        "y": 239,
+        "width": 296,
+        "height": 19
+      },
+      {
+        "name": "Hotspot 6",
+        "id": "main_help",
+        "x": 263,
+        "y": 207,
+        "width": 40,
+        "height": 20
+      },
+      {
+        "name": "Hotspot 5",
+        "id": "fsel_quit",
+        "x": 206,
+        "y": 207,
+        "width": 40,
+        "height": 20
+      },
+      {
+        "name": "Hotspot 4",
+        "id": "fsel_ok",
+        "x": 148,
+        "y": 205,
+        "width": 41,
+        "height": 23
+      },
+      {
+        "name": "Hotspot 3",
+        "id": "fsel_dirs",
+        "x": 148,
+        "y": 68,
+        "width": 157,
+        "height": 130
+      },
+      {
+        "name": "Hotspot 2",
+        "id": "fsel_files",
+        "x": 12,
+        "y": 69,
+        "width": 123,
+        "height": 160
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "fsel_path",
+        "x": 50,
+        "y": 28,
+        "width": 254,
+        "height": 15
+      }
+    ]
+  },
+  "bm9": {
+    "bitmap": "bm9.bmp",
+    "png": "bm9.png",
+    "width": 640,
+    "height": 440,
+    "bpp": 4,
+    "hotspots": [
+      {
+        "name": "Hotspot 24",
+        "id": "open_infwin",
+        "x": 10,
+        "y": 371,
+        "width": 539,
+        "height": 19
+      },
+      {
+        "name": "Hotspot 22",
+        "id": "open_mofn",
+        "x": 370,
+        "y": 351,
+        "width": 178,
+        "height": 18
+      },
+      {
+        "name": "Hotspot 21",
+        "id": "open_seledit",
+        "x": 8,
+        "y": 352,
+        "width": 178,
+        "height": 18
+      },
+      {
+        "name": "Hotspot 17",
+        "id": "main_help",
+        "x": 321,
+        "y": 325,
+        "width": 41,
+        "height": 21
+      },
+      {
+        "name": "Hotspot 16",
+        "id": "open_no",
+        "x": 280,
+        "y": 324,
+        "width": 41,
+        "height": 21
+      },
+      {
+        "name": "Hotspot 15",
+        "id": "open_save",
+        "x": 239,
+        "y": 325,
+        "width": 41,
+        "height": 21
+      },
+      {
+        "name": "Hotspot 14",
+        "id": "open_ok",
+        "x": 198,
+        "y": 326,
+        "width": 41,
+        "height": 21
+      },
+      {
+        "name": "Hotspot 28",
+        "id": "open_selbtnsright",
+        "x": 338,
+        "y": 270,
+        "width": 16,
+        "height": 44
+      },
+      {
+        "name": "Hotspot 26",
+        "id": "open_add",
+        "x": 279,
+        "y": 271,
+        "width": 50,
+        "height": 44
+      },
+      {
+        "name": "Hotspot 25",
+        "id": "open_del",
+        "x": 230,
+        "y": 272,
+        "width": 50,
+        "height": 44
+      },
+      {
+        "name": "Hotspot 27",
+        "id": "open_selbtnsleft",
+        "x": 204,
+        "y": 270,
+        "width": 16,
+        "height": 44
+      },
+      {
+        "name": "Hotspot 5",
+        "id": "open_PlayList",
+        "x": 374,
+        "y": 102,
+        "width": 172,
+        "height": 247
+      },
+      {
+        "name": "Hotspot 6",
+        "id": "open_DirList",
+        "x": 194,
+        "y": 104,
+        "width": 171,
+        "height": 159
+      },
+      {
+        "name": "Hotspot 7",
+        "id": "open_LoadList",
+        "x": 12,
+        "y": 101,
+        "width": 173,
+        "height": 244
+      },
+      {
+        "name": "Hotspot 8",
+        "id": "open_path",
+        "x": 51,
+        "y": 70,
+        "width": 497,
+        "height": 15
+      },
+      {
+        "name": "Hotspot 4",
+        "id": "open_toplay",
+        "x": 560,
+        "y": 293,
+        "width": 80,
+        "height": 40
+      },
+      {
+        "name": "Hotspot 2",
+        "id": "open_playing",
+        "x": 566,
+        "y": 185,
+        "width": 58,
+        "height": 40
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "open_played",
+        "x": 563,
+        "y": 90,
+        "width": 65,
+        "height": 49
+      },
+      {
+        "name": "Hotspot 20",
+        "id": "open_mods",
+        "x": 4,
+        "y": 4,
+        "width": 130,
+        "height": 36
+      },
+      {
+        "name": "Hotspot 8",
+        "id": "open_path",
+        "x": 144,
+        "y": 3,
+        "width": 58,
+        "height": 34
+      }
+    ]
+  },
+  "bm10": {
+    "bitmap": "bm10.bmp",
+    "png": "bm10.png",
+    "width": 452,
+    "height": 373,
+    "bpp": 4,
+    "hotspots": [
+      {
+        "name": "Hotspot 4",
+        "id": "Info_ModName",
+        "x": 10,
+        "y": 28,
+        "width": 432,
+        "height": 24
+      },
+      {
+        "name": "Hotspot 3",
+        "id": "Info_Instr",
+        "x": 25,
+        "y": 60,
+        "width": 182,
+        "height": 15
+      },
+      {
+        "name": "Hotspot 6",
+        "id": "Info_selbtns",
+        "x": 10,
+        "y": 60,
+        "width": 14,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 6",
+        "id": "Info_selbtns",
+        "x": 208,
+        "y": 60,
+        "width": 14,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 3",
+        "id": "Info_Instr",
+        "x": 10,
+        "y": 75,
+        "width": 212,
+        "height": 211
+      },
+      {
+        "name": "Hotspot 3",
+        "id": "Info_Instr",
+        "x": 230,
+        "y": 60,
+        "width": 212,
+        "height": 226
+      },
+      {
+        "name": "Hotspot 2",
+        "id": "Info_MODUL",
+        "x": 10,
+        "y": 296,
+        "width": 432,
+        "height": 68
+      }
+    ]
+  },
+  "bm11": {
+    "bitmap": "bm11.bmp",
+    "png": "bm11.png",
+    "width": 204,
+    "height": 182,
+    "bpp": 4,
+    "hotspots": [
+      {
+        "name": "Hotspot 11",
+        "id": "ins_name",
+        "x": 10,
+        "y": 160,
+        "width": 185,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 3",
+        "id": "ins_plus",
+        "x": 180,
+        "y": 137,
+        "width": 15,
+        "height": 15
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "ins_ninstr",
+        "x": 148,
+        "y": 135,
+        "width": 29,
+        "height": 19
+      },
+      {
+        "name": "Hotspot 2",
+        "id": "ins_minus",
+        "x": 129,
+        "y": 135,
+        "width": 16,
+        "height": 18
+      },
+      {
+        "name": "Hotspot 10",
+        "id": "ins_bits",
+        "x": 13,
+        "y": 112,
+        "width": 178,
+        "height": 15
+      },
+      {
+        "name": "Hotspot 9",
+        "id": "ins_defvol",
+        "x": 14,
+        "y": 97,
+        "width": 177,
+        "height": 15
+      },
+      {
+        "name": "Hotspot 8",
+        "id": "ins_c2tun",
+        "x": 14,
+        "y": 84,
+        "width": 177,
+        "height": 13
+      },
+      {
+        "name": "Hotspot 7",
+        "id": "ins_finetun",
+        "x": 14,
+        "y": 71,
+        "width": 178,
+        "height": 13
+      },
+      {
+        "name": "Hotspot 6",
+        "id": "ins_looplen",
+        "x": 14,
+        "y": 56,
+        "width": 178,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 5",
+        "id": "ins_loopstart",
+        "x": 14,
+        "y": 43,
+        "width": 177,
+        "height": 13
+      },
+      {
+        "name": "Hotspot 4",
+        "id": "ins_len",
+        "x": 14,
+        "y": 29,
+        "width": 177,
+        "height": 14
+      }
+    ]
+  },
+  "bm12": {
+    "bitmap": "bm12.bmp",
+    "png": "bm12.png",
+    "width": 362,
+    "height": 161,
+    "bpp": 4,
+    "hotspots": [
+      {
+        "name": "Hotspot 3",
+        "id": "eff_effon",
+        "x": 142,
+        "y": 144,
+        "width": 14,
+        "height": 7
+      },
+      {
+        "name": "Hotspot 3",
+        "id": "eff_effon",
+        "x": 156,
+        "y": 135,
+        "width": 14,
+        "height": 7
+      },
+      {
+        "name": "Hotspot 3",
+        "id": "eff_effon",
+        "x": 170,
+        "y": 117,
+        "width": 14,
+        "height": 7
+      },
+      {
+        "name": "Hotspot 3",
+        "id": "eff_effon",
+        "x": 142,
+        "y": 108,
+        "width": 14,
+        "height": 7
+      },
+      {
+        "name": "Hotspot 3",
+        "id": "eff_effon",
+        "x": 44,
+        "y": 117,
+        "width": 14,
+        "height": 7
+      },
+      {
+        "name": "Hotspot 3",
+        "id": "eff_effon",
+        "x": 72,
+        "y": 108,
+        "width": 14,
+        "height": 7
+      },
+      {
+        "name": "Hotspot 3",
+        "id": "eff_effon",
+        "x": 114,
+        "y": 81,
+        "width": 14,
+        "height": 7
+      },
+      {
+        "name": "Hotspot 8",
+        "id": "eff_insno",
+        "x": 337,
+        "y": 79,
+        "width": 17,
+        "height": 74
+      },
+      {
+        "name": "Hotspot 7",
+        "id": "eff_lrvol",
+        "x": 294,
+        "y": 79,
+        "width": 39,
+        "height": 74
+      },
+      {
+        "name": "Hotspot 6",
+        "id": "eff_notes",
+        "x": 273,
+        "y": 79,
+        "width": 17,
+        "height": 74
+      },
+      {
+        "name": "Hotspot 5",
+        "id": "eff_leds",
+        "x": 29,
+        "y": 79,
+        "width": 240,
+        "height": 74
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "eff_chn",
+        "x": 8,
+        "y": 79,
+        "width": 17,
+        "height": 74
+      },
+      {
+        "name": "Hotspot 9",
+        "id": "eff_totaltime",
+        "x": 273,
+        "y": 47,
+        "width": 81,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 10",
+        "id": "eff_noteline",
+        "x": 273,
+        "y": 34,
+        "width": 81,
+        "height": 13
+      },
+      {
+        "name": "Hotspot 11",
+        "id": "eff_speeds",
+        "x": 273,
+        "y": 8,
+        "width": 81,
+        "height": 26
+      },
+      {
+        "name": "Hotspot 2",
+        "id": "eff_effects",
+        "x": 29,
+        "y": 8,
+        "width": 240,
+        "height": 67
+      }
+    ]
+  },
+  "bm13": {
+    "bitmap": "bm13.bmp",
+    "png": "bm13.png",
+    "width": 381,
+    "height": 281,
+    "bpp": 4,
+    "hotspots": [
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_KeyOff",
+        "x": 307,
+        "y": 206,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_PanSld",
+        "x": 307,
+        "y": 192,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_SetEnvPos",
+        "x": 307,
+        "y": 178,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_GlobVolSld",
+        "x": 307,
+        "y": 164,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_XM",
+        "x": 307,
+        "y": 145,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_S3Mfinevibr",
+        "x": 307,
+        "y": 122,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_S3Mbpmspeed",
+        "x": 307,
+        "y": 108,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_S3Mglobalvol",
+        "x": 307,
+        "y": 94,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_S3Mstereocontrol",
+        "x": 307,
+        "y": 80,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_S3Mretrigvolsld",
+        "x": 307,
+        "y": 66,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_S3Mexfpdn",
+        "x": 307,
+        "y": 52,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_S3Mexfpup",
+        "x": 307,
+        "y": 38,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_S3Mtremor",
+        "x": 307,
+        "y": 24,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_S3M",
+        "x": 307,
+        "y": 5,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_FARfinetempoup",
+        "x": 231,
+        "y": 192,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_FARfinetempodown",
+        "x": 231,
+        "y": 178,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_FARvolumeportamento",
+        "x": 231,
+        "y": 164,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_FARvibratosust",
+        "x": 231,
+        "y": 150,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_FARvolslidedown",
+        "x": 231,
+        "y": 136,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_FARvolslideup",
+        "x": 231,
+        "y": 122,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_FARvibratonote",
+        "x": 231,
+        "y": 108,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_FARvibratodepth",
+        "x": 231,
+        "y": 94,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_FARretrigger",
+        "x": 231,
+        "y": 80,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_FARnoteportamento",
+        "x": 231,
+        "y": 66,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_FARfinepitchdown",
+        "x": 231,
+        "y": 52,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_FARfinepitchup",
+        "x": 231,
+        "y": 38,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_FARspecial",
+        "x": 231,
+        "y": 24,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_FAR",
+        "x": 231,
+        "y": 5,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_669slotretrigger",
+        "x": 155,
+        "y": 192,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_669finepanright",
+        "x": 155,
+        "y": 178,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_669finepanleft",
+        "x": 155,
+        "y": 164,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_669frequadjust",
+        "x": 155,
+        "y": 150,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_669",
+        "x": 155,
+        "y": 131,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_OKToldvol",
+        "x": 155,
+        "y": 108,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_OKTtpdn1",
+        "x": 155,
+        "y": 94,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_OKTtpup1",
+        "x": 155,
+        "y": 80,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_OKTtpdn",
+        "x": 155,
+        "y": 66,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_OKTtpup",
+        "x": 155,
+        "y": 52,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_OKTarp2",
+        "x": 155,
+        "y": 38,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_OKTarp1",
+        "x": 155,
+        "y": 24,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_OKT",
+        "x": 155,
+        "y": 5,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_invloop",
+        "x": 79,
+        "y": 234,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_pdelay",
+        "x": 79,
+        "y": 220,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_notedelay",
+        "x": 79,
+        "y": 206,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_cutnote",
+        "x": 79,
+        "y": 192,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_fvdn",
+        "x": 79,
+        "y": 178,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_fvup",
+        "x": 79,
+        "y": 164,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_retrignote",
+        "x": 79,
+        "y": 150,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_panning2",
+        "x": 79,
+        "y": 136,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_tremwave",
+        "x": 79,
+        "y": 122,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_ploop",
+        "x": 79,
+        "y": 108,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_setftune",
+        "x": 79,
+        "y": 94,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_vibwave",
+        "x": 79,
+        "y": 80,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_gliss",
+        "x": 79,
+        "y": 66,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_fpdn",
+        "x": 79,
+        "y": 52,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_fpup",
+        "x": 79,
+        "y": 38,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_setfilter",
+        "x": 79,
+        "y": 24,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_PT",
+        "x": 79,
+        "y": 5,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_setspeed",
+        "x": 3,
+        "y": 220,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_pbreak",
+        "x": 3,
+        "y": 206,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_setvol",
+        "x": 3,
+        "y": 192,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_pjump",
+        "x": 3,
+        "y": 178,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_volsld",
+        "x": 3,
+        "y": 164,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_sampofs",
+        "x": 3,
+        "y": 150,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_panning",
+        "x": 3,
+        "y": 136,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_tremolo",
+        "x": 3,
+        "y": 122,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_vibvolsld",
+        "x": 3,
+        "y": 108,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_portvolsld",
+        "x": 3,
+        "y": 94,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_vib",
+        "x": 3,
+        "y": 80,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_pnote",
+        "x": 3,
+        "y": 66,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_pdn",
+        "x": 3,
+        "y": 52,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_pup",
+        "x": 3,
+        "y": 38,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_arpg",
+        "x": 3,
+        "y": 24,
+        "width": 71,
+        "height": 14
+      },
+      {
+        "name": "Hotspot 1",
+        "id": "effekte_standard",
+        "x": 3,
+        "y": 5,
+        "width": 71,
+        "height": 14
+      }
+    ]
+  },
+  "bm14": {
+    "bitmap": "bm14.bmp",
+    "png": "bm14.png",
+    "width": 349,
+    "height": 148,
+    "bpp": 4,
+    "hotspots": [
+      {
+        "name": "Hotspot 3",
+        "id": "regdlg_name",
+        "x": 9,
+        "y": 27,
+        "width": 331,
+        "height": 18
+      },
+      {
+        "name": "Hotspot 3",
+        "id": "regdlg_company",
+        "x": 9,
+        "y": 49,
+        "width": 331,
+        "height": 18
+      },
+      {
+        "name": "Hotspot 3",
+        "id": "regdlg_payment",
+        "x": 9,
+        "y": 71,
+        "width": 331,
+        "height": 18
+      },
+      {
+        "name": "Hotspot 3",
+        "id": "regdlg_code",
+        "x": 9,
+        "y": 93,
+        "width": 331,
+        "height": 18
+      },
+      {
+        "name": "Hotspot 4",
+        "id": "regdlg_ok",
+        "x": 214,
+        "y": 119,
+        "width": 42,
+        "height": 21
+      },
+      {
+        "name": "Hotspot 5",
+        "id": "regdlg_quit",
+        "x": 255,
+        "y": 119,
+        "width": 42,
+        "height": 21
+      },
+      {
+        "name": "Hotspot 7",
+        "id": "main_help",
+        "x": 296,
+        "y": 119,
+        "width": 42,
+        "height": 21
+      }
+    ]
+  },
+  "bm15": {
+    "bitmap": "bm15.bmp",
+    "png": "bm15.png",
+    "width": 363,
+    "height": 74,
+    "bpp": 4,
+    "hotspots": [
+      {
+        "name": "Hotspot 3",
+        "id": "recname_path",
+        "x": 4,
+        "y": 25,
+        "width": 330,
+        "height": 18
+      },
+      {
+        "name": "Hotspot 3",
+        "id": "recname_browse",
+        "x": 336,
+        "y": 24,
+        "width": 21,
+        "height": 21
+      },
+      {
+        "name": "Hotspot 3",
+        "id": "recname_filename",
+        "x": 4,
+        "y": 47,
+        "width": 180,
+        "height": 18
+      },
+      {
+        "name": "Hotspot 4",
+        "id": "recname_ok",
+        "x": 208,
+        "y": 46,
+        "width": 42,
+        "height": 21
+      },
+      {
+        "name": "Hotspot 5",
+        "id": "recname_quit",
+        "x": 249,
+        "y": 46,
+        "width": 42,
+        "height": 21
+      },
+      {
+        "name": "Hotspot 7",
+        "id": "main_help",
+        "x": 290,
+        "y": 46,
+        "width": 42,
+        "height": 21
+      }
+    ]
+  }
+}

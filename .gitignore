@@ -1,0 +1,47 @@
+# Rust / Cargo Build-Artefakte
+/target/
+/mod4win-rs/target/
+**/target/
+
+# Release- & Distributions-Ordner
+/dist/
+/mod4win-rs/dist/
+
+# Laufzeit-Konfiguration & PeakSearch-Datenbank
+MOD4WIN.INI
+MOD4WIN.PKS
+**/MOD4WIN.INI
+**/MOD4WIN.PKS
+
+# Lose Binärdateien, Backups, Logs & Test-Exporte im Projekt- & Crate-Root
+/*.exe
+/*.dll
+/*.bak
+/*.log
+/*.sta
+/*.wav
+/*.xm
+/*.mod
+/*.s3m
+/*.it
+/*.umx
+/mod4win-rs/*.exe
+/mod4win-rs/*.dll
+/mod4win-rs/*.bak
+/mod4win-rs/*.log
+/mod4win-rs/*.wav
+
+# Temporäre Diagnose- & Batch-Verzeichnisse
+/ModBatch*/
+/diagnose/
+/it-debug/
+/orig_bin/
+/orig_bin.zip
+
+# Lokale KI-/Editor-Regeln & Betriebssystem-Dateien
+/.antigravityrules
+Thumbs.db
+.DS_Store
+
+# Original-Bestand in legacy_src/ vollständig für Git-Rename-Tracking erhalten
+!/legacy_src/**

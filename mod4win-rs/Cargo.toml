@@ -1,0 +1,21 @@
+[package]
+name = "mod4win-rs"
+version = "0.1.0"
+edition = "2024"
+description = "Bit-exact Rust port of the MOD4WIN 2.40 Beta audio engine (Kay Bruns)"
+
+[features]
+default = ["modern-host"]
+modern-host = ["dep:cpal", "dep:pixels", "dep:winit", "dep:rfd"]
+diff-suite = []
+retro-win32 = []
+
+[dependencies]
+cpal = { version = "0.18.2", optional = true }
+pixels = { version = "0.17.2", optional = true }
+winit = { version = "0.30", optional = true }
+rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "async-std"], optional = true }
+
+[profile.release]
+strip = "symbols"
+lto = "thin"
