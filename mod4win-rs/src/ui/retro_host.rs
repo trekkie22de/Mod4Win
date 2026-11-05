@@ -748,6 +748,7 @@ pub mod window {
         pub title: String,
         pub decorations: bool,
         pub resizable: bool,
+        pub skip_taskbar: bool,
         pub min_inner_size: Option<LogicalSize<f64>>,
         pub inner_size: Option<LogicalSize<f64>>,
         pub position: Option<PhysicalPosition<i32>>,
@@ -759,6 +760,7 @@ pub mod window {
                 title: String::from("MOD4WIN"),
                 decorations: false,
                 resizable: true,
+                skip_taskbar: false,
                 min_inner_size: None,
                 inner_size: None,
                 position: None,
@@ -777,6 +779,10 @@ pub mod window {
         }
         pub fn with_resizable(mut self, resizable: bool) -> Self {
             self.resizable = resizable;
+            self
+        }
+        pub fn with_skip_taskbar(mut self, skip: bool) -> Self {
+            self.skip_taskbar = skip;
             self
         }
         pub fn with_min_inner_size(mut self, size: LogicalSize<f64>) -> Self {
@@ -1046,10 +1052,16 @@ pub mod event_loop {
             let mut title_a: Vec<u8> = attrs.title.bytes().filter(|&b| b != 0).collect();
             title_a.push(0);
 
+            const WS_EX_TOOLWINDOW: u32 = 0x0000_0080;
+            let ex_style = if attrs.skip_taskbar {
+                WS_EX_TOOLWINDOW
+            } else {
+                0
+            };
             let hwnd = unsafe {
                 let hinst = GetModuleHandleA(std::ptr::null());
                 let hw = CreateWindowExA(
-                    0,
+                    ex_style,
                     WND_CLASS_NAME.as_ptr(),
                     title_a.as_ptr(),
                     WS_POPUP | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN,

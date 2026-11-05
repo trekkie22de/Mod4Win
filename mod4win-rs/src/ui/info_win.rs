@@ -600,11 +600,14 @@ impl Mod4WinApp {
         window: &Arc<Window>,
         is_double_click: bool,
     ) {
-        let state_snapshot = self.shared_state.lock().unwrap().clone();
-        let (_, dh, _) = self.window_dimensions(WindowKind::QuickSelect, &state_snapshot);
+        let (dh, items, cur_pl_idx, classic_input) = {
+            let st = self.shared_state.lock().unwrap();
+            let (_, dh, _) = self.window_dimensions(WindowKind::QuickSelect, &st);
+            let items = self.sorted_quick_select_items(&st);
+            (dh, items, st.playlist_idx, st.classic_input)
+        };
         let lb_h = dh.saturating_sub(41).max(15);
         let vis_rows = ((lb_h.saturating_sub(2)) / 13).max(1) as usize;
-        let items = self.sorted_quick_select_items(&state_snapshot);
         let max_scroll = items.len().saturating_sub(vis_rows);
         self.quick_select_scroll = self.quick_select_scroll.min(max_scroll);
 
@@ -618,10 +621,13 @@ impl Mod4WinApp {
             } else if (111..=158).contains(&vx) {
                 self.quick_select_sort = 2;
             }
-            let new_items = self.sorted_quick_select_items(&state_snapshot);
+            let new_items = {
+                let st = self.shared_state.lock().unwrap();
+                self.sorted_quick_select_items(&st)
+            };
             if let Some(pos) = new_items
                 .iter()
-                .position(|(orig_idx, _)| *orig_idx == state_snapshot.playlist_idx)
+                .position(|(orig_idx, _)| *orig_idx == cur_pl_idx)
                 && (pos < self.quick_select_scroll || pos >= self.quick_select_scroll + vis_rows) {
                     self.quick_select_scroll = pos
                         .saturating_sub(vis_rows / 2)
@@ -636,7 +642,7 @@ impl Mod4WinApp {
             let item_idx = self.quick_select_scroll + row;
             if let Some(&(orig_idx, _)) = items.get(item_idx) {
                 self.quick_select_cursor = orig_idx;
-                if state_snapshot.classic_input || is_double_click {
+                if classic_input || is_double_click {
                     let mut state = self.shared_state.lock().unwrap();
                     if orig_idx < state.playlist.len() {
                         state.playlist_idx = orig_idx;

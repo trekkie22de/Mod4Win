@@ -2652,7 +2652,7 @@ impl Mod4WinApp {
     }
 
     // =========================================================================
-    // E. PLAYLIST-DOCK (580 x 225 px)
+    // E. PLAYLIST-DOCK (580 x [81 + rows * 16] px, Standard 9 Zeilen = 225 px)
     // =========================================================================
     pub(crate) fn render_modern_playlist_dock(
         &self,
@@ -2671,14 +2671,15 @@ impl Mod4WinApp {
             false,
         );
 
-        draw_modern_lcd_box(frame, dw, dh, 6, 30, 568, 156);
+        let max_vis = ((dh.saturating_sub(81)) / 16).clamp(5, 36) as usize;
+        let lcd_h = 12 + (max_vis as u32) * 16;
+        draw_modern_lcd_box(frame, dw, dh, 6, 30, 568, lcd_h);
 
         let total_items = state.playlist.len();
-        let max_vis = 9usize;
         let max_scroll = total_items.saturating_sub(max_vis);
         let scroll = self.quick_select_scroll.min(max_scroll);
 
-        // O(1) Virtual-Scrolling: Nur die 9 sichtbaren Zeilen (`scroll..scroll+9`) auswerten,
+        // O(1) Virtual-Scrolling: Nur die sichtbaren Zeilen (`scroll..scroll+max_vis`) auswerten,
         // damit selbst bei 999.999 Songs in der Playlist 0 irrelevante Strings pro Frame allokiert werden!
         let sorted_fallback = if self.quick_select_sort == 0 {
             None
@@ -2806,11 +2807,11 @@ impl Mod4WinApp {
             draw_modern_ui_text(frame, dw, dh, 541, ry + 4, "X", [0xf0, 0x80, 0x80, 255]);
         }
 
-        // Vertikaler Scrollbalken rechts in der Playlist-Box (x = 558..570, y = 34..182)
+        // Vertikaler Scrollbalken rechts in der Playlist-Box (x = 558..570, y = 34..34+sb_h)
         let sb_x: i32 = 558;
         let sb_y: i32 = 34;
         let sb_w: u32 = 12;
-        let sb_h: u32 = 148;
+        let sb_h: u32 = 4 + (max_vis as u32) * 16;
         fill_rounded_rect_grad(
             frame,
             dw,
@@ -2834,7 +2835,7 @@ impl Mod4WinApp {
             2,
             [0x1a, 0x28, 0x38, 255],
         );
-        let track_h: i32 = (sb_h as i32) - 2; // 146
+        let track_h: i32 = (sb_h as i32) - 2;
         let (thumb_y, thumb_h) = if total_items <= max_vis || max_scroll == 0 {
             (sb_y + 1, track_h)
         } else {
@@ -2905,15 +2906,16 @@ impl Mod4WinApp {
         }
 
         // Fußzeile: + Add / .ZIP | Remove | Clear | Load .MOL | Save .MOL | Song X of Y (MM:SS)
+        let btn_y = 48 + (max_vis as i32) * 16;
         let is_de = self.locale.is_german();
         let add_lbl = if is_de { "+ Datei / .ZIP" } else { "+ Add / .ZIP" };
         let rem_lbl = if is_de { "Entf." } else { "Remove" };
         let clr_lbl = if is_de { "Leeren" } else { "Clear" };
-        draw_modern_hw_btn(frame, dw, dh, 8, 192, 96, 24, add_lbl, false);
-        draw_modern_hw_btn(frame, dw, dh, 108, 192, 62, 24, rem_lbl, false);
-        draw_modern_hw_btn(frame, dw, dh, 174, 192, 54, 24, clr_lbl, false);
-        draw_modern_hw_btn(frame, dw, dh, 232, 192, 74, 24, "Load .MOL", false);
-        draw_modern_hw_btn(frame, dw, dh, 310, 192, 74, 24, "Save .MOL", false);
+        draw_modern_hw_btn(frame, dw, dh, 8, btn_y, 96, 24, add_lbl, false);
+        draw_modern_hw_btn(frame, dw, dh, 108, btn_y, 62, 24, rem_lbl, false);
+        draw_modern_hw_btn(frame, dw, dh, 174, btn_y, 54, 24, clr_lbl, false);
+        draw_modern_hw_btn(frame, dw, dh, 232, btn_y, 74, 24, "Load .MOL", false);
+        draw_modern_hw_btn(frame, dw, dh, 310, btn_y, 74, 24, "Save .MOL", false);
 
         let cur_idx = if state.playlist.is_empty() || state.playing_track_detached {
             0
@@ -2934,23 +2936,29 @@ impl Mod4WinApp {
         } else {
             format!("Song {} of {} ({:02}:{:02})", cur_idx, tot, mins, secs)
         };
-        draw_modern_ui_text(frame, dw, dh, 394, 200, &summary, COL_TEXT_MUTED);
+        draw_modern_ui_text(frame, dw, dh, 394, btn_y + 8, &summary, COL_TEXT_MUTED);
+
+        // Dezenter Resize-Grip am unteren Fensterrand (signalisiert vertikale Höhenverstellbarkeit)
+        let grip_y = (dh as i32) - 4;
+        let grip_x = (dw as i32) / 2 - 14;
+        fill_rect(frame, dw, dh, grip_x, grip_y, 28, 1, [0x4a, 0x5c, 0x73, 255]);
+        fill_rect(frame, dw, dh, grip_x + 4, grip_y + 2, 20, 1, [0x36, 0x45, 0x57, 255]);
     }
 
-    /// Aktualisiert `quick_select_scroll` anhand der vertikalen Mausposition `vy` auf dem Scrollbalken (`y = 35..181`).
+    /// Aktualisiert `quick_select_scroll` anhand der vertikalen Mausposition `vy` auf dem Scrollbalken.
     pub(crate) fn update_modern_playlist_scroll_from_y(&mut self, vy: i32) {
         let items_len = {
             let st = self.shared_state.lock().unwrap();
             st.playlist.len()
         };
-        let max_vis = 9usize;
+        let max_vis = self.modern_playlist_rows.clamp(5, 36);
         let max_scroll = items_len.saturating_sub(max_vis);
         if max_scroll == 0 {
             self.quick_select_scroll = 0;
             return;
         }
         let track_top = 35;
-        let track_h = 146;
+        let track_h = 2 + (max_vis as i32) * 16;
         let th = (((max_vis as f64) / (items_len as f64)) * (track_h as f64)).round() as i32;
         let th = th.clamp(16, track_h);
         let eff_top = track_top + th / 2;
@@ -2976,24 +2984,29 @@ impl Mod4WinApp {
             let _ = window.drag_window();
             return;
         }
-        // Klick auf den vertikalen Scrollbalken rechts (x = 555..574, y = 30..186)
-        if (30..=186).contains(&vy) && (555..=574).contains(&vx) {
+        let max_vis = self.modern_playlist_rows.clamp(5, 36);
+        let sb_bottom = 42 + (max_vis as i32) * 16;
+        let list_bottom = 36 + (max_vis as i32) * 16;
+        let btn_y = 48 + (max_vis as i32) * 16;
+
+        // Klick auf den vertikalen Scrollbalken rechts (x = 555..574, y = 30..sb_bottom)
+        if (30..=sb_bottom).contains(&vy) && (555..=574).contains(&vx) {
             self.playlist_scroll_dragging = true;
             self.update_modern_playlist_scroll_from_y(vy);
             return;
         }
-        if (35..=180).contains(&vy) && (10..=554).contains(&vx) {
-            let row = ((vy - 35) / 16).max(0) as usize;
+        if (35..=list_bottom).contains(&vy) && (10..=554).contains(&vx) {
+            let row = ((vy - 35) / 16).clamp(0, max_vis.saturating_sub(1) as i32) as usize;
             let orig_idx_opt = if self.quick_select_sort == 0 {
                 let total_len = self.shared_state.lock().unwrap().playlist.len();
-                let max_scroll = total_len.saturating_sub(9);
+                let max_scroll = total_len.saturating_sub(max_vis);
                 let scroll = self.quick_select_scroll.min(max_scroll);
                 let idx = scroll + row;
                 (idx < total_len).then_some(idx)
             } else {
                 let st_snap = self.shared_state.lock().unwrap();
                 let items = self.sorted_quick_select_items(&st_snap);
-                let max_scroll = items.len().saturating_sub(9);
+                let max_scroll = items.len().saturating_sub(max_vis);
                 let scroll = self.quick_select_scroll.min(max_scroll);
                 items.get(scroll + row).map(|(orig_idx, _)| *orig_idx)
             };
@@ -3026,7 +3039,7 @@ impl Mod4WinApp {
             }
             return;
         }
-        if (192..=216).contains(&vy) {
+        if (btn_y..=btn_y + 24).contains(&vy) {
             if (8..=104).contains(&vx) {
                 let start_dir = self
                     .shared_state

@@ -358,15 +358,29 @@ pub struct ZipEntryInfo {
     pub local_header_offset: usize,
 }
 
+/// Maximale unkomprimierte Dateigröße pro Archiv-Eintrag (64 MB Schutz gegen Zip-Bombs / OOM).
+const MAX_ARCHIVE_ENTRY_BYTES: usize = 64 * 1024 * 1024;
+
 fn split_archive_path(raw_name: &str) -> (String, String, String) {
     let norm = raw_name.replace('/', "\\").trim_matches('\\').to_string();
-    let (dir_part, file_name) = match norm.rfind('\\') {
+    let (dir_part, raw_file_name) = match norm.rfind('\\') {
         Some(slash) => (
             norm[..slash].trim_matches('\\').to_string(),
             norm[slash + 1..].to_string(),
         ),
         None => (String::new(), norm.clone()),
     };
+    let after_colon = match raw_file_name.rfind(':') {
+        Some(c) => &raw_file_name[c + 1..],
+        None => &raw_file_name[..],
+    };
+    let file_name: String = after_colon
+        .chars()
+        .filter(|&c| !matches!(c, '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | '\0'))
+        .collect::<String>()
+        .trim_matches('.')
+        .trim()
+        .to_string();
     (norm, dir_part, file_name)
 }
 
@@ -795,6 +809,11 @@ pub fn parse_lha_entries(data: &[u8]) -> Vec<ZipEntryInfo> {
 
 /// Entpackt einen einzelnen Eintrag aus einem bereits im Speicher liegenden `.ZIP`-, `.ARJ`- oder `.LHA`/`.LZH`-Archiv direkt in ein `Vec<u8>`.
 pub fn extract_zip_entry_bytes(data: &[u8], entry: &ZipEntryInfo) -> Option<Vec<u8>> {
+    if entry.uncompressed_size > MAX_ARCHIVE_ENTRY_BYTES
+        || entry.compressed_size > MAX_ARCHIVE_ENTRY_BYTES
+    {
+        return None;
+    }
     match entry.format {
         ArchiveFormat::Zip => {
             let lho = entry.local_header_offset;
@@ -852,6 +871,10 @@ pub fn extract_zip_entry_bytes(data: &[u8], entry: &ZipEntryInfo) -> Option<Vec<
 /// Entpackt einen einzelnen Eintrag aus einem `.ZIP`-, `.ARJ`- oder `.LHA`/`.LZH`-Archiv in das temporäre
 /// MOD4WIN-Archivverzeichnis und gibt den Pfad zur entpackten Datei zurück.
 pub fn extract_zip_entry(zip_path: &Path, entry: &ZipEntryInfo) -> Option<PathBuf> {
+    let (_, _, clean_name) = split_archive_path(&entry.file_name);
+    if clean_name.is_empty() {
+        return None;
+    }
     let zip_stem = zip_path
         .file_stem()
         .and_then(|s| s.to_str())
@@ -860,7 +883,7 @@ pub fn extract_zip_entry(zip_path: &Path, entry: &ZipEntryInfo) -> Option<PathBu
         .join("mod4win_zip_cache")
         .join(zip_stem);
     let _ = fs::create_dir_all(&cache_dir);
-    let out_path = cache_dir.join(&entry.file_name);
+    let out_path = cache_dir.join(&clean_name);
 
     // Wenn bereits mit passender Größe entpackt, direkt wiederverwenden
     if let Ok(meta) = fs::metadata(&out_path)
@@ -883,14 +906,40 @@ pub fn extract_zip_entry_by_name(zip_path: &Path, file_name: &str) -> Option<Pat
 }
 
 /// Entpackt alle Tracker-Module aus einem `.ZIP`-, `.ARJ`- oder `.LHA`/`.LZH`-Archiv (z.B. bei Drag & Drop).
+/// Liest das Archiv dabei nur ein einziges Mal von der Festplatte (`D3-M2`).
 pub fn extract_all_tracker_files_from_zip(zip_path: &Path) -> Vec<PathBuf> {
-    let entries = list_zip_entries(zip_path);
+    let Ok(data) = fs::read(zip_path) else {
+        return Vec::new();
+    };
+    let entries = parse_zip_entries(&data);
+    let zip_stem = zip_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("archive");
+    let cache_dir = std::env::temp_dir()
+        .join("mod4win_zip_cache")
+        .join(zip_stem);
+    let _ = fs::create_dir_all(&cache_dir);
+
     let mut out = Vec::new();
     for entry in &entries {
-        if UiSharedState::is_tracker_file(Path::new(&entry.file_name))
-            && let Some(p) = extract_zip_entry(zip_path, entry) {
-                out.push(p);
-            }
+        let (_, _, clean_name) = split_archive_path(&entry.file_name);
+        if clean_name.is_empty() || !UiSharedState::is_tracker_file(Path::new(&clean_name)) {
+            continue;
+        }
+        let out_path = cache_dir.join(&clean_name);
+        if let Ok(meta) = fs::metadata(&out_path)
+            && meta.len() as usize == entry.uncompressed_size
+            && entry.uncompressed_size > 0
+        {
+            out.push(out_path);
+            continue;
+        }
+        if let Some(decoded) = extract_zip_entry_bytes(&data, entry)
+            && fs::write(&out_path, &decoded).is_ok()
+        {
+            out.push(out_path);
+        }
     }
     out
 }
@@ -1081,14 +1130,20 @@ pub fn decode_lzh_huffman(
     pbit: u8,
     np: usize,
 ) -> Option<Vec<u8>> {
+    if expected_size > MAX_ARCHIVE_ENTRY_BYTES {
+        return None;
+    }
     let mut br = MsbBitReader::new(input);
-    let mut out = Vec::with_capacity(expected_size);
+    let mut out = Vec::with_capacity(expected_size.min(input.len().saturating_mul(8).max(4096)));
     let mut block_rem = 0usize;
     let mut c_table = MsbHuffDecoder::Single(0);
     let mut p_table = MsbHuffDecoder::Single(0);
 
     while out.len() < expected_size {
         if block_rem == 0 {
+            if br.byte_pos >= br.data.len() && br.bit_cnt == 0 {
+                break;
+            }
             block_rem = br.read_bits(16) as usize;
             if block_rem == 0 {
                 break;
@@ -1130,10 +1185,16 @@ pub fn decode_lzh_huffman(
 
 /// ARJ Method 4 (`decode_f` in `unarj.c`): Variable-Length LZSS ohne Huffman-Bäume.
 pub fn decode_arj_method4(input: &[u8], expected_size: usize) -> Option<Vec<u8>> {
+    if expected_size > MAX_ARCHIVE_ENTRY_BYTES {
+        return None;
+    }
     let mut br = MsbBitReader::new(input);
-    let mut out = Vec::with_capacity(expected_size);
+    let mut out = Vec::with_capacity(expected_size.min(input.len().saturating_mul(8).max(4096)));
 
     while out.len() < expected_size {
+        if br.byte_pos >= br.data.len() && br.bit_cnt == 0 {
+            break;
+        }
         // decode_len (STRTL = 0, STOPL = 7)
         let mut c = 0usize;
         let mut width = 0u8;
@@ -1184,6 +1245,9 @@ pub fn decode_arj_method4(input: &[u8], expected_size: usize) -> Option<Vec<u8>>
 
 /// LArc `-lz5-` 4 KB Ringbuffer-LZSS-Entpacker.
 pub fn decode_lha_lz5(input: &[u8], expected_size: usize) -> Option<Vec<u8>> {
+    if expected_size > MAX_ARCHIVE_ENTRY_BYTES {
+        return None;
+    }
     let mut ring = [0u8; 4096];
     let mut idx = 0usize;
     for i in 0..256usize {
@@ -1211,7 +1275,7 @@ pub fn decode_lha_lz5(input: &[u8], expected_size: usize) -> Option<Vec<u8>> {
 
     let mut r = 4096 - 18;
     let mut pos = 0usize;
-    let mut out = Vec::with_capacity(expected_size);
+    let mut out = Vec::with_capacity(expected_size.min(input.len().saturating_mul(8).max(4096)));
 
     while out.len() < expected_size && pos < input.len() {
         let flags = input[pos];
@@ -1253,6 +1317,9 @@ pub fn decode_lha_lz5(input: &[u8], expected_size: usize) -> Option<Vec<u8>> {
 
 /// LHA `-lh1-` (LHArc 1.x / Amiga LHA): Adaptiver Huffman-Baum (314 Symbole) + 4 KB LZSS.
 pub fn decode_lha_lh1(input: &[u8], expected_size: usize) -> Option<Vec<u8>> {
+    if expected_size > MAX_ARCHIVE_ENTRY_BYTES {
+        return None;
+    }
     const N_CHAR: usize = 314;
     const T: usize = N_CHAR * 2 - 1; // 627
     const R: usize = T - 1; // 626
@@ -1303,9 +1370,12 @@ pub fn decode_lha_lh1(input: &[u8], expected_size: usize) -> Option<Vec<u8>> {
     let mut ring = [b' '; 4096];
     let mut r = 4096 - 60;
     let mut br = MsbBitReader::new(input);
-    let mut out = Vec::with_capacity(expected_size);
+    let mut out = Vec::with_capacity(expected_size.min(input.len().saturating_mul(8).max(4096)));
 
     while out.len() < expected_size {
+        if br.byte_pos >= br.data.len() && br.bit_cnt == 0 {
+            break;
+        }
         // DecodeChar
         let mut c = son[R];
         while c < T {
@@ -1543,8 +1613,20 @@ pub fn inflate_raw_deflate(input: &[u8], expected_size: usize) -> Option<Vec<u8>
         16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15,
     ];
 
+    if expected_size > MAX_ARCHIVE_ENTRY_BYTES {
+        return None;
+    }
+    let max_out = if expected_size > 0 {
+        expected_size.min(MAX_ARCHIVE_ENTRY_BYTES)
+    } else {
+        MAX_ARCHIVE_ENTRY_BYTES
+    };
     let mut br = BitReader::new(input);
-    let mut out = Vec::with_capacity(expected_size.max(4096));
+    let mut out = Vec::with_capacity(
+        expected_size
+            .min(input.len().saturating_mul(8).max(4096))
+            .min(MAX_ARCHIVE_ENTRY_BYTES),
+    );
 
     loop {
         let bfinal = br.read_bits(1);
@@ -1556,7 +1638,7 @@ pub fn inflate_raw_deflate(input: &[u8], expected_size: usize) -> Option<Vec<u8>
                 br.align_byte();
                 let len = br.read_bits(16) as usize;
                 let nlen = br.read_bits(16) as usize;
-                if (len ^ 0xFFFF) != nlen {
+                if (len ^ 0xFFFF) != nlen || out.len().saturating_add(len) > max_out {
                     return None;
                 }
                 for _ in 0..len {
@@ -1627,6 +1709,9 @@ pub fn inflate_raw_deflate(input: &[u8], expected_size: usize) -> Option<Vec<u8>
                 loop {
                     let sym = lit_table.decode(&mut br)?;
                     if sym < 256 {
+                        if out.len() >= max_out {
+                            return None;
+                        }
                         out.push(sym as u8);
                     } else if sym == 256 {
                         break;
@@ -1637,6 +1722,9 @@ pub fn inflate_raw_deflate(input: &[u8], expected_size: usize) -> Option<Vec<u8>
                         }
                         let length =
                             LEN_BASE[len_idx] as usize + br.read_bits(LEN_EXTRA[len_idx]) as usize;
+                        if out.len().saturating_add(length) > max_out {
+                            return None;
+                        }
                         let dist_sym = dist_table.decode(&mut br)? as usize;
                         if dist_sym >= DIST_BASE.len() {
                             return None;

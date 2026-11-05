@@ -1080,7 +1080,12 @@ pub fn load_it(data: &[u8]) -> Result<LoadedModule, u16> {
     chn_vol.copy_from_slice(&data[0x80..0xC0]);
 
     let mut pos = 0xC0usize;
-    if pos + (ord_num as usize) > data.len() {
+    let table_end = 0xC0usize
+        .saturating_add(ord_num as usize)
+        .saturating_add((ins_num as usize) * 4)
+        .saturating_add((smp_num as usize) * 4)
+        .saturating_add((pat_num as usize) * 4);
+    if table_end > data.len() {
         return Err(ID_FILE_CORRUPTED);
     }
     let orders = data[pos..pos + (ord_num as usize)].to_vec();
@@ -1226,6 +1231,8 @@ pub fn load_it(data: &[u8]) -> Result<LoadedModule, u16> {
     let mut it_samples = Vec::with_capacity((smp_num as usize) + 1);
     it_samples.push(ItSample::default()); // Index 0 = Dummy
     let mut total_sample_bytes: i32 = 0;
+    const MAX_IT_MODULE_SAMPLE_BYTES: usize = 256 * 1024 * 1024;
+    let mut cumulative_alloc_bytes: usize = 0;
 
     for &sofs in &smp_offsets {
         if sofs == 0 || sofs + 80 > data.len() || &data[sofs..sofs + 4] != b"IMPS" {
@@ -1272,7 +1279,16 @@ pub fn load_it(data: &[u8]) -> Result<LoadedModule, u16> {
             && sample_ptr < data.len();
 
         if has_data {
-            let len = (smp.length as usize).min(16 * 1024 * 1024);
+            let is_stereo_pre = (smp.flags & it_smp_flags::STEREO) != 0;
+            let bytes_per_frame = if is_stereo_pre { 4usize } else { 2usize };
+            let remaining_frames = MAX_IT_MODULE_SAMPLE_BYTES
+                .saturating_sub(cumulative_alloc_bytes)
+                / bytes_per_frame;
+            let len = (smp.length as usize)
+                .min(16 * 1024 * 1024)
+                .min(remaining_frames);
+            cumulative_alloc_bytes =
+                cumulative_alloc_bytes.saturating_add(len.saturating_mul(bytes_per_frame));
             smp.length = len as u32;
             let is_16bit = (smp.flags & it_smp_flags::IS_16BIT) != 0;
             let is_stereo = (smp.flags & it_smp_flags::STEREO) != 0;
@@ -1414,16 +1430,16 @@ pub fn load_it(data: &[u8]) -> Result<LoadedModule, u16> {
     }
 
     // 3. Gepackte IT-Patterns (`pat_offsets`) entpacken
-    let mut it_patterns = Vec::with_capacity(pat_num.max(1) as usize);
+    let mut it_patterns = Vec::with_capacity((pat_num.min(256).max(1)) as usize);
     let mut max_used_chn: usize = 4;
 
-    for &pofs in &pat_offsets {
+    for &pofs in pat_offsets.iter().take(256) {
         if pofs == 0 || pofs + 8 > data.len() {
             it_patterns.push(ItPattern::default());
             continue;
         }
         let packed_len = read_le_u16(data, pofs).unwrap_or(0) as usize;
-        let num_rows = read_le_u16(data, pofs + 2).unwrap_or(64).clamp(1, 1024);
+        let num_rows = read_le_u16(data, pofs + 2).unwrap_or(64).clamp(1, 256);
         let mut rows = vec![[ItNoteCell::default(); 64]; num_rows as usize];
 
         let stream_start = pofs + 8;
@@ -1841,6 +1857,11 @@ pub(crate) mod tests {
             });
             assert_eq!(m.state.mi.file_type, ModType::IT);
             assert!(m.it_module.is_some());
+        }
+        let mut crafted = build_minimal_it_bytes();
+        crafted[0x26..0x28].copy_from_slice(&60000u16.to_le_bytes());
+        assert_eq!(load_it(&crafted).err(), Some(ID_FILE_CORRUPTED));
+        {
         }
     }
 }

@@ -144,7 +144,7 @@ pub fn load_s3m(data: &[u8]) -> Result<LoadedModule, u16> {
     state.ptrn_breaks = [63; MAX_PATTERNS];
 
     // Gepackte S3M-Patterns entpacken (S3M_GetFileData, loaders.pas Zeilen 2173–2306)
-    let num_phys_patterns = (last_pattern + 1).max(pat_num);
+    let num_phys_patterns = (last_pattern + 1).max(pat_num).min(MAX_PATTERNS);
     module.patterns = vec![vec![[Note::default(); MAX_M4W_CHANNELS]; 64]; num_phys_patterns];
 
     for pat_idx in 0..=last_pattern.min(num_phys_patterns.saturating_sub(1)) {
@@ -308,14 +308,26 @@ pub fn load_s3m(data: &[u8]) -> Result<LoadedModule, u16> {
                 + ((smp_flags & 0x02) << 4)
                 + ((pack & 0x01) << 6);
 
-            let mut iend_bytes = if is_16bit { length * 2 } else { length };
+            let mut iend_bytes = if is_16bit {
+                length.saturating_mul(2)
+            } else {
+                length
+            };
             let mut loop_start_bytes = if is_looped {
-                if is_16bit { loop_beg * 2 } else { loop_beg }
+                if is_16bit {
+                    loop_beg.saturating_mul(2)
+                } else {
+                    loop_beg
+                }
             } else {
                 0
             };
             let mut loop_end_bytes = if is_looped {
-                if is_16bit { loop_end_val * 2 } else { loop_end_val }
+                if is_16bit {
+                    loop_end_val.saturating_mul(2)
+                } else {
+                    loop_end_val
+                }
             } else {
                 0
             };

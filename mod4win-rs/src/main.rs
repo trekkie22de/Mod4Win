@@ -38,7 +38,7 @@ use mod4win_rs::ui::{handle_audio_cycle_and_sync, run_ui, LiveAudioProcessor};
 use mod4win_rs::win32s_shim as _;
 use mod4win_rs::ui::{
     compute_module_total_time_ms_on_seq, run_headless_render_wav, run_peak_search_isolated,
-    CpuProfile, InstrumentInfo, Mod4WinIniConfig, RenderWavCliOptions, SkinMode, UiSharedState,
+    CpuProfile, Mod4WinIniConfig, RenderWavCliOptions, SkinMode, UiSharedState,
 };
 
 /// Verbindet im reinen Player-Build (`windows_subsystem = "windows"`) bei Übergabe von
@@ -771,34 +771,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let diff_patterns = loaded_module.state.mi.diff_patterns;
 
     // Instrumentennamen und detaillierte Metadaten für das Module-Info- & Instrumenten-Fenster extrahieren
-    let mut inst_names = Vec::new();
-    let mut inst_infos = Vec::new();
-    for i in 1..=(num_instruments as usize).min(255) {
-        let inst = &loaded_module.state.mi.instruments[i];
-        let len = (inst.name_len as usize).min(40);
-        let name_str = String::from_utf8_lossy(&inst.name[..len]).trim().to_string();
-        inst_names.push(name_str.clone());
-        let length = (inst.iend - inst.offset).max(0);
-        let (loop_start, loop_length) = if inst.loop_end > 0 {
-            (
-                (inst.loop_end - inst.loop_start - inst.offset).max(0),
-                inst.loop_start.max(0),
-            )
-        } else {
-            (0, 0)
-        };
-        inst_infos.push(InstrumentInfo {
-            index: i,
-            name: name_str,
-            length,
-            loop_start,
-            loop_length,
-            fine_tune: inst.fine_tune as i8,
-            volume: inst.volume,
-            is_16bit: (inst.bits & 0x10) != 0,
-            c4_freq: inst.tuning as i32,
-        });
-    }
+    let (inst_names, inst_infos) = if has_initial_module {
+        mod4win_rs::ui::live_audio::extract_ui_instruments(&loaded_module.state.mi)
+    } else {
+        (Vec::new(), Vec::new())
+    };
+    let _ = num_instruments;
 
     let file_size_bytes = initial_file_bytes;
     let file_size_kb = (file_size_bytes / 1024) as usize;
@@ -872,7 +850,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 init_ui_state.ini_config.pre_amplification = pa;
             } else {
                 init_ui_state.pending_initial_peak_search = Some(mod4win_rs::ui::PendingPeakSearch(
-                    loaded_module.clone(),
+                    Arc::new(loaded_module.clone()),
                     settings,
                     file_size_bytes,
                     mod_name.clone(),
@@ -880,7 +858,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         } else {
             init_ui_state.pending_initial_peak_search = Some(mod4win_rs::ui::PendingPeakSearch(
-                loaded_module.clone(),
+                Arc::new(loaded_module.clone()),
                 settings,
                 file_size_bytes,
                 mod_name.clone(),

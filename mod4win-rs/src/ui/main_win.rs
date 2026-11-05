@@ -1234,16 +1234,23 @@ impl Mod4WinApp {
                 None
             }
         });
-        if action == ConfirmAction::DeleteFromDisk
-            && let Some(ref p) = cur_path {
-                let _ = std::fs::remove_file(p);
-            }
-        if !state.playing_track_detached
-            && !state.playlist.is_empty()
+        let remove_idx = if !state.playing_track_detached
             && state.playlist_idx < state.playlist.len()
+            && cur_path.as_ref() == Some(&state.playlist[state.playlist_idx])
         {
-            let idx = state.playlist_idx;
-            state.playlist.remove(idx);
+            Some(state.playlist_idx)
+        } else {
+            cur_path
+                .as_ref()
+                .and_then(|p| state.playlist.iter().position(|x| x == p))
+        };
+        if action == ConfirmAction::DeleteFromDisk
+            && let Some(ref p) = cur_path
+        {
+            let _ = std::fs::remove_file(p);
+        }
+        if let Some(idx) = remove_idx {
+            state.remove_playlist_entry(idx);
             if state.playlist.is_empty() {
                 state.playlist_idx = 0;
                 state.playing_track_detached = false;
@@ -1253,14 +1260,15 @@ impl Mod4WinApp {
                 state.is_playing = false;
                 state.is_paused = false;
             } else {
-                if state.playlist_idx >= state.playlist.len() {
-                    state.playlist_idx = state.playlist.len() - 1;
-                }
+                let next_idx = idx.min(state.playlist.len() - 1);
+                state.playlist_idx = next_idx;
                 state.playing_track_detached = false;
-                let next_p = state.playlist[state.playlist_idx].clone();
+                if let Some(pos) = state.number_list.iter().position(|&v| v == next_idx) {
+                    state.playlist_pos = pos;
+                }
+                let next_p = state.playlist[next_idx].clone();
                 state.pending_load_file = Some(next_p);
             }
-            state.rebuild_number_list();
         } else if cur_path.is_some() {
             state.current_file_path = None;
             state.filename.clear();

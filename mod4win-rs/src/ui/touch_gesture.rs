@@ -79,12 +79,32 @@ impl Mod4WinApp {
     pub fn is_point_in_scrollable_list(&self, kind: WindowKind, vx: i32, vy: i32) -> bool {
         match kind {
             WindowKind::OpenDialog => {
-                // Linke Dateiliste (8..208, 63..285), mittlere Ordnerliste (214..340, 63..241), rechte Playlist (348..548, 63..285)
-                ((8..=208).contains(&vx) && (63..=285).contains(&vy))
-                    || ((214..=340).contains(&vx) && (63..=241).contains(&vy))
-                    || ((348..=548).contains(&vx) && (63..=285).contains(&vy))
+                let is_mod = {
+                    let st = self.shared_state.lock().unwrap();
+                    self.is_modern_skin(&st)
+                };
+                if is_mod {
+                    let max_vis = self.modern_playlist_rows.clamp(5, 36) as i32;
+                    (10..=554).contains(&vx) && (35..=(36 + max_vis * 16)).contains(&vy)
+                } else {
+                    // Linke Dateiliste (8..208, 63..285), mittlere Ordnerliste (214..340, 63..241), rechte Playlist (348..548, 63..285)
+                    ((8..=208).contains(&vx) && (63..=285).contains(&vy))
+                        || ((214..=340).contains(&vx) && (63..=241).contains(&vy))
+                        || ((348..=548).contains(&vx) && (63..=285).contains(&vy))
+                }
             }
-            WindowKind::QuickSelect => (8..=142).contains(&vx) && (25..=183).contains(&vy),
+            WindowKind::QuickSelect => {
+                let is_mod = {
+                    let st = self.shared_state.lock().unwrap();
+                    self.is_modern_skin(&st)
+                };
+                if is_mod {
+                    let max_vis = self.modern_playlist_rows.clamp(5, 36) as i32;
+                    (10..=554).contains(&vx) && (35..=(36 + max_vis * 16)).contains(&vy)
+                } else {
+                    (8..=142).contains(&vx) && (25..=183).contains(&vy)
+                }
+            }
             WindowKind::FileManager => {
                 ((10..=158).contains(&vx) && (46..=218).contains(&vy))
                     || ((200..=336).contains(&vx) && (46..=218).contains(&vy))
@@ -114,7 +134,23 @@ impl Mod4WinApp {
         }
         match kind {
             WindowKind::OpenDialog => {
-                if vx < 210 {
+                let (is_mod, pl_len) = {
+                    let st = self.shared_state.lock().unwrap();
+                    (self.is_modern_skin(&st), st.playlist.len())
+                };
+                if is_mod {
+                    let max_vis = self.modern_playlist_rows.clamp(5, 36);
+                    let max_scroll = pl_len.saturating_sub(max_vis);
+                    if delta_rows > 0 {
+                        self.quick_select_scroll =
+                            (self.quick_select_scroll + delta_rows as usize).min(max_scroll);
+                    } else {
+                        self.quick_select_scroll = self
+                            .quick_select_scroll
+                            .saturating_sub((-delta_rows) as usize);
+                    }
+                    true
+                } else if vx < 210 {
                     let max_scroll = self.open_dlg.left_files.len().saturating_sub(17);
                     if delta_rows > 0 {
                         self.open_dlg.left_scroll =
@@ -153,11 +189,16 @@ impl Mod4WinApp {
                 }
             }
             WindowKind::QuickSelect => {
-                let total = {
+                let (total, is_mod) = {
                     let st = self.shared_state.lock().unwrap();
-                    self.sorted_quick_select_items(&st).len()
+                    (st.playlist.len(), self.is_modern_skin(&st))
                 };
-                let max_scroll = total.saturating_sub(12);
+                let max_vis = if is_mod {
+                    self.modern_playlist_rows.clamp(5, 36)
+                } else {
+                    12
+                };
+                let max_scroll = total.saturating_sub(max_vis);
                 if delta_rows > 0 {
                     self.quick_select_scroll =
                         (self.quick_select_scroll + delta_rows as usize).min(max_scroll);

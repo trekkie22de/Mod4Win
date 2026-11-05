@@ -171,6 +171,10 @@ pub struct Mod4WinIniConfig {
     pub skin_mode: u8,
     /// Gespeicherter GUI-Skalierungsfaktor (`0.5 .. 4.0`, Standard `1.0` = 1:1 Originalgröße aus `mod4win.pas`)
     pub gui_scale: f64,
+    /// Anzahl der sichtbaren Zeilen im Playlist-Dock des Modern Skins (`5..=36`, Standard `9` = `225 px` Höhe)
+    pub modern_playlist_rows: u8,
+    /// Beim Beenden geöffnete Unterfenster (`"INFO"`, `"INSTRUMENTS"`, `"EFFECTS"`, `"QUICK_SELECT"`, `"OPEN_DIALOG"`, `"SETUP"`, `"HELP"`, ...)
+    pub saved_open_windows: Vec<String>,
     /// Gespeicherte Fensterpositionen (`"MAIN"`, `"MINI"`, `"EFFECTS"`, `"INFO"`, `"INSTRUMENTS"`, `"SETUP"`, ...)
     pub window_positions: HashMap<String, (i32, i32)>,
 
@@ -260,6 +264,8 @@ impl Default for Mod4WinIniConfig {
             authentic_stutter: false,
             skin_mode: 0,
             gui_scale: 1.0,
+            modern_playlist_rows: 9,
+            saved_open_windows: Vec::new(),
             window_positions: HashMap::new(),
             peaks: HashMap::new(),
         }
@@ -516,6 +522,18 @@ impl Mod4WinIniConfig {
                                 cfg.gui_scale = sc.clamp(0.5, 4.0);
                             }
                     }
+                    "MODERNPLAYLISTROWS" => {
+                        if let Ok(rows) = val.parse::<u8>() {
+                            cfg.modern_playlist_rows = rows.clamp(5, 36);
+                        }
+                    }
+                    "OPENWINDOWS" => {
+                        cfg.saved_open_windows = val
+                            .split(',')
+                            .map(|s| s.trim().to_ascii_uppercase())
+                            .filter(|s| !s.is_empty())
+                            .collect();
+                    }
                     _ => {}
                 },
                 "WINDOWS" => {
@@ -674,7 +692,15 @@ impl Mod4WinIniConfig {
             u8::from(self.authentic_stutter)
         ));
         out.push_str(&format!("SkinMode={}\r\n", self.skin_mode));
-        out.push_str(&format!("GuiScale={:.3}\r\n\r\n", self.gui_scale.clamp(0.5, 4.0)));
+        out.push_str(&format!("GuiScale={:.3}\r\n", self.gui_scale.clamp(0.5, 4.0)));
+        out.push_str(&format!(
+            "ModernPlaylistRows={}\r\n",
+            self.modern_playlist_rows.clamp(5, 36)
+        ));
+        out.push_str(&format!(
+            "OpenWindows={}\r\n\r\n",
+            self.saved_open_windows.join(",")
+        ));
 
         out.push_str("[Windows]\r\n");
         let mut sorted_win: Vec<_> = self.window_positions.iter().collect();
@@ -717,14 +743,6 @@ impl Mod4WinIniConfig {
         out.push_str("[Playlist]\r\n");
         for (i, p) in self.saved_playlist.iter().enumerate() {
             let _ = write!(out, "File{}={}\r\n", i, p.to_string_lossy());
-        }
-        out.push_str("\r\n");
-
-        out.push_str("[Peaks]\r\n");
-        let mut sorted_peaks: Vec<_> = self.peaks.iter().collect();
-        sorted_peaks.sort_by_key(|(k, _)| *k);
-        for (k, v) in sorted_peaks {
-            out.push_str(&format!("{}={}\r\n", k, v));
         }
 
         fs::write(path, out)
@@ -780,6 +798,7 @@ impl Mod4WinIniConfig {
 
         // Aktualisiere oder hänge den 8-Byte `tPeakStruct`-Datensatz in `MOD4WIN.PKS` an
         let mut data = fs::read(pks_path).unwrap_or_default();
+        data.truncate((data.len() / 8) * 8);
         let mut updated = false;
         for chunk in data.as_chunks_mut::<8>().0 {
             let f_size = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
@@ -797,7 +816,15 @@ impl Mod4WinIniConfig {
             data.extend_from_slice(&crc.to_le_bytes());
             data.extend_from_slice(&(preamp_clamped as u16).to_le_bytes());
         }
-        let _ = fs::write(pks_path, data);
+        let tmp_path = pks_path.with_extension("pks.tmp");
+        if fs::write(&tmp_path, &data).is_ok() {
+            if fs::rename(&tmp_path, pks_path).is_err() {
+                let _ = fs::write(pks_path, &data);
+                let _ = fs::remove_file(&tmp_path);
+            }
+        } else {
+            let _ = fs::write(pks_path, &data);
+        }
     }
 }
 
@@ -1001,6 +1028,8 @@ mod tests {
         cfg.saved_playlist = vec![PathBuf::from("C:\\MODS\\PAHGIANA.S3M")];
         cfg.saved_playlist_idx = 0;
         cfg.saved_order_pos = 3;
+        cfg.modern_playlist_rows = 18;
+        cfg.saved_open_windows = vec!["EFFECTS".to_string(), "QUICK_SELECT".to_string()];
         cfg.store_peak(123456, "Pahgiana", 27, &pks_path);
         cfg.save_to_file(&ini_path).unwrap();
 
@@ -1014,6 +1043,11 @@ mod tests {
         assert!(loaded.clean_mode);
         assert_eq!(loaded.saved_playlist.len(), 1);
         assert_eq!(loaded.saved_order_pos, 3);
+        assert_eq!(loaded.modern_playlist_rows, 18);
+        assert_eq!(
+            loaded.saved_open_windows,
+            vec!["EFFECTS".to_string(), "QUICK_SELECT".to_string()]
+        );
         assert_eq!(loaded.find_peak(123456, "Pahgiana", &pks_path), Some(27));
 
         let _ = fs::remove_file(&ini_path);

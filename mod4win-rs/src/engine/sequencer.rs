@@ -209,7 +209,7 @@ impl Sequencer {
                                     self.do_fine_far_tempo(note.operands as i8);
                                 }
                                 effect_ids::FINE_TEMPO_DWN => {
-                                    self.do_fine_far_tempo(-(note.operands as i8));
+                                    self.do_fine_far_tempo((note.operands as i8).wrapping_neg());
                                 }
                                 effect_ids::PATTERN_DELAY => {
                                     self.module.state.patterndelay = note.operands;
@@ -1232,7 +1232,7 @@ impl Sequencer {
             let v0 = cur_pt.value as i32;
             let v1 = next_pt.value as i32;
             if t1 > t0 {
-                let interp = ((*curr_tick as i32 - t0) * (v1 - v0)) / (t1 - t0) + v0;
+                let interp = (*curr_tick as i32 - t0).wrapping_mul(v1 - v0) / (t1 - t0) + v0;
                 value = (interp & 0xFF) as u8;
                 *env_stack_val = value;
             } else if clean_mode {
@@ -2223,7 +2223,7 @@ impl Sequencer {
                 self.do_fine_far_tempo(note.operands as i8);
             }
             effect_ids::FINE_TEMPO_DWN => {
-                self.do_fine_far_tempo(-(note.operands as i8));
+                self.do_fine_far_tempo((note.operands as i8).wrapping_neg());
             }
             effect_ids::FAR_RETRIG => {
                 if note.operands > 0 {

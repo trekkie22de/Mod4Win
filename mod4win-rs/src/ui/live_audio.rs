@@ -6,14 +6,14 @@
 //! `sequencer.rs` zu verändern.
 
 use std::collections::VecDeque;
-use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use super::app::{InstrumentInfo, PendingPeakSearch, UiSharedState};
 use super::archive_mol::read_module_bytes_universal;
-use super::ini_config::{export_module_to_wav_file, Mod4WinIniConfig};
-use crate::engine::loader::load_module_with_ext;
+use super::ini_config::Mod4WinIniConfig;
+use crate::engine::loader::{load_module_with_ext, LoadedModule};
 use crate::engine::mixer::{process_sample_block, MixOutputBuffer};
 use crate::engine::sequencer::Sequencer;
 use crate::engine::types::{
@@ -174,6 +174,18 @@ pub fn apply_live_sound_settings(seq: &mut Sequencer, new_settings: SoundSetting
     }
 }
 
+/// Vorbereiteter, im Hintergrund geladener und zeitberechneter Modul-Zustand (`A-K1` / `A-P1`).
+pub struct ReadyLoadedModule {
+    pub path: PathBuf,
+    pub file_size_bytes: u32,
+    pub module: LoadedModule,
+    pub total_time_ms: i32,
+    pub mod_name: String,
+    pub inst_names: Vec<String>,
+    pub inst_infos: Vec<InstrumentInfo>,
+    pub cached_peak: Option<u8>,
+}
+
 /// Live-Audio-Prozessor für den `cpal`-Ausgabestream.
 ///
 /// Entkoppelt die interne MOD4WIN-Samplerate (`11025..48000` Hz), Bittiefe (`8` / `16` Bit)
@@ -203,6 +215,8 @@ pub struct LiveAudioProcessor {
     pub dma_ring: Vec<(i16, i16)>,
     pub dma_pos: usize,
     pub stutter_tick: u32,
+    /// Empfänger für asynchron auf einem Hintergrund-Thread geladene Module (`A-K1` / `A-P1`).
+    pub pending_load_rx: Option<std::sync::mpsc::Receiver<Result<ReadyLoadedModule, String>>>,
 }
 
 impl LiveAudioProcessor {
@@ -224,6 +238,7 @@ impl LiveAudioProcessor {
             dma_ring: vec![(0, 0); 2048],
             dma_pos: 0,
             stutter_tick: 0,
+            pending_load_rx: None,
         }
     }
 
@@ -536,6 +551,223 @@ impl LiveAudioProcessor {
     }
 }
 
+/// Extrahiert die Instrumenten-Namen (`bm10` Module Info) und detaillierten Sample-/Loop-Metadaten
+/// (`bm11` Instrument Info) konsistent für sowohl `.IT` (1-basiert in `mi.instruments[1..=count]`)
+/// als auch alle klassischen Formate (`.MOD`, `.S3M`, `.XM`, `.MTM`, `.669`, `.STM`, `.FAR`, `.OKT`,
+/// 0-basiert in `mi.instruments[0..slot_count]`).
+pub fn extract_ui_instruments(
+    mi: &crate::engine::types::ModulInfo,
+) -> (Vec<String>, Vec<InstrumentInfo>) {
+    let mut inst_names = Vec::new();
+    let mut inst_infos = Vec::new();
+    if mi.file_type == ModType::IT {
+        let count = (mi.num_instruments as usize).min(255);
+        for i in 1..=count {
+            let inst = &mi.instruments[i];
+            let len = (inst.name_len as usize).min(40);
+            let name_str = String::from_utf8_lossy(&inst.name[..len]).trim().to_string();
+            inst_names.push(name_str.clone());
+            let length = (inst.iend - inst.offset).max(0);
+            let (loop_start, loop_length) = if inst.loop_end > 0 {
+                (
+                    (inst.loop_end - inst.loop_start - inst.offset).max(0),
+                    inst.loop_start.max(0),
+                )
+            } else {
+                (0, 0)
+            };
+            inst_infos.push(InstrumentInfo {
+                index: i,
+                name: name_str,
+                length,
+                loop_start,
+                loop_length,
+                fine_tune: inst.fine_tune as i8,
+                volume: inst.volume,
+                is_16bit: (inst.bits & 0x10) != 0,
+                c4_freq: inst.tuning as i32,
+            });
+        }
+    } else {
+        let max_populated_slot = (0..255)
+            .rev()
+            .find(|&idx| {
+                let inst = &mi.instruments[idx];
+                inst.name_len > 0 || inst.iend > inst.offset
+            })
+            .map(|idx| idx + 1)
+            .unwrap_or(0);
+        let slot_count = match mi.file_type {
+            ModType::NoiseTr => 15,
+            ModType::ProTr | ModType::StarTr | ModType::Ftrk | ModType::WOW => 31,
+            _ => (mi.num_instruments as usize).max(max_populated_slot).min(255),
+        };
+        for idx in 0..slot_count {
+            let inst = &mi.instruments[idx];
+            let len = (inst.name_len as usize).min(40);
+            let name_str = String::from_utf8_lossy(&inst.name[..len]).trim().to_string();
+            inst_names.push(name_str.clone());
+            let length = (inst.iend - inst.offset).max(0);
+            let (loop_start, loop_length) = if inst.loop_end > inst.offset {
+                (
+                    (inst.loop_start - inst.offset).max(0),
+                    (inst.loop_end - inst.loop_start).max(0),
+                )
+            } else {
+                (0, 0)
+            };
+            inst_infos.push(InstrumentInfo {
+                index: idx + 1,
+                name: name_str,
+                length,
+                loop_start,
+                loop_length,
+                fine_tune: inst.fine_tune as i8,
+                volume: inst.volume,
+                is_16bit: (inst.bits & 0x10) != 0,
+                c4_freq: inst.tuning as i32,
+            });
+        }
+    }
+    (inst_names, inst_infos)
+}
+
+/// Lädt und analysiert ein Modul vollständig isoliert vom Audio-Callback-Thread (inklusive
+/// `catch_unwind`-Panic-Schutz, `extract_ui_instruments`, `get_total_time` und `MOD4WIN.PKS`-Lookup).
+#[inline(never)]
+pub fn load_and_prepare_module_isolated(
+    path: &Path,
+    mut base_settings: SoundSettings,
+    state_saver: bool,
+    in_mem_peaks: &std::collections::HashMap<String, u8>,
+) -> Result<ReadyLoadedModule, String> {
+    let (file_data, ext_opt) =
+        read_module_bytes_universal(path).map_err(|e| format!("READ ERR: {}", e))?;
+    let f_size = file_data.len() as u32;
+    let parsed_res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        load_module_with_ext(&file_data, ext_opt.as_deref())
+    }));
+    let new_mod = match parsed_res {
+        Ok(Ok(m)) => m,
+        Ok(Err(code)) => return Err(format!("LOAD ERR ({})", code)),
+        Err(_) => return Err("CORRUPTED MODULE".to_string()),
+    };
+
+    let mod_name_len = new_mod.state.mi.mod_name_len as usize;
+    let mod_name = String::from_utf8_lossy(&new_mod.state.mi.mod_name[..mod_name_len.min(40)])
+        .trim()
+        .to_string();
+    let (inst_names, inst_infos) = extract_ui_instruments(&new_mod.state.mi);
+
+    if new_mod.state.mi.file_type != ModType::IT && base_settings.oversamp >= 4 {
+        base_settings.oversamp = match base_settings.oversamp {
+            4 => 0,
+            5 => 1,
+            _ => 2,
+        };
+    }
+
+    let cached_peak = if state_saver {
+        let pks_path = Mod4WinIniConfig::default_pks_path();
+        let (key, _) = Mod4WinIniConfig::peak_key(f_size, &mod_name);
+        if let Some(&pa) = in_mem_peaks.get(&key) {
+            Some(pa.min(40))
+        } else {
+            let dummy_cfg = Mod4WinIniConfig::default();
+            dummy_cfg.find_peak(f_size, &mod_name, &pks_path)
+        }
+    } else {
+        None
+    };
+
+    // Vorab `get_total_time()` und `kanal_init(false)` auf dem Loader-Thread ausführen,
+    // damit der Echtzeit-Audio-Thread nur noch das fertige `LoadedModule` einswappen muss.
+    let mut temp_seq = Sequencer::new(new_mod, base_settings);
+    let total_time_ms = compute_module_total_time_ms_on_seq(&mut temp_seq);
+    let prepared_mod = temp_seq.module;
+
+    Ok(ReadyLoadedModule {
+        path: path.to_path_buf(),
+        file_size_bytes: f_size,
+        module: prepared_mod,
+        total_time_ms,
+        mod_name,
+        inst_names,
+        inst_infos,
+        cached_peak,
+    })
+}
+
+fn apply_ready_loaded_module(
+    ui: &mut UiSharedState,
+    seq: &mut Sequencer,
+    live_proc: &mut LiveAudioProcessor,
+    ready: ReadyLoadedModule,
+) {
+    ui.title = ready.mod_name;
+    ui.filename = ready
+        .path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_uppercase();
+    ui.current_file_path = Some(ready.path);
+    ui.format_str = format!("{:?}", ready.module.state.mi.file_type);
+    ui.num_channels = (ready.module.state.mi.num_tracks as usize).min(32);
+    ui.num_patterns = ready.module.state.mi.num_patterns as usize;
+    ui.num_orders = ready.module.state.mi.num_patterns as usize;
+    ui.num_unique_patterns = ready.module.state.mi.diff_patterns as usize;
+    ui.file_size_kb = ((ready.file_size_bytes as usize) / 1024).max(1);
+    ui.song_mem_bytes = ready.module.state.mi.song_mem as usize;
+    ui.total_time_secs = ((ready.total_time_ms + 500) / 1000).max(0) as u32;
+    ui.instrument_names = ready.inst_names;
+    ui.instruments = ready.inst_infos;
+    ui.effects_used_set = ready.module.state.mi.effects_used_set;
+    ui.channel_muted = [false; 32];
+
+    if ready.module.state.mi.file_type != ModType::IT && ui.sound_settings.oversamp >= 4 {
+        ui.sound_settings.oversamp = match ui.sound_settings.oversamp {
+            4 => 0,
+            5 => 1,
+            _ => 2,
+        };
+        ui.ini_config.over_sampling = ui.sound_settings.oversamp;
+    }
+    let mut cur_settings = ui.sound_settings;
+    seq.module = ready.module;
+    seq.module.state.sound_settings = cur_settings;
+    seq.kanal_init(false);
+    seq.module.state.mi.total_time = ready.total_time_ms;
+    seq.module.state.repeat_song = false;
+
+    if ui.ini_config.auto_preamp_peaksearch {
+        if ui.ini_config.state_saver
+            && let Some(cached_peak) = ready.cached_peak
+        {
+            let pa = (cached_peak & 0x7F).min(40);
+            cur_settings.pre_amp = (cur_settings.pre_amp & 0x80) | pa;
+            ui.sound_settings.pre_amp = cur_settings.pre_amp;
+            ui.ini_config.pre_amplification = pa;
+            seq.module.state.sound_settings = cur_settings;
+            seq.calc_vol_master_and_table();
+        } else {
+            ui.pending_initial_peak_search = Some(PendingPeakSearch(
+                Arc::new(seq.module.clone()),
+                cur_settings,
+                ready.file_size_bytes,
+                ui.title.clone(),
+            ));
+        }
+    }
+
+    live_proc.reset_on_seek_or_load(seq);
+    ui.cpu_telemetry.reset_buffer(ui.ini_config.output_buffers);
+    if ui.intro_scan {
+        ui.is_playing = true;
+    }
+    ui.is_paused = false;
+}
+
 /// Prüft im Audio-Thread/Callback auf Liedende (`player_repeats`) und `15s IntroScan` (`play_time >= 15000`),
 /// wertet Repeat (`0=Off, 1=All, 2=One`) & Shuffle (`number_list`) aus und synchronisiert UI-Kommandos.
 pub fn handle_audio_cycle_and_sync(
@@ -551,9 +783,12 @@ pub fn handle_audio_cycle_and_sync(
     let intro_scan_expired = ui.is_playing
         && !ui.is_paused
         && ui.intro_scan
+        && live_proc.pending_load_rx.is_none()
         && seq.module.state.play_time >= 15_000;
 
-    if seq.module.state.player_repeats || intro_scan_expired {
+    if (seq.module.state.player_repeats || intro_scan_expired)
+        && live_proc.pending_load_rx.is_none()
+    {
         seq.module.state.player_repeats = false;
         if no_gui {
             finished_clone.store(true, Ordering::SeqCst);
@@ -564,7 +799,7 @@ pub fn handle_audio_cycle_and_sync(
     }
 }
 
-/// Synchronisiert ausstehende UI-Kommandos (Pattern-Seek, Settings, Mutes, Song-Load, WAV-Export)
+/// Synchronisiert ausstehende UI-Kommandos (Pattern-Seek, Settings, Mutes, Song-Load)
 /// mit dem laufenden [`Sequencer`] und [`LiveAudioProcessor`].
 pub fn sync_ui_commands(
     ui: &mut UiSharedState,
@@ -602,147 +837,60 @@ pub fn sync_ui_commands(
         }
     }
 
-    if let Some(new_path) = ui.pending_load_file.take()
-        && let Ok((file_data, ext_opt)) = read_module_bytes_universal(&new_path)
-            && let Ok(new_mod) = load_module_with_ext(&file_data, ext_opt.as_deref()) {
-                let mod_name_len = new_mod.state.mi.mod_name_len as usize;
-                let mod_name = String::from_utf8_lossy(&new_mod.state.mi.mod_name[..mod_name_len.min(40)])
-                    .trim()
-                    .to_string();
-                let num_instruments = new_mod.state.mi.num_instruments as usize;
-                let mut inst_names = Vec::new();
-                let mut inst_infos = Vec::new();
-                for i in 1..=num_instruments.min(255) {
-                    let inst = &new_mod.state.mi.instruments[i];
-                    let len = (inst.name_len as usize).min(40);
-                    let name_str = String::from_utf8_lossy(&inst.name[..len]).trim().to_string();
-                    inst_names.push(name_str.clone());
-                    let length = (inst.iend - inst.offset).max(0);
-                    let (loop_start, loop_length) = if inst.loop_end > 0 {
-                        (
-                            (inst.loop_end - inst.loop_start - inst.offset).max(0),
-                            inst.loop_start.max(0),
-                        )
-                    } else {
-                        (0, 0)
-                    };
-                    inst_infos.push(InstrumentInfo {
-                        index: i,
-                        name: name_str,
-                        length,
-                        loop_start,
-                        loop_length,
-                        fine_tune: inst.fine_tune as i8,
-                        volume: inst.volume,
-                        is_16bit: (inst.bits & 0x10) != 0,
-                        c4_freq: inst.tuning as i32,
-                    });
-                }
-                ui.title = mod_name;
-                ui.filename = new_path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("")
-                    .to_uppercase();
-                ui.current_file_path = Some(new_path.clone());
-                ui.format_str = format!("{:?}", new_mod.state.mi.file_type);
-                ui.num_channels = (new_mod.state.mi.num_tracks as usize).min(32);
-                ui.num_patterns = new_mod.state.mi.num_patterns as usize;
-                ui.num_orders = new_mod.state.mi.num_patterns as usize;
-                ui.num_unique_patterns = new_mod.state.mi.diff_patterns as usize;
-                ui.file_size_kb = (file_data.len() / 1024).max(1);
-                ui.song_mem_bytes = new_mod.state.mi.song_mem as usize;
-                ui.total_time_secs = (new_mod.state.mi.total_time / 1000).max(0) as u32;
-                ui.instrument_names = inst_names;
-                ui.instruments = inst_infos;
-                ui.effects_used_set = new_mod.state.mi.effects_used_set;
-                ui.channel_muted = [false; 32];
-
-                if new_mod.state.mi.file_type != ModType::IT && ui.sound_settings.oversamp >= 4 {
-                    ui.sound_settings.oversamp = match ui.sound_settings.oversamp {
-                        4 => 0,
-                        5 => 1,
-                        _ => 2,
-                    };
-                    ui.ini_config.over_sampling = ui.sound_settings.oversamp;
-                }
-                let mut cur_settings = ui.sound_settings;
-                seq.module = new_mod;
-                seq.module.state.sound_settings = cur_settings;
-                seq.kanal_init(false);
-                if ui.ini_config.auto_preamp_peaksearch {
-                    let pks_path = Mod4WinIniConfig::default_pks_path();
-                    let f_size = file_data.len() as u32;
-                    if ui.ini_config.state_saver {
-                        if let Some(cached_peak) =
-                            ui.ini_config.find_peak(f_size, &ui.title, &pks_path)
-                        {
-                            let pa = (cached_peak & 0x7F).min(40);
-                            cur_settings.pre_amp = (cur_settings.pre_amp & 0x80) | pa;
-                            ui.sound_settings.pre_amp = cur_settings.pre_amp;
-                            ui.ini_config.pre_amplification = pa;
-                            seq.module.state.sound_settings = cur_settings;
-                        } else {
-                            ui.pending_initial_peak_search = Some(PendingPeakSearch(
-                                seq.module.clone(),
-                                cur_settings,
-                                f_size,
-                                ui.title.clone(),
-                            ));
-                        }
-                    } else {
-                        ui.pending_initial_peak_search = Some(PendingPeakSearch(
-                            seq.module.clone(),
-                            cur_settings,
-                            f_size,
-                            ui.title.clone(),
-                        ));
-                    }
-                }
-                let total_ms = compute_module_total_time_ms_on_seq(seq);
-                ui.total_time_secs = ((total_ms + 500) / 1000).max(0) as u32;
-                seq.module.state.repeat_song = false;
-                live_proc.reset_on_seek_or_load(seq);
-                ui.cpu_telemetry.reset_buffer(ui.ini_config.output_buffers);
-                if ui.intro_scan {
-                    ui.is_playing = true;
-                }
-                ui.is_paused = false;
+    if let Some(new_path) = ui.pending_load_file.take() {
+        #[cfg(feature = "retro-win32")]
+        {
+            let load_settings = ui.sound_settings;
+            let state_saver = ui.ini_config.state_saver;
+            let in_mem_peaks = ui.ini_config.peaks.clone();
+            match load_and_prepare_module_isolated(
+                &new_path,
+                load_settings,
+                state_saver,
+                &in_mem_peaks,
+            ) {
+                Ok(ready) => apply_ready_loaded_module(ui, seq, live_proc, ready),
+                Err(err_msg) => ui.set_status_banner(err_msg),
             }
+        }
+        #[cfg(not(feature = "retro-win32"))]
+        {
+            let load_settings = ui.sound_settings;
+            let state_saver = ui.ini_config.state_saver;
+            let in_mem_peaks = ui.ini_config.peaks.clone();
+            let (tx, rx) = std::sync::mpsc::channel();
+            live_proc.pending_load_rx = Some(rx);
+            let _ = std::thread::Builder::new()
+                .name("m4w-mod-loader".to_string())
+                .stack_size(8 * 1024 * 1024)
+                .spawn(move || {
+                    let res = load_and_prepare_module_isolated(
+                        &new_path,
+                        load_settings,
+                        state_saver,
+                        &in_mem_peaks,
+                    );
+                    let _ = tx.send(res);
+                });
+        }
+    }
 
-    if let Some(wav_out_path) = ui.pending_export_wav.take()
-        && let Some(ref mod_path) = ui.current_file_path
-            && let Ok(file_data) = fs::read(mod_path) {
-                let ext = mod_path.extension().and_then(|e| e.to_str());
-                if let Ok(export_mod) = load_module_with_ext(&file_data, ext) {
-                    ui.is_exporting_wav = true;
-                    match export_module_to_wav_file(
-                        export_mod,
-                        file_data.len() as u32,
-                        &mut ui.ini_config,
-                        &wav_out_path,
-                    ) {
-                        Ok(frames) => {
-                            let fname = wav_out_path
-                                .file_name()
-                                .and_then(|n| n.to_str())
-                                .unwrap_or("OUT.WAV");
-                            println!(
-                                "[DEV_HDD] Direct-to-Disk WAV-Export abgeschlossen: {} ({} Frames)",
-                                wav_out_path.display(),
-                                frames
-                            );
-                            ui.title = format!("SAVED {}", fname);
-                            ui.export_status_msg = Some(format!("WAV Saved: {}", fname));
-                        }
-                        Err(e) => {
-                            eprintln!("[DEV_HDD] Fehler beim WAV-Export: {}", e);
-                            ui.title = "WAV EXPORT ERROR".to_string();
-                        }
-                    }
-                    ui.is_exporting_wav = false;
-                }
+    if let Some(ref rx) = live_proc.pending_load_rx {
+        match rx.try_recv() {
+            Ok(Ok(ready)) => {
+                live_proc.pending_load_rx = None;
+                apply_ready_loaded_module(ui, seq, live_proc, ready);
             }
+            Ok(Err(err_msg)) => {
+                live_proc.pending_load_rx = None;
+                ui.set_status_banner(err_msg);
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                live_proc.pending_load_rx = None;
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+        }
+    }
 }
 
 /// Berechnet die exakte Gesamtdauer (`mi.total_time`), die Pattern-Startzeiten (`pattern_times`)
@@ -1020,5 +1168,73 @@ mod tests {
         assert_eq!(seq.module.state.speed, 6);
         assert_eq!(seq.module.state.bpm_speed, 32);
         assert_eq!(total_time_restored, total_time_with_bpm);
+    }
+
+    #[test]
+    fn test_extract_ui_instruments_classic_vs_it() {
+        // 1. Klassisches ProTracker .MOD (0-basiert in mi.instruments[0..31], absolute Loop-Offsets)
+        let mut mod_mi = crate::engine::types::ModulInfo::default();
+        mod_mi.file_type = ModType::ProTr;
+        mod_mi.num_instruments = 1; // nur 1 nicht-leeres Sample, aber 31 Slots!
+        mod_mi.instruments[0] = Instrument {
+            name_len: 5,
+            name: {
+                let mut b = [0u8; 40];
+                b[..5].copy_from_slice(b"Lead1");
+                b
+            },
+            offset: 100,
+            iend: 500,
+            loop_start: 150,
+            loop_end: 450,
+            volume: 64,
+            fine_tune: 0,
+            bits: 8,
+            tuning: 8363,
+        };
+        mod_mi.instruments[30] = Instrument {
+            name_len: 4,
+            name: {
+                let mut b = [0u8; 40];
+                b[..4].copy_from_slice(b"Text");
+                b
+            },
+            ..Default::default()
+        };
+        let (names, infos) = extract_ui_instruments(&mod_mi);
+        assert_eq!(names.len(), 31);
+        assert_eq!(names[0], "Lead1");
+        assert_eq!(names[30], "Text");
+        assert_eq!(infos[0].index, 1);
+        assert_eq!(infos[0].length, 400);
+        assert_eq!(infos[0].loop_start, 50);
+        assert_eq!(infos[0].loop_length, 300);
+
+        // 2. Impulse Tracker .IT (1-basiert in mi.instruments[1..=count], loop_start hält loop_length)
+        let mut it_mi = crate::engine::types::ModulInfo::default();
+        it_mi.file_type = ModType::IT;
+        it_mi.num_instruments = 1;
+        it_mi.instruments[1] = Instrument {
+            name_len: 6,
+            name: {
+                let mut b = [0u8; 40];
+                b[..6].copy_from_slice(b"ItBass");
+                b
+            },
+            offset: 0,
+            iend: 1000,
+            loop_start: 600, // loop_length
+            loop_end: 800,
+            volume: 64,
+            fine_tune: 0,
+            bits: 16,
+            tuning: 8363,
+        };
+        let (it_names, it_infos) = extract_ui_instruments(&it_mi);
+        assert_eq!(it_names, vec!["ItBass".to_string()]);
+        assert_eq!(it_infos[0].index, 1);
+        assert_eq!(it_infos[0].length, 1000);
+        assert_eq!(it_infos[0].loop_start, 200);
+        assert_eq!(it_infos[0].loop_length, 600);
     }
 }

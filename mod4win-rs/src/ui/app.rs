@@ -248,7 +248,7 @@ pub struct PeakSearchProgress {
 
 #[derive(Clone)]
 pub struct PendingPeakSearch(
-    pub crate::engine::loader::LoadedModule,
+    pub Arc<crate::engine::loader::LoadedModule>,
     pub SoundSettings,
     pub u32,
     pub String,
@@ -1002,20 +1002,35 @@ impl UiSharedState {
             self.playlist_pos = 0;
             self.number_list.clear();
             self.playing_track_detached = true;
-        } else if !self.playing_track_detached {
-            if remove_idx < self.playlist_idx {
-                self.playlist_idx -= 1;
-            } else if remove_idx == self.playlist_idx {
-                self.playing_track_detached = true;
-                // `playlist_idx` bleibt auf `remove_idx` (`0..=self.playlist.len()`) und zeigt
-                // damit bereits direkt auf den nachgerückten Folgetrack.
-            }
-            self.rebuild_number_list();
         } else {
-            if remove_idx < self.playlist_idx {
+            if !self.playing_track_detached {
+                if remove_idx < self.playlist_idx {
+                    self.playlist_idx -= 1;
+                } else if remove_idx == self.playlist_idx {
+                    self.playing_track_detached = true;
+                    // `playlist_idx` bleibt auf `remove_idx` (`0..=self.playlist.len()`) und zeigt
+                    // damit bereits direkt auf den nachgerückten Folgetrack.
+                }
+            } else if remove_idx < self.playlist_idx {
                 self.playlist_idx -= 1;
             }
-            self.rebuild_number_list();
+            if self.number_list.len() == self.playlist.len() + 1 {
+                if let Some(pos_in_num) = self.number_list.iter().position(|&v| v == remove_idx) {
+                    self.number_list.remove(pos_in_num);
+                    if pos_in_num < self.playlist_pos && self.playlist_pos > 0 {
+                        self.playlist_pos -= 1;
+                    } else if self.playlist_pos >= self.number_list.len() {
+                        self.playlist_pos = self.number_list.len().saturating_sub(1);
+                    }
+                }
+                for v in &mut self.number_list {
+                    if *v > remove_idx {
+                        *v -= 1;
+                    }
+                }
+            } else {
+                self.rebuild_number_list();
+            }
         }
         self.sync_runtime_to_ini();
         true
@@ -1357,6 +1372,48 @@ unsafe extern "system" {
         cy: i32,
         flags: u32,
     ) -> i32;
+    fn GetWindowLongW(hwnd: isize, n_index: i32) -> i32;
+    fn SetWindowLongW(hwnd: isize, n_index: i32, dw_new_long: i32) -> i32;
+}
+
+/// Versteckt ein Unterfenster (`kind != WindowKind::Main`) zuverlässig aus der Windows-Taskleiste und `Alt+Tab`
+/// mittels `WS_EX_TOOLWINDOW` (und Löschen von `WS_EX_APPWINDOW`), genau wie im Original-MOD4WIN.
+pub(crate) fn hide_win32_window_from_taskbar(window: &Window) {
+    #[cfg(all(target_os = "windows", not(feature = "retro-win32")))]
+    {
+        use super::winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        if let Ok(handle) = window.window_handle()
+            && let RawWindowHandle::Win32(h) = handle.as_raw()
+        {
+            const GWL_EXSTYLE: i32 = -20;
+            const WS_EX_TOOLWINDOW: i32 = 0x0000_0080;
+            const WS_EX_APPWINDOW: i32 = 0x0004_0000;
+            const SWP_NOSIZE: u32 = 0x0001;
+            const SWP_NOMOVE: u32 = 0x0002;
+            const SWP_NOZORDER: u32 = 0x0004;
+            const SWP_NOACTIVATE: u32 = 0x0010;
+            const SWP_FRAMECHANGED: u32 = 0x0020;
+            unsafe {
+                let hwnd = h.hwnd.get();
+                let cur_ex = GetWindowLongW(hwnd, GWL_EXSTYLE);
+                let new_ex = (cur_ex | WS_EX_TOOLWINDOW) & !WS_EX_APPWINDOW;
+                if new_ex != cur_ex {
+                    SetWindowLongW(hwnd, GWL_EXSTYLE, new_ex);
+                    SetWindowPos(
+                        hwnd,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+                    );
+                }
+            }
+        }
+    }
+    #[cfg(any(not(target_os = "windows"), feature = "retro-win32"))]
+    let _ = window;
 }
 
 /// Erzwingt unter Windows sofort die physische Fenstergröße (`SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE`),
@@ -1419,26 +1476,40 @@ pub(crate) fn raise_win32_window_noactivate(window: &Window) {
     let _ = window;
 }
 
-/// Erkennt, ob sich der Mauszeiger am Rand oder in einer Ecke eines rahmenlosen Fensters befindet,
-/// um freies Groß-/Kleinziehen (`drag_resize_window`) zu ermöglichen.
-/// In der 32-Bit-Version (`retro-win32` / `x86`) ist freies Skalieren deaktiviert (fest `1.00`).
-fn detect_resize_direction(
+/// Erkennt, ob sich der Mauszeiger an einer ziehbaren Kante/Ecke befindet:
+/// - Am Hauptfenster (`WindowKind::Main`): Alle 8 Kanten/Ecken für globales GUI-Scaling (außer in 32-Bit `retro-win32`/`x86`).
+/// - Am Playlist-Dock im Modern Skin (`QuickSelect` / `OpenDialog`): Untere Fensterkante (`ResizeDirection::South`)
+///   zum vertikalen Vergrößern/Verkleinern der sichtbaren Zeilenanzahl (`5..=36` Zeilen).
+/// - An allen anderen Unterfenstern: Kein Ziehen an Kanten/Ecken (`None`).
+fn detect_resize_direction_for_window(
+    kind: WindowKind,
+    is_modern_skin: bool,
     phys_x: f64,
     phys_y: f64,
     win_size: PhysicalSize<u32>,
 ) -> Option<ResizeDirection> {
+    let w = win_size.width as f64;
+    let h = win_size.height as f64;
+    if w < 32.0 || h < 32.0 {
+        return None;
+    }
+    if is_modern_skin && matches!(kind, WindowKind::QuickSelect | WindowKind::OpenDialog) {
+        let bottom_band = 8.0;
+        if phys_y <= h && phys_y >= (h - bottom_band).max(24.0) && phys_x >= 0.0 && phys_x <= w {
+            return Some(ResizeDirection::South);
+        }
+        return None;
+    }
+    if kind != WindowKind::Main {
+        return None;
+    }
     #[cfg(any(feature = "retro-win32", target_arch = "x86"))]
     {
-        let _ = (phys_x, phys_y, win_size);
+        let _ = (phys_x, phys_y);
         return None;
     }
     #[cfg(not(any(feature = "retro-win32", target_arch = "x86")))]
     {
-        let w = win_size.width as f64;
-        let h = win_size.height as f64;
-        if w < 32.0 || h < 32.0 {
-            return None;
-        }
         let edge = 5.0;
         let corner = 10.0;
         // In der oberen Titelleiste (außer an den äußersten 3 Pixeln oben) haben die System-/Close-Buttons Vorrang
@@ -1502,6 +1573,7 @@ pub struct Mod4WinApp {
     pub(crate) quick_select_cursor: usize, // Aktuell markierter Eintrag in der Quick Selection (`orig_idx`)
     pub(crate) quick_select_all_selected: bool, // `Strg+A`: Alle Einträge in der Quick Selection / Modern Playlist markiert
     pub(crate) playlist_scroll_dragging: bool, // Ziehen des vertikalen Scrollbalkens im Modern Playlist-Dock
+    pub(crate) modern_playlist_rows: usize, // Anzahl sichtbarer Zeilen im Modern Playlist-Dock (`5..=36`, Standard `9`)
     pub(crate) open_dlg: OpenDialogState, // Commander-Zustand für „Open Module“ (newopen.pas)
     pub(crate) setup_cfg: Mod4WinIniConfig, // Arbeitskopie der Einstellungen im geöffneten Setup-Dialog (`dsetup.pas`)
     pub(crate) setup_backup_cfg: Mod4WinIniConfig, // Backup zum Wiederherstellen bei Cancel im Setup-Dialog
@@ -1532,6 +1604,7 @@ pub struct Mod4WinApp {
     pub(crate) bringing_to_front: bool,
     pub(crate) last_bring_to_front: Instant,
     pub(crate) last_redraw_poll: Instant,
+    pub(crate) render_scratch_buf: Vec<u8>,
 }
 
 impl Mod4WinApp {
@@ -1567,6 +1640,8 @@ impl Mod4WinApp {
         };
         let mut initial_ini = initial_ini;
         initial_ini.gui_scale = init_scale;
+        let init_playlist_rows = initial_ini.modern_playlist_rows.clamp(5, 36) as usize;
+        initial_ini.modern_playlist_rows = init_playlist_rows as u8;
         let now = Instant::now();
         Self {
             shared_state,
@@ -1581,6 +1656,7 @@ impl Mod4WinApp {
             quick_select_cursor: st_clone.playlist_idx,
             quick_select_all_selected: false,
             playlist_scroll_dragging: false,
+            modern_playlist_rows: init_playlist_rows,
             open_dlg: OpenDialogState::new_lazy(initial_dir, &initial_playlist),
             setup_cfg: initial_ini.clone(),
             setup_backup_cfg: initial_ini.clone(),
@@ -1620,6 +1696,7 @@ impl Mod4WinApp {
             bringing_to_front: false,
             last_bring_to_front: now,
             last_redraw_poll: now,
+            render_scratch_buf: Vec::with_capacity(580 * 505 * 4),
         }
     }
 
@@ -1650,6 +1727,47 @@ impl Mod4WinApp {
             WindowKind::FileMenu => "FILE_MENU",
             WindowKind::ConfirmDialog => "CONFIRM_DIALOG",
         }
+    }
+
+    /// Wandelt einen INI-Fensterschlüssel (`[State]` -> `OpenWindows=...`) wieder in `WindowKind` um.
+    pub(crate) fn window_kind_from_ini_key(key: &str) -> Option<WindowKind> {
+        match key.trim().to_ascii_uppercase().as_str() {
+            "INFO" => Some(WindowKind::ModuleInfo),
+            "INSTRUMENTS" => Some(WindowKind::InstrumentInfo),
+            "EFFECTS" => Some(WindowKind::Effects),
+            "EFFECTS_HELP" => Some(WindowKind::EffectsHelp),
+            "QUICK_SELECT" => Some(WindowKind::QuickSelect),
+            "OPEN_DIALOG" => Some(WindowKind::OpenDialog),
+            "SETUP" => Some(WindowKind::SetupDialog),
+            "HELP" => Some(WindowKind::HelpViewer),
+            _ => None,
+        }
+    }
+
+    /// Sammelt alle aktuell geöffneten persistenten Unterfenster für `OpenWindows=` in `MOD4WIN.INI`.
+    pub(crate) fn collect_open_window_keys(&self) -> Vec<String> {
+        const PERSISTENT_KINDS: [WindowKind; 8] = [
+            WindowKind::ModuleInfo,
+            WindowKind::InstrumentInfo,
+            WindowKind::Effects,
+            WindowKind::EffectsHelp,
+            WindowKind::QuickSelect,
+            WindowKind::OpenDialog,
+            WindowKind::SetupDialog,
+            WindowKind::HelpViewer,
+        ];
+        let mut keys = Vec::new();
+        for kind in PERSISTENT_KINDS {
+            if self.is_window_open(kind) {
+                keys.push(self.window_ini_key(kind).to_string());
+            }
+        }
+        keys
+    }
+
+    /// Berechnet die virtuelle Fensterhöhe des Modern Playlist-Docks (`81 + rows * 16`, Standard `9` Zeilen = `MODERN_PLAYLIST_H = 225 px`).
+    pub(crate) fn modern_playlist_height(&self) -> u32 {
+        (MODERN_PLAYLIST_H - 9 * 16) + (self.modern_playlist_rows.clamp(5, 36) as u32) * 16
     }
 
     /// Setzt den aktiven Skin (`2.40 Classic`, `Modern`) live im Betrieb ohne Neustart
@@ -1864,7 +1982,7 @@ impl Mod4WinApp {
                     return (w, h);
                 }
                 WindowKind::QuickSelect | WindowKind::OpenDialog => {
-                    return (MODERN_PLAYLIST_W, MODERN_PLAYLIST_H);
+                    return (MODERN_PLAYLIST_W, self.modern_playlist_height());
                 }
                 WindowKind::SetupDialog => {
                     return (MODERN_SETUP_W, MODERN_SETUP_H);
@@ -2090,7 +2208,11 @@ impl Mod4WinApp {
             } else {
                 let new_vis_pos = orig_idx.min(new_len - 1);
                 self.quick_select_cursor = new_vis_pos;
-                let max_vis = if is_modern { 9 } else { 13 };
+                let max_vis = if is_modern {
+                    self.modern_playlist_rows.clamp(5, 36)
+                } else {
+                    13
+                };
                 let max_scroll = new_len.saturating_sub(max_vis);
                 if self.quick_select_scroll > max_scroll {
                     self.quick_select_scroll = max_scroll;
@@ -2130,7 +2252,11 @@ impl Mod4WinApp {
         } else {
             let new_vis_pos = old_vis_pos.min(new_items.len() - 1);
             self.quick_select_cursor = new_items[new_vis_pos].0;
-            let max_vis = if is_modern { 9 } else { 13 };
+            let max_vis = if is_modern {
+                self.modern_playlist_rows.clamp(5, 36)
+            } else {
+                13
+            };
             let max_scroll = new_items.len().saturating_sub(max_vis);
             if self.quick_select_scroll > max_scroll {
                 self.quick_select_scroll = max_scroll;
@@ -2156,6 +2282,7 @@ impl Mod4WinApp {
             if self.is_modern_skin(&state) {
                 self.quick_select_all_selected = false;
                 self.playlist_scroll_dragging = false;
+                let max_vis = self.modern_playlist_rows.clamp(5, 36);
                 let target_idx = state.playlist_idx.min(state.playlist.len().saturating_sub(1));
                 self.quick_select_cursor = target_idx;
                 let pos = if self.quick_select_sort == 0 {
@@ -2165,8 +2292,8 @@ impl Mod4WinApp {
                     items.iter().position(|(orig_idx, _)| *orig_idx == target_idx)
                 };
                 if let Some(p) = pos {
-                    if p >= 9 {
-                        self.quick_select_scroll = p.saturating_sub(4);
+                    if p >= max_vis {
+                        self.quick_select_scroll = p.saturating_sub(max_vis / 2);
                     } else {
                         self.quick_select_scroll = 0;
                     }
@@ -2188,7 +2315,11 @@ impl Mod4WinApp {
         } else if kind == WindowKind::QuickSelect {
             self.quick_select_all_selected = false;
             self.playlist_scroll_dragging = false;
-            let max_vis = if self.is_modern_skin(&state) { 9 } else { 13 };
+            let max_vis = if self.is_modern_skin(&state) {
+                self.modern_playlist_rows.clamp(5, 36)
+            } else {
+                13
+            };
             let target_idx = state.playlist_idx.min(state.playlist.len().saturating_sub(1));
             self.quick_select_cursor = target_idx;
             let pos = if self.quick_select_sort == 0 {
@@ -2310,6 +2441,15 @@ impl Mod4WinApp {
         {
             window_attrs = window_attrs.with_window_icon(load_mod4win_window_icon());
         }
+        #[cfg(all(target_os = "windows", not(feature = "retro-win32")))]
+        if kind != WindowKind::Main {
+            use super::winit::platform::windows::WindowAttributesExtWindows;
+            window_attrs = window_attrs.with_skip_taskbar(true);
+        }
+        #[cfg(feature = "retro-win32")]
+        if kind != WindowKind::Main {
+            window_attrs = window_attrs.with_skip_taskbar(true);
+        }
         if let Some((px, py)) = saved_pos {
             window_attrs =
                 window_attrs.with_position(super::winit::dpi::PhysicalPosition::new(px.max(0), py.max(0)));
@@ -2322,6 +2462,9 @@ impl Mod4WinApp {
                 return;
             }
         };
+        if kind != WindowKind::Main {
+            hide_win32_window_from_taskbar(&window);
+        }
 
         // Sicherstellen, dass die physische Innengröße exakt phys_w x phys_h beträgt (1.00 = 1:1 physische Pixel!)
         let _ = window.request_inner_size(PhysicalSize::new(phys_w, phys_h));
@@ -2388,6 +2531,13 @@ impl Mod4WinApp {
                         last_outer_pos: init_outer_pos,
                     },
                 );
+                if kind != WindowKind::Main {
+                    let open_keys = self.collect_open_window_keys();
+                    self.setup_cfg.saved_open_windows = open_keys.clone();
+                    if let Ok(mut st) = self.shared_state.lock() {
+                        st.ini_config.saved_open_windows = open_keys;
+                    }
+                }
                 self.request_main_redraw();
             }
             Err(e) => {
@@ -2443,6 +2593,10 @@ impl Mod4WinApp {
             }
         let clamped_scale = self.scale_factor.clamp(0.5, 4.0);
         self.setup_cfg.gui_scale = clamped_scale;
+        let open_keys = self.collect_open_window_keys();
+        if kind != WindowKind::Main {
+            self.setup_cfg.saved_open_windows = open_keys.clone();
+        }
         if let Ok(mut state) = self.shared_state.lock() {
             match kind {
                 WindowKind::ModuleInfo => state.show_info = false,
@@ -2458,6 +2612,10 @@ impl Mod4WinApp {
                 _ => {}
             }
             state.ini_config.gui_scale = clamped_scale;
+            state.ini_config.modern_playlist_rows = self.modern_playlist_rows.clamp(5, 36) as u8;
+            if kind != WindowKind::Main {
+                state.ini_config.saved_open_windows = open_keys;
+            }
             let _ = state
                 .ini_config
                 .save_to_file(&Mod4WinIniConfig::default_ini_path());
@@ -2543,9 +2701,15 @@ impl Mod4WinApp {
         for (k, px, py) in open_positions {
             self.record_window_position(k, px, py);
         }
+        let open_keys = self.collect_open_window_keys();
+        let clamped_rows = self.modern_playlist_rows.clamp(5, 36) as u8;
+        self.setup_cfg.saved_open_windows = open_keys.clone();
+        self.setup_cfg.modern_playlist_rows = clamped_rows;
         if let Ok(mut st) = self.shared_state.lock() {
             st.ini_config.mini_state = self.is_mini;
             st.ini_config.gui_scale = self.scale_factor.clamp(0.5, 4.0);
+            st.ini_config.modern_playlist_rows = clamped_rows;
+            st.ini_config.saved_open_windows = open_keys;
             st.ini_config.last_dir = self
                 .open_dlg
                 .current_dir_path()
@@ -3093,7 +3257,47 @@ impl Mod4WinApp {
 impl ApplicationHandler for Mod4WinApp {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if !self.kind_to_id.contains_key(&WindowKind::Main) {
+            let (restore_windows, is_modern) = {
+                let st = self.shared_state.lock().unwrap();
+                let list = if st.ini_config.state_saver {
+                    st.ini_config.saved_open_windows.clone()
+                } else {
+                    Vec::new()
+                };
+                (list, self.is_modern_skin(&st))
+            };
+
             self.open_window(event_loop, WindowKind::Main);
+
+            for key in restore_windows {
+                let Some(mut kind) = Self::window_kind_from_ini_key(&key) else {
+                    continue;
+                };
+                if is_modern {
+                    if kind == WindowKind::InstrumentInfo {
+                        kind = WindowKind::ModuleInfo;
+                    } else if kind == WindowKind::OpenDialog {
+                        kind = WindowKind::QuickSelect;
+                    }
+                }
+                if self.kind_to_id.contains_key(&kind) {
+                    continue;
+                }
+                if let Ok(mut st) = self.shared_state.lock() {
+                    match kind {
+                        WindowKind::ModuleInfo => st.show_info = true,
+                        WindowKind::Effects => st.show_effects = true,
+                        _ => {}
+                    }
+                }
+                self.open_window(event_loop, kind);
+            }
+
+            if let Some(&main_id) = self.kind_to_id.get(&WindowKind::Main)
+                && let Some(surf) = self.windows.get(&main_id)
+            {
+                surf.window.focus_window();
+            }
 
             let pending_ps = self
                 .shared_state
@@ -3102,7 +3306,8 @@ impl ApplicationHandler for Mod4WinApp {
                 .pending_initial_peak_search
                 .take();
 
-            if let Some(PendingPeakSearch(module, settings, file_size, module_name)) = pending_ps {
+            if let Some(PendingPeakSearch(module_arc, settings, file_size, module_name)) = pending_ps {
+                let module = Arc::try_unwrap(module_arc).unwrap_or_else(|a| (*a).clone());
                 UiSharedState::start_or_resolve_peak_search(
                     &self.shared_state,
                     module,
@@ -3170,43 +3375,76 @@ impl ApplicationHandler for Mod4WinApp {
             }
             WindowEvent::Resized(new_size) => {
                 let mut updated_scale = None;
+                let mut updated_playlist_rows = None;
+                let is_mod_skin = {
+                    let st = self.shared_state.lock().unwrap();
+                    self.is_modern_skin(&st)
+                };
+                let cur_scale = if cfg!(any(feature = "retro-win32", target_arch = "x86")) {
+                    1.0
+                } else {
+                    self.scale_factor.clamp(0.5, 4.0)
+                };
                 if let Some(surf) = self.windows.get_mut(&id)
                     && new_size.width > 0 && new_size.height > 0 {
                         if let Some(rdir) = surf.active_resize_dir {
-                            let base_w = surf.width.max(1) as f64;
-                            let base_h = surf.height.max(1) as f64;
-                            let sx = (new_size.width as f64) / base_w;
-                            let sy = (new_size.height as f64) / base_h;
-                            let prop_scale = match rdir {
-                                ResizeDirection::North | ResizeDirection::South => sy,
-                                ResizeDirection::East | ResizeDirection::West => sx,
-                                _ => {
-                                    if (sx - self.scale_factor).abs() >= (sy - self.scale_factor).abs() {
-                                        sx
-                                    } else {
-                                        sy
+                            if surf.kind == WindowKind::Main {
+                                let base_w = surf.width.max(1) as f64;
+                                let base_h = surf.height.max(1) as f64;
+                                let sx = (new_size.width as f64) / base_w;
+                                let sy = (new_size.height as f64) / base_h;
+                                let prop_scale = match rdir {
+                                    ResizeDirection::North | ResizeDirection::South => sy,
+                                    ResizeDirection::East | ResizeDirection::West => sx,
+                                    _ => {
+                                        if (sx - self.scale_factor).abs() >= (sy - self.scale_factor).abs() {
+                                            sx
+                                        } else {
+                                            sy
+                                        }
                                     }
                                 }
-                            }
-                            .clamp(0.5, 4.0);
-                            let target_w = ((surf.width as f64) * prop_scale)
-                                .round()
-                                .max(1.0) as u32;
-                            let target_h = ((surf.height as f64) * prop_scale)
-                                .round()
-                                .max(1.0) as u32;
-                            if (new_size.width as i32 - target_w as i32).abs() > 1
-                                || (new_size.height as i32 - target_h as i32).abs() > 1
+                                .clamp(0.5, 4.0);
+                                let target_w = ((surf.width as f64) * prop_scale)
+                                    .round()
+                                    .max(1.0) as u32;
+                                let target_h = ((surf.height as f64) * prop_scale)
+                                    .round()
+                                    .max(1.0) as u32;
+                                if (new_size.width as i32 - target_w as i32).abs() > 1
+                                    || (new_size.height as i32 - target_h as i32).abs() > 1
+                                {
+                                    surf.needs_aspect_snap = true;
+                                    let _ = surf
+                                        .window
+                                        .request_inner_size(PhysicalSize::new(target_w, target_h));
+                                    let _ = surf.pixels.resize_surface(target_w, target_h);
+                                } else {
+                                    let _ = surf.pixels.resize_surface(new_size.width, new_size.height);
+                                }
+                                updated_scale = Some(prop_scale);
+                            } else if is_mod_skin
+                                && matches!(surf.kind, WindowKind::QuickSelect | WindowKind::OpenDialog)
                             {
+                                let virt_h = (new_size.height as f64) / cur_scale;
+                                let new_rows = (((virt_h - 81.0) / 16.0).round() as isize)
+                                    .clamp(5, 36) as usize;
+                                let target_virt_w = MODERN_PLAYLIST_W;
+                                let target_virt_h = 81 + (new_rows as u32) * 16;
+                                let target_phys_w = ((target_virt_w as f64) * cur_scale)
+                                    .round()
+                                    .max(32.0) as u32;
+                                surf.width = target_virt_w;
+                                surf.height = target_virt_h;
                                 surf.needs_aspect_snap = true;
+                                let _ = surf.pixels.resize_buffer(target_virt_w, target_virt_h);
                                 let _ = surf
-                                    .window
-                                    .request_inner_size(PhysicalSize::new(target_w, target_h));
-                                let _ = surf.pixels.resize_surface(target_w, target_h);
+                                    .pixels
+                                    .resize_surface(target_phys_w, new_size.height.max(1));
+                                updated_playlist_rows = Some(new_rows);
                             } else {
                                 let _ = surf.pixels.resize_surface(new_size.width, new_size.height);
                             }
-                            updated_scale = Some(prop_scale);
                         } else {
                             let _ = surf.pixels.resize_surface(new_size.width, new_size.height);
                         }
@@ -3219,6 +3457,20 @@ impl ApplicationHandler for Mod4WinApp {
                         st.ini_config.gui_scale = sc;
                     }
                 }
+                if let Some(rows) = updated_playlist_rows {
+                    self.modern_playlist_rows = rows;
+                    self.setup_cfg.modern_playlist_rows = rows as u8;
+                    let pl_len = if let Ok(mut st) = self.shared_state.lock() {
+                        st.ini_config.modern_playlist_rows = rows as u8;
+                        st.playlist.len()
+                    } else {
+                        0
+                    };
+                    let max_scroll = pl_len.saturating_sub(rows);
+                    if self.quick_select_scroll > max_scroll {
+                        self.quick_select_scroll = max_scroll;
+                    }
+                }
             }
             WindowEvent::ModifiersChanged(new_mods) => {
                 self.modifiers = new_mods;
@@ -3227,7 +3479,12 @@ impl ApplicationHandler for Mod4WinApp {
                 let mut drag_vy = None;
                 let mut playlist_drag_vy = None;
                 let mut virt_pos = None;
-                let mut finished_resize = false;
+                let mut finished_main_scale_resize = false;
+                let mut finished_playlist_rows_resize = false;
+                let is_mod_skin = {
+                    let st = self.shared_state.lock().unwrap();
+                    self.is_modern_skin(&st)
+                };
                 if let Some(surf) = self.windows.get_mut(&id) {
                     surf.mouse_pos = (position.x, position.y);
                     let cur_size = surf.window.inner_size();
@@ -3237,10 +3494,23 @@ impl ApplicationHandler for Mod4WinApp {
                     {
                         surf.needs_aspect_snap = false;
                         if surf.active_resize_dir.take().is_some() {
-                            finished_resize = true;
+                            if surf.kind == WindowKind::Main {
+                                finished_main_scale_resize = true;
+                            } else if matches!(
+                                surf.kind,
+                                WindowKind::QuickSelect | WindowKind::OpenDialog
+                            ) {
+                                finished_playlist_rows_resize = true;
+                            }
                         }
                     }
-                    let rdir = detect_resize_direction(position.x, position.y, cur_size);
+                    let rdir = detect_resize_direction_for_window(
+                        surf.kind,
+                        is_mod_skin,
+                        position.x,
+                        position.y,
+                        cur_size,
+                    );
                     surf.window.set_cursor(cursor_for_resize_dir(rdir));
                     let mapped = match surf
                         .pixels
@@ -3258,8 +3528,17 @@ impl ApplicationHandler for Mod4WinApp {
                         playlist_drag_vy = Some(mapped.1);
                     }
                 }
-                if finished_resize {
+                if finished_main_scale_resize {
                     self.set_scale_factor_live(self.scale_factor);
+                } else if finished_playlist_rows_resize {
+                    if let Ok(mut st) = self.shared_state.lock() {
+                        st.ini_config.modern_playlist_rows =
+                            self.modern_playlist_rows.clamp(5, 36) as u8;
+                        let _ = st
+                            .ini_config
+                            .save_to_file(&Mod4WinIniConfig::default_ini_path());
+                    }
+                    self.apply_skin_to_all_open_windows();
                 }
                 if let Some(vy) = drag_vy {
                     self.update_preamp_from_y(vy);
@@ -3355,15 +3634,32 @@ impl ApplicationHandler for Mod4WinApp {
                         self.pressed_btn_tracker = None;
                         let _ = self.on_pointer_release();
 
-                        let mut finished_resize = false;
+                        let mut finished_main_scale_resize = false;
+                        let mut finished_playlist_rows_resize = false;
                         if let Some(surf) = self.windows.get_mut(&id) {
                             surf.needs_aspect_snap = false;
                             if surf.active_resize_dir.take().is_some() {
-                                finished_resize = true;
+                                if surf.kind == WindowKind::Main {
+                                    finished_main_scale_resize = true;
+                                } else if matches!(
+                                    surf.kind,
+                                    WindowKind::QuickSelect | WindowKind::OpenDialog
+                                ) {
+                                    finished_playlist_rows_resize = true;
+                                }
                             }
                         }
-                        if finished_resize {
+                        if finished_main_scale_resize {
                             self.set_scale_factor_live(self.scale_factor);
+                        } else if finished_playlist_rows_resize {
+                            if let Ok(mut st) = self.shared_state.lock() {
+                                st.ini_config.modern_playlist_rows =
+                                    self.modern_playlist_rows.clamp(5, 36) as u8;
+                                let _ = st
+                                    .ini_config
+                                    .save_to_file(&Mod4WinIniConfig::default_ini_path());
+                            }
+                            self.apply_skin_to_all_open_windows();
                         }
 
                         // `--classic-input` 1995er Drag-and-Drop:
@@ -3408,14 +3704,22 @@ impl ApplicationHandler for Mod4WinApp {
                     return;
                 }
 
+                let is_mod_skin = {
+                    let st = self.shared_state.lock().unwrap();
+                    self.is_modern_skin(&st)
+                };
                 let Some(surf) = self.windows.get_mut(&id) else {
                     return;
                 };
                 if button == MouseButton::Left {
                     let cur_size = surf.window.inner_size();
-                    if let Some(rdir) =
-                        detect_resize_direction(surf.mouse_pos.0, surf.mouse_pos.1, cur_size)
-                    {
+                    if let Some(rdir) = detect_resize_direction_for_window(
+                        surf.kind,
+                        is_mod_skin,
+                        surf.mouse_pos.0,
+                        surf.mouse_pos.1,
+                        cur_size,
+                    ) {
                         surf.active_resize_dir = Some(rdir);
                         let _ = surf.window.drag_resize_window(rdir);
                         return;
@@ -3506,7 +3810,11 @@ impl ApplicationHandler for Mod4WinApp {
                             let st = self.shared_state.lock().unwrap();
                             (self.is_modern_skin(&st), st.playlist.len())
                         };
-                        let max_vis = if is_mod { 9 } else { 13 };
+                        let max_vis = if is_mod {
+                            self.modern_playlist_rows.clamp(5, 36)
+                        } else {
+                            13
+                        };
                         let max_scroll = pl_len.saturating_sub(max_vis);
                         self.quick_select_scroll =
                             (self.quick_select_scroll as i32 + lines).clamp(0, max_scroll as i32) as usize;
@@ -3587,7 +3895,10 @@ impl ApplicationHandler for Mod4WinApp {
                 let Some((dw, dh)) = self.windows.get(&id).map(|s| (s.width, s.height)) else {
                     return;
                 };
-                let mut buf = vec![0u8; (dw * dh * 4) as usize];
+                let needed_len = (dw * dh * 4) as usize;
+                let mut buf = std::mem::take(&mut self.render_scratch_buf);
+                buf.resize(needed_len, 0);
+                buf.fill(0);
                 {
                     let state = self.shared_state.lock().unwrap();
                     self.render_window(kind, &mut buf, dw, dh, &state);
@@ -3598,6 +3909,7 @@ impl ApplicationHandler for Mod4WinApp {
                     frame[..copy_len].copy_from_slice(&buf[..copy_len]);
                     let _ = surf.pixels.render();
                 }
+                self.render_scratch_buf = buf;
             }
             _ => {}
         }
@@ -3612,7 +3924,8 @@ impl ApplicationHandler for Mod4WinApp {
             let _ = st.step_peak_search_progress();
             st.pending_initial_peak_search.take()
         };
-        if let Some(PendingPeakSearch(module, settings, file_size, module_name)) = pending_ps {
+        if let Some(PendingPeakSearch(module_arc, settings, file_size, module_name)) = pending_ps {
+            let module = Arc::try_unwrap(module_arc).unwrap_or_else(|a| (*a).clone());
             UiSharedState::start_or_resolve_peak_search(
                 &self.shared_state,
                 module,

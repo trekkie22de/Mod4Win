@@ -290,7 +290,7 @@ pub fn load_instrument_into_sample_mem_with_top(
     if *loop_start > *iend {
         *loop_start = 0;
     }
-    if *loop_end - *loop_start < 3 {
+    if *loop_start < 0 || *loop_end < 0 || (*loop_end).saturating_sub(*loop_start) < 3 {
         *loop_start = 0;
         *loop_end = 0;
     }

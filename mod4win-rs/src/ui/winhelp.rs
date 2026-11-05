@@ -2401,8 +2401,8 @@ impl HelpViewerState {
         });
         #[cfg(target_os = "windows")]
         {
-            let _ = std::process::Command::new("cmd")
-                .args(["/C", "start", "", &html_path.to_string_lossy()])
+            let _ = std::process::Command::new("explorer.exe")
+                .arg(&html_path)
                 .spawn();
         }
         #[cfg(target_os = "linux")]

@@ -1230,7 +1230,11 @@ impl Mod4WinApp {
                 }
                 Key::Named(NamedKey::ArrowDown) => {
                     self.quick_select_all_selected = false;
-                    let max_vis = if is_modern_playlist_open { 9 } else { 13 };
+                    let max_vis = if is_modern_playlist_open {
+                        self.modern_playlist_rows.clamp(5, 36)
+                    } else {
+                        13
+                    };
                     if self.quick_select_sort == 0 {
                         let len = self.shared_state.lock().unwrap().playlist.len();
                         if len > 0 {
@@ -1259,7 +1263,11 @@ impl Mod4WinApp {
                 }
                 Key::Named(NamedKey::PageUp) => {
                     self.quick_select_all_selected = false;
-                    let max_vis = if is_modern_playlist_open { 9 } else { 13 };
+                    let max_vis = if is_modern_playlist_open {
+                        self.modern_playlist_rows.clamp(5, 36)
+                    } else {
+                        13
+                    };
                     if self.quick_select_sort == 0 {
                         let len = self.shared_state.lock().unwrap().playlist.len();
                         if len > 0 {
@@ -1287,7 +1295,11 @@ impl Mod4WinApp {
                 }
                 Key::Named(NamedKey::PageDown) => {
                     self.quick_select_all_selected = false;
-                    let max_vis = if is_modern_playlist_open { 9 } else { 13 };
+                    let max_vis = if is_modern_playlist_open {
+                        self.modern_playlist_rows.clamp(5, 36)
+                    } else {
+                        13
+                    };
                     if self.quick_select_sort == 0 {
                         let len = self.shared_state.lock().unwrap().playlist.len();
                         if len > 0 {

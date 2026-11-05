@@ -836,19 +836,28 @@ impl Mod4WinApp {
 
         for &idx in &selected_indices {
             let src = self.file_man_dlg.files[idx].path.clone();
-            let dst = if selected_indices.len() == 1 && !target_edit.as_os_str().is_empty() {
-                if target_edit.is_dir() {
-                    target_edit.join(&self.file_man_dlg.files[idx].display_name)
-                } else {
-                    target_edit.clone()
-                }
+            let orig_name = src
+                .file_name()
+                .map(|n| n.to_os_string())
+                .unwrap_or_else(|| {
+                    std::ffi::OsString::from(&self.file_man_dlg.files[idx].display_name)
+                });
+            let dst = if !target_edit.as_os_str().is_empty() && target_edit.is_dir() {
+                target_edit.join(&orig_name)
+            } else if selected_indices.len() == 1 && !target_edit.as_os_str().is_empty() {
+                target_edit.clone()
             } else {
-                self.file_man_dlg
-                    .target_dir
-                    .join(&self.file_man_dlg.files[idx].display_name)
+                self.file_man_dlg.target_dir.join(&orig_name)
             };
 
             if src == dst {
+                continue;
+            }
+            if dst.exists() {
+                last_err = Some(format!(
+                    "Destination already exists: {}",
+                    dst.file_name().and_then(|n| n.to_str()).unwrap_or("file")
+                ));
                 continue;
             }
 

@@ -59,7 +59,7 @@ pub fn load_xm(data: &[u8]) -> Result<LoadedModule, u16> {
     state.p_arrangement.copy_from_slice(&data[80..336]);
 
     // Restart-Position (loaders.pas Zeilen 1404–1406)
-    let loop_to = (restart_pos as i16) + 1;
+    let loop_to = (restart_pos as i16).saturating_add(1);
     if loop_to > (song_len as i16) || loop_to == 1 {
         state.mi.loop_to = -1;
         state.mi.loop_from = -1;
@@ -73,7 +73,7 @@ pub fn load_xm(data: &[u8]) -> Result<LoadedModule, u16> {
     state.def_panning = [128; MAX_M4W_CHANNELS];
 
     // Patterns einlesen ab Offset 60 + HeaderLen (FT2_GetFileData, loaders.pas Zeilen 2365–2437)
-    let mut cursor = 60 + header_len;
+    let mut cursor = 60usize.checked_add(header_len).ok_or(ID_NO_MOD_FILE)?;
     let total_pats = num_patts.max(1);
     module.patterns = Vec::with_capacity(total_pats);
 
@@ -95,12 +95,13 @@ pub fn load_xm(data: &[u8]) -> Result<LoadedModule, u16> {
             }
         }
 
-        let pat_data_start = cursor + pat_hdr_len;
-        if pat_data_start + packed_size > data.len() {
+        let pat_data_start = cursor.checked_add(pat_hdr_len).ok_or(ID_NO_MOD_FILE)?;
+        let pat_data_end = pat_data_start.checked_add(packed_size).ok_or(ID_NO_MOD_FILE)?;
+        if pat_data_end > data.len() {
             return Err(ID_NO_MOD_FILE);
         }
-        let packed = &data[pat_data_start..pat_data_start + packed_size];
-        cursor = pat_data_start + packed_size;
+        let packed = &data[pat_data_start..pat_data_end];
+        cursor = pat_data_end;
 
         let rows_len = num_rows.clamp(1, MAX_PATT_LEN);
         let default_ft2_note = Note {
@@ -110,7 +111,7 @@ pub fn load_xm(data: &[u8]) -> Result<LoadedModule, u16> {
             operands: 0,
             chn_vol: 0,
         };
-        let mut rows = vec![[default_ft2_note; MAX_M4W_CHANNELS]; MAX_PATT_LEN];
+        let mut rows = vec![[default_ft2_note; MAX_M4W_CHANNELS]; rows_len];
 
         if packed_size > 0 {
             let mut p = 0usize;
@@ -224,10 +225,10 @@ pub fn load_xm(data: &[u8]) -> Result<LoadedModule, u16> {
         operands: 0,
         chn_vol: 0,
     };
-    while module.patterns.len() < 256 {
+    if module.patterns.is_empty() {
         module
             .patterns
-            .push(vec![[default_ft2_note; MAX_M4W_CHANNELS]; MAX_PATT_LEN]);
+            .push(vec![[default_ft2_note; MAX_M4W_CHANNELS]; 64]);
     }
 
     // Instrumente und Samples einlesen (loaders.pas Zeilen 1446–1532 & 2441–2460)
@@ -250,7 +251,7 @@ pub fn load_xm(data: &[u8]) -> Result<LoadedModule, u16> {
         state.mi.instruments[inst_idx - 1].name = inst_name;
 
         let num_samples = read_le_u16(data, cursor + 27).unwrap_or(0) as usize;
-        let next_header_ofs = cursor + inst_size;
+        let next_header_ofs = cursor.checked_add(inst_size).ok_or(ID_NO_MOD_FILE)?;
 
         if num_samples == 0 {
             cursor = next_header_ofs.min(data.len());
@@ -262,7 +263,7 @@ pub fn load_xm(data: &[u8]) -> Result<LoadedModule, u16> {
         }
 
         let ext_slice = &data[cursor + 29..cursor + 29 + 214];
-        let sample_header_size = read_le_i32(ext_slice, 0).unwrap_or(40) as usize;
+        let sample_header_size = read_le_i32(ext_slice, 0).unwrap_or(40).max(40) as usize;
         let mut samplenos = [0u8; 96];
         samplenos.copy_from_slice(&ext_slice[4..100]);
 
@@ -383,7 +384,9 @@ pub fn load_xm(data: &[u8]) -> Result<LoadedModule, u16> {
                 return Err(ID_INV_MOD_FILE);
             }
             let sh = &data[hdr_cursor..hdr_cursor + 40];
-            hdr_cursor += sample_header_size.max(40);
+            hdr_cursor = hdr_cursor
+                .checked_add(sample_header_size.max(40))
+                .ok_or(ID_INV_MOD_FILE)?;
 
             let samplelen = read_le_i32(sh, 0).unwrap_or(0);
             let mut loopstart = read_le_i32(sh, 4).unwrap_or(0);
