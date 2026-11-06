@@ -3244,13 +3244,13 @@ impl Mod4WinApp {
                 self.setup_cfg.clipping = state.ini_config.clipping;
                 return;
             }
-            // Rechtsklick auf DC (444..459), DH (460..477) oder AMI (478..500) im Classic Skin
-            if (69..=81).contains(&vy) && (444..=500).contains(&vx) {
+            // Rechtsklick auf DC (448..462), DH (463..478) oder AMI (479..500) im Classic Skin
+            if (69..=81).contains(&vy) && (448..=500).contains(&vx) {
                 let mut state = self.shared_state.lock().unwrap();
-                if vx <= 459 {
+                if vx <= 462 {
                     state.toggle_declick();
                     self.setup_cfg.declick = state.ini_config.declick;
-                } else if vx <= 477 {
+                } else if vx <= 478 {
                     state.toggle_dehiss();
                     self.setup_cfg.dehiss = state.ini_config.dehiss;
                 } else {

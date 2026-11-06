@@ -1686,13 +1686,13 @@ impl Mod4WinApp {
             self.setup_cfg.over_sampling = state.ini_config.over_sampling;
             return;
         }
-        // DC / DH / AMI Schalter im ehemaligen TMode-Feld (444..500, 69..81)
-        if (69..=81).contains(&vy) && (444..=500).contains(&vx) {
+        // DC / DH / AMI Schalter im ehemaligen TMode-Feld (448..500, 69..81)
+        if (69..=81).contains(&vy) && (448..=500).contains(&vx) {
             let mut state = self.shared_state.lock().unwrap();
-            if vx <= 459 {
+            if vx <= 462 {
                 state.toggle_declick();
                 self.setup_cfg.declick = state.ini_config.declick;
-            } else if vx <= 477 {
+            } else if vx <= 478 {
                 state.toggle_dehiss();
                 self.setup_cfg.dehiss = state.ini_config.dehiss;
             } else {
@@ -2153,8 +2153,8 @@ fn draw_classic_lcd_sprite_7px(
     }
 }
 
-/// Zeichnet die 3 separaten Ein/Aus-Schalter `DC` (`445, 71`), `DH` (`463, 71`) und `AMI` (`481, 71`)
-/// im ehemaligen `TMode`-Feld des Classic Skins (`445..498, 70..80`).
+/// Zeichnet die 3 separaten Ein/Aus-Schalter `DC` (`451, 71`), `DH` (`467, 71`) und `AMI` (`483, 71`)
+/// im ehemaligen `TMode`-Feld des Classic Skins (`445..498, 70..80`) mit gleichmäßigem 7px-Abstand.
 pub(crate) fn draw_classic_dc_dh_ami_badges(
     frame: &mut [u8],
     dw: u32,
@@ -2164,34 +2164,34 @@ pub(crate) fn draw_classic_dc_dh_ami_badges(
     amiga: bool,
 ) {
     const DC_SPRITE: [&str; 7] = [
-        "####   ####",
-        "#   # #    ",
-        "#   # #    ",
-        "#   # #    ",
-        "#   # #    ",
-        "#   # #    ",
-        "####   ####",
+        "###   ###",
+        "#  # #   ",
+        "#  # #   ",
+        "#  # #   ",
+        "#  # #   ",
+        "#  # #   ",
+        "###   ###",
     ];
     const DH_SPRITE: [&str; 7] = [
-        "####  #   #",
-        "#   # #   #",
-        "#   # #   #",
-        "#   # #####",
-        "#   # #   #",
-        "#   # #   #",
-        "####  #   #",
+        "###  #  #",
+        "#  # #  #",
+        "#  # #  #",
+        "#  # ####",
+        "#  # #  #",
+        "#  # #  #",
+        "###  #  #",
     ];
     const AMI_SPRITE: [&str; 7] = [
-        " ###  #   #  ### ",
-        "#   # ## ##   #  ",
-        "#   # # # #   #  ",
-        "##### # # #   #  ",
-        "#   # #   #   #  ",
-        "#   # #   #   #  ",
-        "#   # #   #  ### ",
+        " ##  #   # ###",
+        "#  # ## ##  # ",
+        "#  # # # #  # ",
+        "#### # # #  # ",
+        "#  # #   #  # ",
+        "#  # #   #  # ",
+        "#  # #   # ###",
     ];
 
-    draw_classic_lcd_sprite_7px(frame, dw, dh, 445, 71, &DC_SPRITE, declick);
-    draw_classic_lcd_sprite_7px(frame, dw, dh, 463, 71, &DH_SPRITE, dehiss);
-    draw_classic_lcd_sprite_7px(frame, dw, dh, 481, 71, &AMI_SPRITE, amiga);
+    draw_classic_lcd_sprite_7px(frame, dw, dh, 451, 71, &DC_SPRITE, declick);
+    draw_classic_lcd_sprite_7px(frame, dw, dh, 467, 71, &DH_SPRITE, dehiss);
+    draw_classic_lcd_sprite_7px(frame, dw, dh, 483, 71, &AMI_SPRITE, amiga);
 }
