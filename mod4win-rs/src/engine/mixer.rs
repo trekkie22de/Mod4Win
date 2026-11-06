@@ -2808,10 +2808,37 @@ fn process_sample_subblock(
                 write_back_mix_channel(chn, &asm_chn);
 
                 let dc = &mut mem.chn_declick[ch_idx];
+                // Falls der Kanal zwischen `mix_buffer` und `sur_buffer` (ProLogic-Surround) wechselt,
+                // muss der alte Pegel (`dc.prev_l`, `dc.prev_r`) im BISHERIGEN Zielpuffer sanft gegen 0
+                // ausgerampt werden und der Kanal im NEUEN Zielpuffer von 0 aus einblenden (verhindert
+                // harte Sprünge im 363-Sample-Surround-Delay-Ringpuffer wie bei ECHOMIX.S3M!).
+                let surr_switched = dc.was_active && target_is_surround != dc.was_surround;
+                if surr_switched {
+                    let n = ramp_frames.max(1);
+                    if dc.prev_l != 0 || dc.prev_r != 0 {
+                        let old_buf = if dc.was_surround && state.use_surround {
+                            &mut mem.sur_buffer[..total_frames]
+                        } else {
+                            &mut mem.mix_buffer[..total_frames]
+                        };
+                        let limit = n.min(total_frames);
+                        for k in 0..limit {
+                            let w = (n - k) as i64;
+                            let dl = ((dc.prev_l as i64 * w) / (n as i64)) as i32;
+                            let dr = ((dc.prev_r as i64 * w) / (n as i64)) as i32;
+                            old_buf[k].left = old_buf[k].left.wrapping_add(dl);
+                            old_buf[k].right = old_buf[k].right.wrapping_add(dr);
+                        }
+                    }
+                    dc.prev_l = 0;
+                    dc.prev_r = 0;
+                }
                 let e_inst_triggered =
                     !is_second_subblock && (chn.event_chg & event_flags::E_INST) != 0;
-                let sample_pointer_jumped =
-                    !dc.was_active || pre_wrap_esi != dc.expected_next_esi || e_inst_triggered;
+                let _sample_pointer_jumped = !dc.was_active
+                    || surr_switched
+                    || pre_wrap_esi != dc.expected_next_esi
+                    || e_inst_triggered;
 
                 let pitch_fp = (((phi as u16 as u64) << 16) | (plo as u64)).max(1);
                 let pitch_fp_i64 = pitch_fp as i64;
@@ -2927,33 +2954,18 @@ fn process_sample_subblock(
                     }
                 }
 
-                // 2. Note-Trigger / Retrigger / Sample-Offset Crossfade:
-                let mut ramp_l: i32 = 0;
-                let mut ramp_r: i32 = 0;
-                let mut rem: usize = 0;
-
-                if sample_pointer_jumped {
-                    let fade_len = ramp_frames.min(total_frames).max(1);
-                    let old_l = dc.prev_l as i64;
-                    let old_r = dc.prev_r as i64;
-                    let n64 = fade_len as i64;
-                    for k in 0..fade_len {
-                        let w_new = k as i64;
-                        let w_old = n64 - w_new;
-                        let new_l = mem.chn_scratch[k].left as i64;
-                        let new_r = mem.chn_scratch[k].right as i64;
-                        mem.chn_scratch[k].left = ((old_l * w_old + new_l * w_new) / n64) as i32;
-                        mem.chn_scratch[k].right = ((old_r * w_old + new_r * w_new) / n64) as i32;
-                    }
+                // 2. Subtraktives DC-Offset-Decay für Note-Trigger, Retrigger (Qxy/E9x),
+                //    Sample-Offset (9xx/Oxx) sowie Lautstärke-/Panning-Sprünge:
+                //    Glättet ausschließlich die Sprungdifferenz `dc.prev - chn_scratch[0]` über
+                //    `ramp_frames`, ohne die AC-Wellenform (`chn_scratch[k] - chn_scratch[0]`)
+                //    des neuen Samples auf 0 herunterzuziehen (verhindert Hüllkurven-Löcher bei Retrigs!).
+                let mut ramp_l: i32 = dc.prev_l.wrapping_sub(mem.chn_scratch[0].left);
+                let mut ramp_r: i32 = dc.prev_r.wrapping_sub(mem.chn_scratch[0].right);
+                let mut rem: usize = if ramp_l != 0 || ramp_r != 0 {
+                    ramp_frames
                 } else {
-                    // Kontinuierliche Note: sanfte Rampe bei Lautstärke-/Panning-Sprung
-                    // oder nahtlose Fortsetzung einer aus dem Vorblock laufenden Rampe
-                    ramp_l = dc.prev_l.wrapping_sub(mem.chn_scratch[0].left);
-                    ramp_r = dc.prev_r.wrapping_sub(mem.chn_scratch[0].right);
-                    if ramp_l != 0 || ramp_r != 0 {
-                        rem = ramp_frames;
-                    }
-                }
+                    0
+                };
 
                 // 3. Mid-Tick Loop-Seam De-Clicking + Rampen-Anwendung:
                 let loop_out_frames = if is_looping {
@@ -4273,6 +4285,178 @@ mod tests {
             max_burst_out > 75_000,
             "DeHiss Transienten-Schutz muss scharfe Hi-Hat-Bursts ungedämpft durchlassen (max_burst_out = {})",
             max_burst_out
+        );
+    }
+
+    #[test]
+    fn test_echomix_s3m_declick_delta_check() {
+        use crate::engine::loader::load_module_with_ext;
+        use crate::engine::sequencer::Sequencer;
+        use crate::engine::types::SoundSettings;
+        let path = std::path::Path::new(r"M:\Audio\MOD_MID_SID\MOD\test\ECHOMIX.S3M");
+        if !path.exists() {
+            return;
+        }
+        let bytes = std::fs::read(path).unwrap();
+        let m_off = load_module_with_ext(&bytes, Some("s3m")).unwrap();
+        let m_on = m_off.clone();
+
+        let mut s_off = SoundSettings::default();
+        s_off.samplerate = 44100;
+        s_off.bits = 16;
+        s_off.stereo = 2;
+        s_off.oversamp = 2;
+        s_off.panning = true;
+        s_off.pre_amp = 0x80 | 20;
+        s_off.set_declick(false);
+
+        let mut s_on = s_off;
+        s_on.set_declick(true);
+
+        let mut seq_off = Sequencer::new(m_off, s_off);
+        let mut seq_on = Sequencer::new(m_on, s_on);
+
+        for (idx, inst) in seq_off.module.state.mi.instruments.iter().enumerate() {
+            if inst.iend > inst.offset {
+                let (is_os, eff_end) = analyze_sample_tail(
+                    &seq_off.module.sample_mem,
+                    inst.offset,
+                    inst.offset,
+                    inst.iend,
+                    inst.loop_end,
+                    inst.loop_end - inst.loop_start,
+                    (inst.bits & 0x10) != 0,
+                );
+                let iofs = inst.offset;
+                let iiend = inst.iend;
+                let ilst = inst.loop_start;
+                let ilen = inst.loop_end;
+                println!(
+                    "Inst {:02}: offset={} iend={} lstart={} lend={} is_os={} eff_end={}",
+                    idx + 1,
+                    iofs,
+                    iiend,
+                    ilst,
+                    ilen,
+                    is_os,
+                    eff_end
+                );
+            }
+        }
+
+        let mut prev_off = (0i16, 0i16);
+        let mut prev_on = (0i16, 0i16);
+        let mut max_delta_off = 0i32;
+        let mut max_delta_on = 0i32;
+        let mut worst_excess = 0i32;
+        let mut anomaly_count = 0usize;
+
+        for tick in 0..1500 {
+            let ord = seq_on.module.state.curr_pattern;
+            let row = seq_on.module.state.curr_note;
+            let sub = seq_on.module.state.curr_vblanc;
+            if seq_off.module.state.curr_vblanc == 0 {
+                seq_off.process_row();
+                seq_on.process_row();
+            }
+            seq_off.update_channels_for_mixing();
+            seq_on.update_channels_for_mixing();
+
+            let mut ch_info = String::new();
+            let ntr = seq_on.module.state.mi.num_tracks as usize;
+            for c in 0..ntr {
+                let ch = &seq_on.module.state.channels[c];
+                let dc = &seq_on.mix_mem.chn_declick[c];
+                let c_note = ch.note;
+                let c_iofs = ch.i_offset;
+                let c_iend = ch.iend;
+                let c_lln = ch.lln;
+                let c_lend = ch.lend;
+                let c_phi = ch.phi;
+                let c_plo = ch.plo;
+                if c_note != 0 || ch.event_chg != 0 || dc.was_active {
+                    let (is_os, eff_end) = analyze_sample_tail(
+                        &seq_on.module.sample_mem,
+                        c_iofs,
+                        c_note,
+                        c_iend,
+                        c_lend,
+                        c_lln,
+                        false,
+                    );
+                    ch_info.push_str(&format!(
+                        "[c{}:ins={} note={} iofs={} exp={} iend={} eff_end={} os={} phi={} plo={:#x} vol={}/{} prev={}/{} ev={:#x}] ",
+                        c, ch.inst, c_note, c_iofs, dc.expected_next_esi, c_iend, eff_end, is_os, c_phi, c_plo, ch.l_vol, ch.r_vol, dc.prev_l, dc.prev_r, ch.event_chg
+                    ));
+                }
+            }
+
+            seq_off.module.state.buf_samples = seq_off.module.state.num_samples.max(1);
+            seq_on.module.state.buf_samples = seq_on.module.state.num_samples.max(1);
+
+            let out_off = process_sample_block(
+                &mut seq_off.module.state,
+                &mut seq_off.mix_mem,
+                &seq_off.module.sample_mem,
+                false,
+            );
+            let out_on = process_sample_block(
+                &mut seq_on.module.state,
+                &mut seq_on.mix_mem,
+                &seq_on.module.sample_mem,
+                false,
+            );
+
+            if let (MixOutputBuffer::Pcm16(pcm_off), MixOutputBuffer::Pcm16(pcm_on)) = (out_off, out_on) {
+                let mut tick_max_off = 0i32;
+                let mut tick_max_on = 0i32;
+                let mut tick_worst_k = 0usize;
+                for (k, (p_off, p_on)) in pcm_off.chunks_exact(2).zip(pcm_on.chunks_exact(2)).enumerate() {
+                    let dl_off = (p_off[0] as i32 - prev_off.0 as i32).abs();
+                    let dr_off = (p_off[1] as i32 - prev_off.1 as i32).abs();
+                    let d_off = dl_off.max(dr_off);
+
+                    let dl_on = (p_on[0] as i32 - prev_on.0 as i32).abs();
+                    let dr_on = (p_on[1] as i32 - prev_on.1 as i32).abs();
+                    let d_on = dl_on.max(dr_on);
+
+                    if d_off > tick_max_off {
+                        tick_max_off = d_off;
+                    }
+                    if d_on > tick_max_on {
+                        tick_max_on = d_on;
+                        tick_worst_k = k;
+                    }
+                    prev_off = (p_off[0], p_off[1]);
+                    prev_on = (p_on[0], p_on[1]);
+                }
+                max_delta_off = max_delta_off.max(tick_max_off);
+                max_delta_on = max_delta_on.max(tick_max_on);
+                let excess = tick_max_on - tick_max_off;
+                if excess > 1500 {
+                    anomaly_count += 1;
+                    worst_excess = worst_excess.max(excess);
+                    if anomaly_count <= 30 {
+                        println!(
+                            "Tick {:4} (ord={} row={:2} sub={}): max_off={:5} max_on={:5} (excess=+{:5} at frame {:3}/{:3}) | {}",
+                            tick, ord, row, sub, tick_max_off, tick_max_on, excess, tick_worst_k, pcm_on.len()/2, ch_info
+                        );
+                    }
+                }
+            }
+
+            seq_off.tick_prepared = false;
+            seq_on.tick_prepared = false;
+            seq_off.advance_tick();
+            seq_on.advance_tick();
+        }
+        println!(
+            "Summary ECHOMIX.S3M: max_delta_off={} max_delta_on={} worst_excess=+{} anomalies={}",
+            max_delta_off, max_delta_on, worst_excess, anomaly_count
+        );
+        assert_eq!(
+            anomaly_count, 0,
+            "ECHOMIX.S3M darf mit DC=ON keine Klick-Sprünge gegenüber DC=OFF erzeugen"
         );
     }
 }
