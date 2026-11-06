@@ -411,12 +411,16 @@ pub fn load_xm(data: &[u8]) -> Result<LoadedModule, u16> {
             let mi_inst = &mut state.mi.instruments[inst_idx - 1];
             if mi_inst.iend < samplelen {
                 mi_inst.iend = samplelen;
-                mi_inst.bits = if (sampletype & 0x10) != 0 { 16 } else { 8 };
+                if (sampletype & 0x10) != 0 || mi_inst.bits == 0 {
+                    mi_inst.bits = if (sampletype & 0x10) != 0 { 16 } else { 8 };
+                }
                 mi_inst.loop_start = loopstart;
                 mi_inst.loop_end = loopend;
                 mi_inst.fine_tune = (finetune as u8) >> 4;
                 mi_inst.volume = volume;
                 mi_inst.tuning = DEF_MOD_TUNING_NTSC;
+            } else if (sampletype & 0x10) != 0 && samplelen > 0 {
+                mi_inst.bits = 16;
             }
 
             module.ft2_samples[k_sample_idx] = Ft2RuntimeSample {

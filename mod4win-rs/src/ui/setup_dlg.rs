@@ -1232,7 +1232,11 @@ impl Mod4WinApp {
             let old_pos = st.curr_pos;
             let live_declick = st.sound_settings.declick();
             let live_amiga = st.sound_settings.amiga_filter();
-            let live_dehiss = st.sound_settings.dehiss();
+            let live_dehiss = if st.dehiss_auto_disabled {
+                st.ini_config.dehiss
+            } else {
+                st.sound_settings.dehiss()
+            };
             self.setup_cfg.declick = live_declick;
             self.setup_cfg.amiga_filter = live_amiga;
             self.setup_cfg.dehiss = live_dehiss;

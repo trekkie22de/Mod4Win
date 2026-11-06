@@ -437,6 +437,23 @@ impl Default for ModulInfo {
     }
 }
 
+impl ModulInfo {
+    /// Gibt `true` zurück, wenn das Modul mindestens ein echtes 16-Bit-Sample enthält (`S_16BIT = 0x10`).
+    #[inline]
+    pub fn has_16bit_samples(&self) -> bool {
+        self.instruments
+            .iter()
+            .any(|inst| inst.iend > inst.offset && (inst.bits & sample_flags::S_16BIT) != 0)
+    }
+
+    /// Gibt `true` zurück, wenn es sich um ein `.XM`- (`FT2`) oder `.IT`-Modul mit echten 16-Bit-Samples handelt,
+    /// bei dem der `De-Hiss`-Filter standardmäßig automatisch deaktiviert wird.
+    #[inline]
+    pub fn is_16bit_xm_or_it(&self) -> bool {
+        matches!(self.file_type, ModType::FT2 | ModType::IT) && self.has_16bit_samples()
+    }
+}
+
 /// Audio- und Mixer-Konfiguration (`TSettings` in `modc.pas` Zeilen 599–613).
 #[repr(C, packed)]
 #[derive(Debug, Clone, Copy)]

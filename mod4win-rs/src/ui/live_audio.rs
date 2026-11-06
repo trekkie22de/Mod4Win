@@ -707,6 +707,9 @@ pub fn load_and_prepare_module_isolated(
             _ => 2,
         };
     }
+    if new_mod.state.mi.is_16bit_xm_or_it() {
+        base_settings.set_dehiss(false);
+    }
 
     let cached_peak = if state_saver {
         let pks_path = Mod4WinIniConfig::default_pks_path();
@@ -774,6 +777,13 @@ fn apply_ready_loaded_module(
             _ => 2,
         };
         ui.ini_config.over_sampling = ui.sound_settings.oversamp;
+    }
+    if ready.module.state.mi.is_16bit_xm_or_it() && ui.ini_config.dehiss {
+        ui.dehiss_auto_disabled = true;
+        ui.sound_settings.set_dehiss(false);
+    } else {
+        ui.dehiss_auto_disabled = false;
+        ui.sound_settings.set_dehiss(ui.ini_config.dehiss);
     }
     let mut cur_settings = ui.sound_settings;
     seq.module = ready.module;
@@ -1278,5 +1288,57 @@ mod tests {
         assert_eq!(it_infos[0].length, 1000);
         assert_eq!(it_infos[0].loop_start, 200);
         assert_eq!(it_infos[0].loop_length, 600);
+        assert!(it_mi.is_16bit_xm_or_it());
+        assert!(!mod_mi.is_16bit_xm_or_it());
+    }
+
+    #[test]
+    fn test_auto_disable_dehiss_on_16bit_xm_and_it_restores_on_8bit_mod() {
+        let mut ui = UiSharedState::new("TEST", "ProTr", 4, 1, 1, 1, vec![], 10);
+        ui.ini_config.dehiss = true;
+        ui.apply_ini_to_sound_settings();
+        assert!(ui.sound_settings.dehiss());
+        assert!(!ui.dehiss_auto_disabled);
+
+        // Simulierte 16-Bit XM-Datei (z. B. pahgiana.xm mit gemischten 8-Bit & 16-Bit Samples)
+        ui.format_str = "FT2".to_string();
+        ui.instruments = vec![
+            InstrumentInfo {
+                index: 1,
+                name: "8bit_drum".to_string(),
+                length: 4000,
+                loop_start: 0,
+                loop_length: 0,
+                fine_tune: 0,
+                volume: 64,
+                is_16bit: false,
+                c4_freq: 8363,
+            },
+            InstrumentInfo {
+                index: 6,
+                name: "16bit_lead".to_string(),
+                length: 24706,
+                loop_start: 0,
+                loop_length: 0,
+                fine_tune: 0,
+                volume: 64,
+                is_16bit: true,
+                c4_freq: 8363,
+            },
+        ];
+        ui.apply_ini_to_sound_settings();
+        assert!(!ui.sound_settings.dehiss());
+        assert!(ui.dehiss_auto_disabled);
+
+        // sync_runtime_to_ini darf ini_config.dehiss (= true) nicht überschreiben!
+        ui.sync_runtime_to_ini();
+        assert!(ui.ini_config.dehiss);
+
+        // Wechsel zurück auf ein 8-Bit .MOD aktiviert De-Hiss automatisch wieder
+        ui.format_str = "ProTr".to_string();
+        ui.instruments[1].is_16bit = false;
+        ui.apply_ini_to_sound_settings();
+        assert!(ui.sound_settings.dehiss());
+        assert!(!ui.dehiss_auto_disabled);
     }
 }

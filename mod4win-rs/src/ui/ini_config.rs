@@ -911,7 +911,7 @@ pub fn export_module_to_wav_file(
     hdd_settings.set_clean_mode(ini_cfg.clean_mode);
     hdd_settings.set_declick(ini_cfg.declick);
     hdd_settings.set_amiga_filter(ini_cfg.amiga_filter);
-    hdd_settings.set_dehiss(ini_cfg.dehiss);
+    hdd_settings.set_dehiss(ini_cfg.dehiss && !loaded_module.state.mi.is_16bit_xm_or_it());
     hdd_settings.pre_amp = 0x80 + 40;
 
     // 1. Exakter PeakSearch-Vorlauf (wie im Original bei DEV_HDD und in --diff-suite)

@@ -761,11 +761,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
         ini_cfg.over_sampling = settings.oversamp;
     }
+    let is_16bit_xm_it = has_initial_module && loaded_module.state.mi.is_16bit_xm_or_it();
     settings.set_timer_mode(ini_cfg.timer_mode.min(2));
     settings.set_clean_mode(ini_cfg.clean_mode);
     settings.set_declick(ini_cfg.declick);
     settings.set_amiga_filter(ini_cfg.amiga_filter);
-    settings.set_dehiss(ini_cfg.dehiss);
+    settings.set_dehiss(ini_cfg.dehiss && !is_16bit_xm_it);
     settings.n_buffers = ini_cfg.output_buffers.clamp(2, 99);
     let clip_bit = if ini_cfg.clipping { 0x80 } else { 0x00 };
     settings.pre_amp = clip_bit | ini_cfg.pre_amplification.min(40);
@@ -823,6 +824,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     init_ui_state.show_filename = init_ui_state.ini_config.force_filename_display;
     init_ui_state.curr_pos = if has_initial_module { 1 } else { 0 };
     init_ui_state.instruments = inst_infos;
+    init_ui_state.dehiss_auto_disabled = is_16bit_xm_it && init_ui_state.ini_config.dehiss;
     init_ui_state.effects_used_set = loaded_module.state.mi.effects_used_set;
     init_ui_state.song_mem_bytes = loaded_module.state.mi.song_mem as usize;
     init_ui_state.total_time_secs = (loaded_module.state.mi.total_time / 1000).max(0) as u32;

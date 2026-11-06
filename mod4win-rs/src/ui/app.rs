@@ -351,6 +351,9 @@ pub struct UiSharedState {
     pub title_scroll_epoch: Instant,
     /// Startzeitpunkt für das Marquee-Scrolling im Module-Info-Fenster (`2600 ms` bzw. `3100 ms` Initial-Pause, danach `120 ms`/Zeichen).
     pub info_scroll_epoch: Instant,
+    /// Zeigt an, ob `De-Hiss` für das aktuell geladene 16-Bit-`.XM`/`.IT`-Modul automatisch deaktiviert wurde,
+    /// damit `ini_config.dehiss` beim Modulwechsel auf ein 8-Bit-Modul wiederhergestellt bleibt.
+    pub dehiss_auto_disabled: bool,
 }
 
 impl UiSharedState {
@@ -453,6 +456,7 @@ impl UiSharedState {
             gui_launch_instant: Instant::now(),
             title_scroll_epoch: Instant::now(),
             info_scroll_epoch: Instant::now(),
+            dehiss_auto_disabled: false,
         }
     }
 
@@ -756,7 +760,13 @@ impl UiSharedState {
         self.sound_settings.set_clean_mode(self.ini_config.clean_mode);
         self.sound_settings.set_declick(self.ini_config.declick);
         self.sound_settings.set_amiga_filter(self.ini_config.amiga_filter);
-        self.sound_settings.set_dehiss(self.ini_config.dehiss);
+        if self.is_16bit_xm_or_it_module() && self.ini_config.dehiss {
+            self.dehiss_auto_disabled = true;
+            self.sound_settings.set_dehiss(false);
+        } else {
+            self.dehiss_auto_disabled = false;
+            self.sound_settings.set_dehiss(self.ini_config.dehiss);
+        }
         self.sound_settings.oversamp = self.ini_config.over_sampling.min(6);
         self.sound_settings.panning = self.ini_config.enable_panning;
         let clip_bit = if self.ini_config.clipping {
@@ -780,7 +790,9 @@ impl UiSharedState {
         self.ini_config.clean_mode = self.sound_settings.clean_mode();
         self.ini_config.declick = self.sound_settings.declick();
         self.ini_config.amiga_filter = self.sound_settings.amiga_filter();
-        self.ini_config.dehiss = self.sound_settings.dehiss();
+        if !self.dehiss_auto_disabled {
+            self.ini_config.dehiss = self.sound_settings.dehiss();
+        }
         self.ini_config.clipping = (self.sound_settings.pre_amp & 0x80) != 0;
         self.ini_config.pre_amplification = (self.sound_settings.pre_amp & 0x7F).min(40);
         self.ini_config.over_sampling = self.sound_settings.oversamp.min(6);
@@ -803,6 +815,16 @@ impl UiSharedState {
     /// Gibt zurück, ob aktuell ein Impulse-Tracker-Modul (`.IT`) geladen ist.
     pub fn is_it_module(&self) -> bool {
         self.format_str.eq_ignore_ascii_case("IT")
+    }
+
+    /// Gibt zurück, ob aktuell ein `.XM`- (`FT2`) oder `.IT`-Modul mit echten 16-Bit-Samples geladen ist,
+    /// bei dem `De-Hiss` standardmäßig automatisch deaktiviert wird.
+    pub fn is_16bit_xm_or_it_module(&self) -> bool {
+        (self.format_str.eq_ignore_ascii_case("FT2") || self.format_str.eq_ignore_ascii_case("IT"))
+            && self
+                .instruments
+                .iter()
+                .any(|inst| inst.length > 0 && inst.is_16bit)
     }
 
     /// Liefert die effektive `oversamp`-Stufe (`0..=3` für klassische Formate, `0..=6` für `.IT`-Module).
@@ -898,6 +920,7 @@ impl UiSharedState {
 
     /// Schaltet den modernen adaptiven Mehrband-Denoiser (`DeHiss`) ein oder aus.
     pub fn toggle_dehiss(&mut self) {
+        self.dehiss_auto_disabled = false;
         let next = !self.sound_settings.dehiss();
         self.sound_settings.set_dehiss(next);
         self.set_status_banner(if next {
@@ -912,6 +935,7 @@ impl UiSharedState {
     /// Schaltet im Classic Skin (`2.40`) die Rauschfilter-Anzeige zyklisch durch:
     /// `0 = Off` -> `1 = DeHiss (Adaptiver Mehrband-Denoiser)` -> `2 = Amiga (Paula LED-Filter)` -> `3 = Am+DH (Beide)`.
     pub fn step_noise_filter(&mut self, delta: i32) {
+        self.dehiss_auto_disabled = false;
         let cur: i32 = match (
             self.sound_settings.dehiss(),
             self.sound_settings.amiga_filter(),
