@@ -292,15 +292,13 @@ impl Mod4WinApp {
             );
         }
 
-        // Ehemaliges TMode+Mode-Feld (445..498, 70..80): Aufgeteilt in DClick (links unter PAN) und DeHiss/Amiga (rechts unter iDO)
+        // Ehemaliges TMode+Mode-Feld (445..498, 70..80): 3 separate Ein/Aus-Schalter `DC` (DeClick), `DH` (DeHiss) und `AMI` (Amiga)
         fill_rect(frame, dw, dh, 445, 70, 54, 10, [0, 0, 0, 255]);
-        draw_classic_declick_badge(frame, dw, dh, 445, 71, state.sound_settings.declick());
-        draw_classic_filter_badge(
+        draw_classic_dc_dh_ami_badges(
             frame,
             dw,
             dh,
-            474,
-            71,
+            state.sound_settings.declick(),
             state.sound_settings.dehiss(),
             state.sound_settings.amiga_filter(),
         );
@@ -1688,22 +1686,19 @@ impl Mod4WinApp {
             self.setup_cfg.over_sampling = state.ini_config.over_sampling;
             return;
         }
-        // main_declick (445..471, 69..81): De-Click Filter ein/ausschalten
-        if (445..=471).contains(&vx) && (69..=81).contains(&vy) {
+        // DC / DH / AMI Schalter im ehemaligen TMode-Feld (444..500, 69..81)
+        if (69..=81).contains(&vy) && (444..=500).contains(&vx) {
             let mut state = self.shared_state.lock().unwrap();
-            state.toggle_declick();
-            self.setup_cfg.declick = state.ini_config.declick;
-            let _ = state
-                .ini_config
-                .save_to_file(&Mod4WinIniConfig::default_ini_path());
-            return;
-        }
-        // main_filter (472..500, 69..81): Rauschfilter zyklisch umschalten (Off -> DeHiss -> Amiga -> Am+DH)
-        if (472..=500).contains(&vx) && (69..=81).contains(&vy) {
-            let mut state = self.shared_state.lock().unwrap();
-            state.step_noise_filter(1);
-            self.setup_cfg.dehiss = state.ini_config.dehiss;
-            self.setup_cfg.amiga_filter = state.ini_config.amiga_filter;
+            if vx <= 459 {
+                state.toggle_declick();
+                self.setup_cfg.declick = state.ini_config.declick;
+            } else if vx <= 477 {
+                state.toggle_dehiss();
+                self.setup_cfg.dehiss = state.ini_config.dehiss;
+            } else {
+                state.toggle_amiga_filter();
+                self.setup_cfg.amiga_filter = state.ini_config.amiga_filter;
+            }
             let _ = state
                 .ini_config
                 .save_to_file(&Mod4WinIniConfig::default_ini_path());
@@ -2158,69 +2153,45 @@ fn draw_classic_lcd_sprite_7px(
     }
 }
 
-/// Zeichnet das `DClick`-Badge (`22x7`) im linken Teil des ehemaligen `TMode`-Felds (`445, 71`).
-pub(crate) fn draw_classic_declick_badge(
+/// Zeichnet die 3 separaten Ein/Aus-Schalter `DC` (`445, 71`), `DH` (`463, 71`) und `AMI` (`481, 71`)
+/// im ehemaligen `TMode`-Feld des Classic Skins (`445..498, 70..80`).
+pub(crate) fn draw_classic_dc_dh_ami_badges(
     frame: &mut [u8],
     dw: u32,
     dh: u32,
-    x: i32,
-    y: i32,
-    active: bool,
-) {
-    const DCLICK_SPRITE: [&str; 7] = [
-        "###   ### #   #     # ",
-        "#  # #    #         # ",
-        "#  # #    #   #  ## # #",
-        "#  # #    #   # #   ## ",
-        "#  # #    #   # #   ## ",
-        "#  # #    #   # #   # #",
-        "###   ###  #  #  ## # #",
-    ];
-    draw_classic_lcd_sprite_7px(frame, dw, dh, x, y, &DCLICK_SPRITE, active);
-}
-
-/// Zeichnet das Rauschfilter-Badge (`DeHiss` / `Amiga` / `Am+DH`, `24x7`) im rechten Teil des ehemaligen `TMode`-Felds (`474, 71`).
-pub(crate) fn draw_classic_filter_badge(
-    frame: &mut [u8],
-    dw: u32,
-    dh: u32,
-    x: i32,
-    y: i32,
+    declick: bool,
     dehiss: bool,
     amiga: bool,
 ) {
-    const DEHISS_SPRITE: [&str; 7] = [
-        "###       #  #   #      ",
-        "#  #      #  #          ",
-        "#  #  ##  ####   #  ##  ##",
-        "#  # #  # #  #   # #   #  ",
-        "#  # #### #  #   #  #   # ",
-        "#  # #    #  #   #   #   #",
-        "###   ##  #  #   # ##  ## ",
+    const DC_SPRITE: [&str; 7] = [
+        "####   ####",
+        "#   # #    ",
+        "#   # #    ",
+        "#   # #    ",
+        "#   # #    ",
+        "#   # #    ",
+        "####   ####",
     ];
-    const AMIGA_SPRITE: [&str; 7] = [
-        " ###          #         ",
-        "#   #                   ",
-        "#   # ### ##  #  ###  ##",
-        "##### #  #  # # #  # #  #",
-        "#   # #  #  # #  ###  ###",
-        "#   # #  #  # #    # #  #",
-        "#   # #  #  # # ###   ###",
+    const DH_SPRITE: [&str; 7] = [
+        "####  #   #",
+        "#   # #   #",
+        "#   # #   #",
+        "#   # #####",
+        "#   # #   #",
+        "#   # #   #",
+        "####  #   #",
     ];
-    const AM_DH_SPRITE: [&str; 7] = [
-        " ##             ###  #  #",
-        "#  #            #  # #  #",
-        "#  # ###    #   #  # #  #",
-        "#### # # # ###  #  # ####",
-        "#  # # # #  #   #  # #  #",
-        "#  # # # #      #  # #  #",
-        "#  # #   #      ###  #  #",
+    const AMI_SPRITE: [&str; 7] = [
+        " ###  #   #  ### ",
+        "#   # ## ##   #  ",
+        "#   # # # #   #  ",
+        "##### # # #   #  ",
+        "#   # #   #   #  ",
+        "#   # #   #   #  ",
+        "#   # #   #  ### ",
     ];
 
-    match (dehiss, amiga) {
-        (false, false) => draw_classic_lcd_sprite_7px(frame, dw, dh, x, y, &DEHISS_SPRITE, false),
-        (true, false) => draw_classic_lcd_sprite_7px(frame, dw, dh, x, y, &DEHISS_SPRITE, true),
-        (false, true) => draw_classic_lcd_sprite_7px(frame, dw, dh, x, y, &AMIGA_SPRITE, true),
-        (true, true) => draw_classic_lcd_sprite_7px(frame, dw, dh, x, y, &AM_DH_SPRITE, true),
-    }
+    draw_classic_lcd_sprite_7px(frame, dw, dh, 445, 71, &DC_SPRITE, declick);
+    draw_classic_lcd_sprite_7px(frame, dw, dh, 463, 71, &DH_SPRITE, dehiss);
+    draw_classic_lcd_sprite_7px(frame, dw, dh, 481, 71, &AMI_SPRITE, amiga);
 }

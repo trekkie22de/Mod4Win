@@ -3244,22 +3244,21 @@ impl Mod4WinApp {
                 self.setup_cfg.clipping = state.ini_config.clipping;
                 return;
             }
-            // Rechtsklick auf DeClick (445..471, 69..81) oder Rauschfilter (472..500, 69..81) im Classic Skin
-            if (69..=81).contains(&vy) {
-                if (445..=471).contains(&vx) {
-                    let mut state = self.shared_state.lock().unwrap();
+            // Rechtsklick auf DC (444..459), DH (460..477) oder AMI (478..500) im Classic Skin
+            if (69..=81).contains(&vy) && (444..=500).contains(&vx) {
+                let mut state = self.shared_state.lock().unwrap();
+                if vx <= 459 {
                     state.toggle_declick();
                     self.setup_cfg.declick = state.ini_config.declick;
-                    let _ = state.ini_config.save_to_file(&Mod4WinIniConfig::default_ini_path());
-                    return;
-                } else if (472..=500).contains(&vx) {
-                    let mut state = self.shared_state.lock().unwrap();
-                    state.step_noise_filter(-1);
+                } else if vx <= 477 {
+                    state.toggle_dehiss();
                     self.setup_cfg.dehiss = state.ini_config.dehiss;
+                } else {
+                    state.toggle_amiga_filter();
                     self.setup_cfg.amiga_filter = state.ini_config.amiga_filter;
-                    let _ = state.ini_config.save_to_file(&Mod4WinIniConfig::default_ini_path());
-                    return;
                 }
+                let _ = state.ini_config.save_to_file(&Mod4WinIniConfig::default_ini_path());
+                return;
             }
             // Rechtsklick auf CPU-Prozentanzeige (`Main_Percnt`) oder CPU-Balken (`PBar`) schaltet die Retro-CPU-Profile rückwärts durch
             if ((368..=374).contains(&vx) && (29..=82).contains(&vy))
