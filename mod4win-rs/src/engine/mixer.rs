@@ -88,14 +88,17 @@ pub struct AmigaFilterState {
     pub active: bool,
 }
 
-/// Zustand einer phasenkompensierten 2x2-Pol TPT-SVF-Frequenzweichenstufe (`CompSvfStage`).
+/// Zustand einer resonanzfreien 2-Pol TPT-RC-Weichenstufe (`CompSvfStage`) mit separatem
+/// 2-Pol Butterworth-SVF-Sidechain-Hochpass.
 ///
-/// Realisiert die Übertragungsfunktion
-/// $$H_{\text{HP,comp}}(\tilde{s}) = \frac{\tilde{s}^4 + 2k\tilde{s}^3}{(1 + k\tilde{s} + \tilde{s}^2)^2}, \qquad B(\tilde{s}) = 1 - H_{\text{HP,comp}}(\tilde{s})$$
-/// mit:
-/// - exakter algebraischer Rekonstruktion $B + H_{\text{HP,comp}} \equiv 1$,
-/// - steiler `-18 dB/Oktave` ($O(\tilde{\omega}^3)$) Sperrdämpfung tiefer Grundtöne im Hochpasszweig, und
-/// - verschwindendem Phasenfehler 1. Ordnung ($O(1/\tilde{\omega}^2)$) im Hochfrequenzbereich.
+/// - **Audio-Pfad (`process_rc2`)**: Zwei kaskadierte passive 1-Pol TPT-RC-Tiefpässe ($Q = 0.5$,
+///   rein reelle Pole):
+///   $$H_{\text{LP}}(s) = \frac{1}{(1 + s/\omega_c)^2}, \qquad H_{\text{HP}}(s) = 1 - H_{\text{LP}}(s)$$
+///   Garantiert exakte algebraische Rekonstruktion (`lp + hp == u`) bei $G = 1$ sowie streng
+///   resonanzfreien Verlauf $|H_{\text{LP}}(i\omega) + G \cdot H_{\text{HP}}(i\omega)| \le 1.0$ (`0.00 dB` Peaking)
+///   für alle $G \in [0, 1]$.
+/// - **Sidechain-Detektor-Pfad (`process_sc_hp`)**: Steiler 2-Pol Butterworth TPT-SVF-Hochpass
+///   ausschließlich zur Tiefton-Unterdrückung im Hüllkurven-Detektor (liegt nicht im Audio-Pfad).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CompSvfStage {
     pub ic1_a: f64,
@@ -106,38 +109,38 @@ pub struct CompSvfStage {
 
 impl CompSvfStage {
     #[inline(always)]
-    pub fn process(&mut self, u: f64, a1: f64, a2: f64, a3: f64, k: f64, c2: f64) -> (f64, f64) {
-        // SVF A: 2-Pol Hochpass HP_a
-        let v3a = u - self.ic2_a;
-        let v1a = a1 * self.ic1_a + a2 * v3a;
-        let v2a = self.ic2_a + a2 * self.ic1_a + a3 * v3a;
-        self.ic1_a = 2.0 * v1a - self.ic1_a;
-        self.ic2_a = 2.0 * v2a - self.ic2_a;
-        let hp_a = u - k * v1a - v2a;
+    pub fn process_rc2(&mut self, u: f64, g: f64) -> (f64, f64) {
+        let v1 = (u - self.ic1_a) * g;
+        let lp1 = v1 + self.ic1_a;
+        self.ic1_a = lp1 + v1;
 
-        // SVF B: angewendet auf HP_a -> Phasenkompensation HP_b + 2*k*BP_b + c2*LP_b
-        let v3b = hp_a - self.ic2_b;
-        let v1b = a1 * self.ic1_b + a2 * v3b;
-        let v2b = self.ic2_b + a2 * self.ic1_b + a3 * v3b;
-        self.ic1_b = 2.0 * v1b - self.ic1_b;
-        self.ic2_b = 2.0 * v2b - self.ic2_b;
-        let hp_b = hp_a - k * v1b - v2b;
+        let v2 = (lp1 - self.ic2_a) * g;
+        let lp2 = v2 + self.ic2_a;
+        self.ic2_a = lp2 + v2;
 
-        let u_hp = hp_b + 2.0 * k * v1b + c2 * v2b;
-        let band_lp = u - u_hp;
-        (band_lp, u_hp)
+        (lp2, u - lp2)
+    }
+
+    #[inline(always)]
+    pub fn process_sc_hp(&mut self, u: f64, a1: f64, a2: f64, a3: f64, k: f64) -> f64 {
+        let v3 = u - self.ic2_b;
+        let v1 = a1 * self.ic1_b + a2 * v3;
+        let v2 = self.ic2_b + a2 * self.ic1_b + a3 * v3;
+        self.ic1_b = 2.0 * v1 - self.ic1_b;
+        self.ic2_b = 2.0 * v2 - self.ic2_b;
+        u - k * v1 - v2
     }
 }
 
-/// Zustand des modernen adaptiven 5-Band-Wiener-/Spektral-Denoisers (`DeHiss`) mit Transienten-Schutz.
+/// Zustand des modernen adaptiven Mehrband-Wiener-/Spektral-Denoisers (`DeHiss`) mit Transienten-Schutz.
 #[derive(Debug, Clone, Copy)]
 pub struct AdaptiveDeHissState {
-    /// 4 kaskadierte phasenkompensierte TPT-SVF-Frequenzweichenstufen (1000 Hz, 2100 Hz, 4200 Hz, 8400 Hz) für L & R.
+    /// 4 kaskadierte resonanzfreie TPT-RC-Weichenstufen + Sidechain-Hochpässe.
     pub xover_l: [CompSvfStage; 4],
     pub xover_r: [CompSvfStage; 4],
-    /// Grundton-/Tiefton-Hüllkurve (`< 1000 Hz`).
+    /// Grundton-/Mittelton-Hüllkurve (`< 2500 Hz`).
     pub env_low: f64,
-    /// Schnelle Hüllkurven der 4 oberen Bänder (`1000..2100`, `2100..4200`, `4200..8400`, `> 8400 Hz`).
+    /// Schnelle Hüllkurven der 4 oberen Hochton-Bänder (`2.5..4.4`, `4.4..7.2`, `7.2..11.0`, `> 11.0 kHz`).
     pub env_fast: [f64; 4],
     /// Langsame Hüllkurven der 4 oberen Bänder (für Spectral-Flux-Transienten-Erkennung).
     pub env_slow: [f64; 4],
@@ -159,8 +162,8 @@ impl Default for AdaptiveDeHissState {
             env_low: 0.0,
             env_fast: [0.0; 4],
             env_slow: [0.0; 4],
-            noise_floor: [1200.0, 1000.0, 900.0, 800.0],
-            smooth_gain: [0.50, 0.25, 0.18, 0.15],
+            noise_floor: [600.0, 550.0, 500.0, 450.0],
+            smooth_gain: [0.85, 0.70, 0.60, 0.50],
             transient_hold: 0.0,
             active: false,
         }
@@ -3127,22 +3130,27 @@ pub fn apply_post_filters(
             }
         }
 
-        // Zweifach kaskadierte phasenkompensierte TPT-SVF-Hauptweiche bei 1200 Hz
-        const F0_HZ: f64 = 1200.0;
-        const SVF_K: f64 = 0.65;
-        let f0_clamped = F0_HZ.min(nyq_limit);
-        let g0 = (std::f64::consts::PI * f0_clamped / sr).tan();
-        let svf_a1 = 1.0 / (1.0 + g0 * (g0 + SVF_K));
-        let svf_a2 = g0 * svf_a1;
-        let svf_a3 = g0 * svf_a2;
-
-        const SUB_XOVER_HZ: [f64; 3] = [2200.0, 4400.0, 8800.0];
-        let mut g_sub = [0.0f64; 3];
-        for i in 0..3 {
-            let f_clamped = SUB_XOVER_HZ[i].min(nyq_limit);
+        // Audio-Pfad: 4 parallele resonanzfreie 2-Pol TPT-RC-Tiefpässe (3200 Hz, 5000 Hz, 7800 Hz, 11500 Hz)
+        // Unterhalb von 3200 Hz (Grundtöne, Gesang, Snare-Body, Lead-Synths) bleibt das Signal ungedämpft in `b0`!
+        // Über Abel-Summation (`b0 = LP0, band0 = LP1 - LP0, ..., band3 = x - LP3` mit monotonen Gains)
+        // gilt nach Dreiecksungleichung exakt `|H(jw)| <= 1.0000` (0.00 dB Peaking) für alle Frequenzen!
+        const XOVER_HZ: [f64; 4] = [2800.0, 4400.0, 7000.0, 10800.0];
+        let mut g_rc = [0.0f64; 4];
+        for i in 0..4 {
+            let f_clamped = XOVER_HZ[i].min(nyq_limit);
             let wd = (std::f64::consts::PI * f_clamped / sr).tan();
-            g_sub[i] = wd / (1.0 + wd);
+            g_rc[i] = wd / (1.0 + wd);
         }
+
+        // Sidechain-Detektor-Pfad: Steiler 4-Pol Butterworth-Hochpass bei 2700 Hz (nur für die Hüllkurven-Messung,
+        // damit tiefe Bässe und Mitten > 80 dB im Detektor gedämpft werden, ohne den Audio-Signalweg zu verfärben!)
+        const SC_HP_HZ: f64 = 2700.0;
+        const SC_K: f64 = std::f64::consts::SQRT_2;
+        let sc_f = SC_HP_HZ.min(nyq_limit);
+        let sc_g = (std::f64::consts::PI * sc_f / sr).tan();
+        let sc_a1 = 1.0 / (1.0 + sc_g * (sc_g + SC_K));
+        let sc_a2 = sc_g * sc_a1;
+        let sc_a3 = sc_g * sc_a2;
 
         // Zeitkonstanten für schnelle/langsame Hüllkurven, MCRA-Noise-Tracker und Gain-Ballistik
         let att_fast = 1.0 - (-1.0 / (0.0005 * sr)).exp();
@@ -3150,69 +3158,84 @@ pub fn apply_post_filters(
         let att_slow = 1.0 - (-1.0 / (0.0120 * sr)).exp();
         let rel_slow = 1.0 - (-1.0 / (0.0600 * sr)).exp();
         let noise_down = 1.0 - (-1.0 / (0.0080 * sr)).exp();
-        let noise_up = 1.0 - (-1.0 / (0.3800 * sr)).exp();
+        let noise_up = 1.0 - (-1.0 / (0.5000 * sr)).exp();
         let gain_att = 1.0 - (-1.0 / (0.0005 * sr)).exp();
-        let gain_rel = 1.0 - (-1.0 / (0.0100 * sr)).exp();
-        let trans_decay = (-1.0 / (0.0060 * sr)).exp();
+        let gain_rel = 1.0 - (-1.0 / (0.0150 * sr)).exp();
+        let trans_decay = (-1.0 / (0.0080 * sr)).exp();
 
-        let quant_scale = if has_8bit_active { 1.0 } else { 0.45 };
-        const QUANT_RATIOS: [f64; 4] = [0.028, 0.045, 0.065, 0.085];
-        const ABS_FLOORS: [f64; 4] = [800.0, 750.0, 650.0, 550.0];
-        const OVER_SUB: [f64; 4] = [1.35, 1.65, 1.95, 2.25];
-        const G_MIN: [f64; 4] = [0.05, 0.04, 0.03, 0.02];
+        let quant_scale = if has_8bit_active { 1.0 } else { 0.40 };
+        const QUANT_RATIOS: [f64; 4] = [0.016, 0.024, 0.030, 0.036];
+        const ABS_FLOORS: [f64; 4] = [600.0, 550.0, 500.0, 450.0];
+        const NOISE_CEIL: [f64; 4] = [2500.0, 2200.0, 1800.0, 1500.0];
+        const OVER_SUB: [f64; 4] = [1.25, 1.50, 1.75, 2.00];
+        // Wenn zusätzlich der Amiga-Tiefpass aktiv ist, arbeitet DeHiss dezenter, damit sich beide Filter ergänzen
+        let g_min_table: [f64; 4] = if use_amiga {
+            [0.75, 0.48, 0.30, 0.20]
+        } else {
+            [0.44, 0.16, 0.10, 0.06]
+        };
 
         for frame in &mut mem.mix_buffer[..limit] {
             let xl = frame.left as f64;
             let xr = frame.right as f64;
 
-            // Doppelte phasenkompensierte TPT-SVF-Hochpasskaskade bei 1150 Hz:
-            // u1 = H_HP,comp1(H_HP,comp0(x)), b0 = x - u1 -> b0 + u1 == x exakt!
-            let (_, ua_l) = dh.xover_l[0].process(xl, svf_a1, svf_a2, svf_a3, SVF_K, 0.0);
-            let (_, u1_l) = dh.xover_l[1].process(ua_l, svf_a1, svf_a2, svf_a3, SVF_K, 0.0);
-            let b0_l = xl - u1_l;
+            // A) Resonanzfreier paralleler Audio-Signalweg (`b0 + band0 + band1 + band2 + band3 == x` exakt, <= 0.00 dB überall):
+            let (lp0_l, _) = dh.xover_l[0].process_rc2(xl, g_rc[0]);
+            let (lp1_l, _) = dh.xover_l[1].process_rc2(xl, g_rc[1]);
+            let (lp2_l, _) = dh.xover_l[2].process_rc2(xl, g_rc[2]);
+            let (lp3_l, _) = dh.xover_l[3].process_rc2(xl, g_rc[3]);
 
-            let (_, ua_r) = dh.xover_r[0].process(xr, svf_a1, svf_a2, svf_a3, SVF_K, 0.0);
-            let (_, u1_r) = dh.xover_r[1].process(ua_r, svf_a1, svf_a2, svf_a3, SVF_K, 0.0);
-            let b0_r = xr - u1_r;
+            let (lp0_r, _) = dh.xover_r[0].process_rc2(xr, g_rc[0]);
+            let (lp1_r, _) = dh.xover_r[1].process_rc2(xr, g_rc[1]);
+            let (lp2_r, _) = dh.xover_r[2].process_rc2(xr, g_rc[2]);
+            let (lp3_r, _) = dh.xover_r[3].process_rc2(xr, g_rc[3]);
 
-            // Komplementäre TPT-Aufspaltung von u1 in 4 Hochfrequenz-Subbänder (1200..2200, 2200..4400, 4400..8800, > 8800 Hz)
-            let gs0 = g_sub[0];
-            let v0l = (u1_l - dh.xover_l[2].ic1_a) * gs0;
-            let band0_l = v0l + dh.xover_l[2].ic1_a;
-            dh.xover_l[2].ic1_a = band0_l + v0l;
-            let u2_l = u1_l - band0_l;
+            let b0_l = lp0_l;
+            let b0_r = lp0_r;
+            let bands_l = [lp1_l - lp0_l, lp2_l - lp1_l, lp3_l - lp2_l, xl - lp3_l];
+            let bands_r = [lp1_r - lp0_r, lp2_r - lp1_r, lp3_r - lp2_r, xr - lp3_r];
 
-            let v0r = (u1_r - dh.xover_r[2].ic1_a) * gs0;
-            let band0_r = v0r + dh.xover_r[2].ic1_a;
-            dh.xover_r[2].ic1_a = band0_r + v0r;
-            let u2_r = u1_r - band0_r;
+            // B) Steiler 4-Pol Sidechain-Detektor (unterdrückt < 2400 Hz Bässe um > 80 dB für präzise Rauschmessung):
+            let sc_l1 = dh.xover_l[0].process_sc_hp(xl, sc_a1, sc_a2, sc_a3, SC_K);
+            let sc_l2 = dh.xover_l[1].process_sc_hp(sc_l1, sc_a1, sc_a2, sc_a3, SC_K);
+            let sc_r1 = dh.xover_r[0].process_sc_hp(xr, sc_a1, sc_a2, sc_a3, SC_K);
+            let sc_r2 = dh.xover_r[1].process_sc_hp(sc_r1, sc_a1, sc_a2, sc_a3, SC_K);
 
-            let gs1 = g_sub[1];
-            let v1l = (u2_l - dh.xover_l[2].ic2_a) * gs1;
-            let band1_l = v1l + dh.xover_l[2].ic2_a;
-            dh.xover_l[2].ic2_a = band1_l + v1l;
-            let u3_l = u2_l - band1_l;
+            // Sidechain-Aufspaltung in 4 Detektor-Bänder über die freien `ic1_b`/`ic2_b` Zustandsspeicher von Stufe 2 & 3
+            let v0_l = (sc_l2 - dh.xover_l[2].ic1_b) * g_rc[1];
+            let sc_b0_l = v0_l + dh.xover_l[2].ic1_b;
+            dh.xover_l[2].ic1_b = sc_b0_l + v0_l;
+            let sc_u2_l = sc_l2 - sc_b0_l;
 
-            let v1r = (u2_r - dh.xover_r[2].ic2_a) * gs1;
-            let band1_r = v1r + dh.xover_r[2].ic2_a;
-            dh.xover_r[2].ic2_a = band1_r + v1r;
-            let u3_r = u2_r - band1_r;
+            let v1_l = (sc_u2_l - dh.xover_l[2].ic2_b) * g_rc[2];
+            let sc_b1_l = v1_l + dh.xover_l[2].ic2_b;
+            dh.xover_l[2].ic2_b = sc_b1_l + v1_l;
+            let sc_u3_l = sc_u2_l - sc_b1_l;
 
-            let gs2 = g_sub[2];
-            let v2l = (u3_l - dh.xover_l[3].ic1_a) * gs2;
-            let band2_l = v2l + dh.xover_l[3].ic1_a;
-            dh.xover_l[3].ic1_a = band2_l + v2l;
-            let band3_l = u3_l - band2_l;
+            let v2_l = (sc_u3_l - dh.xover_l[3].ic1_b) * g_rc[3];
+            let sc_b2_l = v2_l + dh.xover_l[3].ic1_b;
+            dh.xover_l[3].ic1_b = sc_b2_l + v2_l;
+            let sc_b3_l = sc_u3_l - sc_b2_l;
 
-            let v2r = (u3_r - dh.xover_r[3].ic1_a) * gs2;
-            let band2_r = v2r + dh.xover_r[3].ic1_a;
-            dh.xover_r[3].ic1_a = band2_r + v2r;
-            let band3_r = u3_r - band2_r;
+            let v0_r = (sc_r2 - dh.xover_r[2].ic1_b) * g_rc[1];
+            let sc_b0_r = v0_r + dh.xover_r[2].ic1_b;
+            dh.xover_r[2].ic1_b = sc_b0_r + v0_r;
+            let sc_u2_r = sc_r2 - sc_b0_r;
 
-            let bands_l = [band0_l, band1_l, band2_l, band3_l];
-            let bands_r = [band0_r, band1_r, band2_r, band3_r];
+            let v1_r = (sc_u2_r - dh.xover_r[2].ic2_b) * g_rc[2];
+            let sc_b1_r = v1_r + dh.xover_r[2].ic2_b;
+            dh.xover_r[2].ic2_b = sc_b1_r + v1_r;
+            let sc_u3_r = sc_u2_r - sc_b1_r;
 
-            // Stereo-gekoppelte Tiefton-Hüllkurve (< 850 Hz)
+            let v2_r = (sc_u3_r - dh.xover_r[3].ic1_b) * g_rc[3];
+            let sc_b2_r = v2_r + dh.xover_r[3].ic1_b;
+            dh.xover_r[3].ic1_b = sc_b2_r + v2_r;
+            let sc_b3_r = sc_u3_r - sc_b2_r;
+
+            let sc_bands_l = [sc_b0_l, sc_b1_l, sc_b2_l, sc_b3_l];
+            let sc_bands_r = [sc_b0_r, sc_b1_r, sc_b2_r, sc_b3_r];
+
+            // Stereo-gekoppelte Grund-/Mittelton-Hüllkurve (< 2500 Hz)
             let e0 = b0_l.abs().max(b0_r.abs());
             let c0 = if e0 > dh.env_low { att_fast } else { rel_fast };
             dh.env_low += c0 * (e0 - dh.env_low);
@@ -3220,7 +3243,7 @@ pub fn apply_post_filters(
             // Hüllkurven & Spectral-Flux für die 4 oberen Bänder aktualisieren
             let mut hf_flux_triggered = false;
             for b in 0..4 {
-                let eb = bands_l[b].abs().max(bands_r[b].abs());
+                let eb = sc_bands_l[b].abs().max(sc_bands_r[b].abs());
                 let cf = if eb > dh.env_fast[b] { att_fast } else { rel_fast };
                 dh.env_fast[b] += cf * (eb - dh.env_fast[b]);
 
@@ -3228,21 +3251,19 @@ pub fn apply_post_filters(
                 dh.env_slow[b] += cs * (eb - dh.env_slow[b]);
 
                 // Transienten-Detektor in den Präsenz-/Brillanz-Bändern (Hi-Hats, Snares, Cymbals)
-                if b >= 1
-                    && dh.env_fast[b] > 4000.0
-                    && dh.env_fast[b] > dh.env_slow[b] * 2.5 + dh.noise_floor[b] * 1.8
-                    && (dh.env_fast[2] + dh.env_fast[3]) > dh.env_low * 0.28
+                if dh.env_fast[b] > 3500.0
+                    && dh.env_fast[b] > dh.env_slow[b] * 2.2 + dh.noise_floor[b] * 1.6
                 {
                     hf_flux_triggered = true;
                 }
 
-                // Minimum-Statistics / MCRA stationärer Rausch-Tracker
+                // Minimum-Statistics Rausch-Tracker (gedeckelt auf NOISE_CEIL, damit gehaltene Melodien/Synths nie als Rauschen gelernt werden)
                 if dh.env_fast[b] < dh.noise_floor[b] {
                     dh.noise_floor[b] += noise_down * (dh.env_fast[b] - dh.noise_floor[b]);
-                } else if !hf_flux_triggered {
+                } else if !hf_flux_triggered && dh.env_fast[b] < NOISE_CEIL[b] * 1.5 {
                     dh.noise_floor[b] += noise_up * (dh.env_fast[b] - dh.noise_floor[b]);
                 }
-                dh.noise_floor[b] = dh.noise_floor[b].max(ABS_FLOORS[b]);
+                dh.noise_floor[b] = dh.noise_floor[b].clamp(ABS_FLOORS[b], NOISE_CEIL[b]);
             }
 
             if hf_flux_triggered {
@@ -3251,18 +3272,18 @@ pub fn apply_post_filters(
                 dh.transient_hold *= trans_decay;
             }
 
-            // Signal-abhängiges 8-Bit-Quantisierungsrauschen + Wiener-Filterung pro Band
-            let ref_low_mid = dh.env_low + 0.45 * dh.env_fast[0];
+            // Signal-abhängiges 8-Bit-Quantisierungsrauschen + sanfte Wiener-Filterung pro Hochtonband
             let mut out_l = b0_l;
             let mut out_r = b0_r;
+            let mut prev_g = 1.0f64;
 
             for b in 0..4 {
-                let n_quant = ref_low_mid * QUANT_RATIOS[b] * quant_scale;
+                let n_quant = dh.env_low * QUANT_RATIOS[b] * quant_scale;
                 let n_est = dh.noise_floor[b].max(n_quant).max(ABS_FLOORS[b]);
                 let snr = dh.env_fast[b] / (n_est + 1.0);
                 let xi = (snr - OVER_SUB[b]).max(0.0);
                 let wiener = (xi * xi) / (xi * xi + 1.0);
-                let g_min = G_MIN[b];
+                let g_min = g_min_table[b];
                 let target_g = g_min + (1.0 - g_min) * wiener.max(dh.transient_hold);
                 let cg = if target_g > dh.smooth_gain[b] {
                     gain_att
@@ -3270,9 +3291,12 @@ pub fn apply_post_filters(
                     gain_rel
                 };
                 dh.smooth_gain[b] += cg * (target_g - dh.smooth_gain[b]);
+                // Monotone Abel-Summations-Bedingung (`1.0 >= g0 >= g1 >= g2 >= g3`) garantiert `|H(jw)| <= 1.0`
+                let eff_g = dh.smooth_gain[b].min(prev_g);
+                prev_g = eff_g;
 
-                out_l += bands_l[b] * dh.smooth_gain[b];
-                out_r += bands_r[b] * dh.smooth_gain[b];
+                out_l += bands_l[b] * eff_g;
+                out_r += bands_r[b] * eff_g;
             }
 
             frame.left = out_l.round().clamp(i32::MIN as f64, i32::MAX as f64) as i32;
@@ -3280,20 +3304,26 @@ pub fn apply_post_filters(
         }
     }
 
-    // 2. Authentischer Amiga-Paula-Tiefpassfilter (A500 4.42 kHz 1-Pol RC + ~3.275 kHz 2-Pol Sallen-Key LED-Filter)
+    // 2. Authentischer Amiga-Paula-Tiefpassfilter (offene, musikalische Abstimmung ohne "Telefon-Decke")
     if use_amiga {
         let af = &mut mem.amiga_filter;
         af.active = true;
 
-        // Stufe 1: Statischer Amiga-RC-Rekonstruktionsfilter (fc = 4421 Hz, 6 dB/Okt)
-        let fc_rc = 4421.0f64.min(nyq_limit);
+        // Wenn DeHiss bereits das hochfrequente Rauschen absenkt, nutzt der Amiga-Filter eine höhere,
+        // seidige Analog-Grenzfrequenz (6.4 kHz / 5.6 kHz), damit sich beide Filter nicht gegenseitig abdunkeln.
+        let (fc_rc_hz, fc_led_hz) = if use_dehiss {
+            (6400.0f64, 5600.0f64)
+        } else {
+            (5200.0f64, 4400.0f64)
+        };
+
+        let fc_rc = fc_rc_hz.min(nyq_limit);
         let g_rc_tan = (std::f64::consts::PI * fc_rc / sr).tan();
         let g_rc = g_rc_tan / (1.0 + g_rc_tan);
 
-        // Stufe 2: Schaltbarer Amiga "Power-LED" Sallen-Key Tiefpass (fc = 3275 Hz, Q = 0.76, 12 dB/Okt)
-        let fc_led = 3275.0f64.min(nyq_limit);
+        let fc_led = fc_led_hz.min(nyq_limit);
         let g = (std::f64::consts::PI * fc_led / sr).tan();
-        let k = 1.0 / 0.76; // Dämpfung k = 1/Q (leicht warme Sallen-Key-Charakteristik)
+        let k = 1.0 / 0.71;
         let a1 = 1.0 / (1.0 + g * (g + k));
         let a2 = g * a1;
         let a3 = g * a2;
@@ -4144,21 +4174,18 @@ mod tests {
         st_dh.sound_settings.set_dehiss(true);
 
         let chunk = 512usize;
-        let mut hf_energy_in = 0.0f64;
-        let mut hf_energy_out = 0.0f64;
-        let mut lf_energy_in = 0.0f64;
-        let mut lf_energy_out = 0.0f64;
+        let mut hf_sin_corr = 0.0f64;
+        let mut hf_cos_corr = 0.0f64;
+        let mut lf_sin_corr = 0.0f64;
+        let mut lf_cos_corr = 0.0f64;
+        let mut corr_samples = 0usize;
 
         for block in 0..(frames / chunk) {
-            let mut pure_lf = vec![0.0f32; chunk];
-            let mut pure_hf = vec![0.0f32; chunk];
             for i in 0..chunk {
                 let sample_idx = block * chunk + i;
                 let t = (sample_idx as f32) / (sr as f32);
                 let lf = (2.0 * std::f32::consts::PI * 220.0 * t).sin() * 120_000.0;
                 let hf = (2.0 * std::f32::consts::PI * 6200.0 * t).sin() * 1_200.0;
-                pure_lf[i] = lf;
-                pure_hf[i] = hf;
                 let tot = (lf + hf).round() as i32;
                 m_dh.mix_buffer[i] = StereoSample32 {
                     left: tot,
@@ -4168,20 +4195,25 @@ mod tests {
             apply_post_filters(&st_dh, &mut m_dh, chunk);
             if block >= 2 {
                 for i in 0..chunk {
-                    let out = m_dh.mix_buffer[i].left as f32;
-                    let resid_hf = (out - pure_lf[i]) as f64;
-                    hf_energy_in += (pure_hf[i] as f64).powi(2);
-                    hf_energy_out += resid_hf.powi(2);
-                    lf_energy_in += (pure_lf[i] as f64).powi(2);
-                    lf_energy_out += (out as f64).powi(2);
+                    let sample_idx = block * chunk + i;
+                    let t = (sample_idx as f64) / (sr as f64);
+                    let out = m_dh.mix_buffer[i].left as f64;
+                    hf_sin_corr += out * (2.0 * std::f64::consts::PI * 6200.0 * t).sin();
+                    hf_cos_corr += out * (2.0 * std::f64::consts::PI * 6200.0 * t).cos();
+                    lf_sin_corr += out * (2.0 * std::f64::consts::PI * 220.0 * t).sin();
+                    lf_cos_corr += out * (2.0 * std::f64::consts::PI * 220.0 * t).cos();
+                    corr_samples += 1;
                 }
             }
         }
 
-        let hf_rms_ratio = (hf_energy_out / hf_energy_in).sqrt();
-        let lf_rms_ratio = (lf_energy_out / lf_energy_in).sqrt();
+        let n_f = corr_samples as f64;
+        let hf_amp_out = 2.0 * (hf_sin_corr.powi(2) + hf_cos_corr.powi(2)).sqrt() / n_f;
+        let lf_amp_out = 2.0 * (lf_sin_corr.powi(2) + lf_cos_corr.powi(2)).sqrt() / n_f;
+        let hf_rms_ratio = hf_amp_out / 1_200.0;
+        let lf_rms_ratio = lf_amp_out / 120_000.0;
         assert!(
-            hf_rms_ratio < 0.25,
+            hf_rms_ratio < 0.28,
             "DeHiss muss hochfrequentes Quantisierungsrauschen stark dämpfen (hf_rms_ratio = {:.3})",
             hf_rms_ratio
         );
@@ -4189,6 +4221,38 @@ mod tests {
             (lf_rms_ratio - 1.0).abs() < 0.05,
             "DeHiss darf den 220-Hz-Grundton nicht verfälschen (lf_rms_ratio = {:.3})",
             lf_rms_ratio
+        );
+
+        // 3b. Mittelton-Neutralität (1200 Hz / 1500 Hz):
+        // Darf weder resonantes Peaking (> 1.01) noch starke Telefon-Bedämpfung (< 0.78) erzeugen!
+        let mut m_mid = DacMixMemory::default();
+        let mut mid_sq = 0.0f64;
+        let mut mid_cnt = 0usize;
+        for block in 0..6 {
+            for i in 0..chunk {
+                let t = ((block * chunk + i) as f32) / (sr as f32);
+                let v = (2.0 * std::f32::consts::PI * 1400.0 * t).sin() * 80_000.0;
+                m_mid.mix_buffer[i] = StereoSample32 {
+                    left: v as i32,
+                    right: v as i32,
+                };
+            }
+            apply_post_filters(&st_dh, &mut m_mid, chunk);
+            if block >= 2 {
+                for i in 0..chunk {
+                    let y = m_mid.mix_buffer[i].left as f64;
+                    mid_sq += y * y;
+                    mid_cnt += 1;
+                }
+            }
+        }
+        let mid_rms = (mid_sq / (mid_cnt as f64)).sqrt();
+        let in_mid_rms = 80_000.0 / std::f64::consts::SQRT_2;
+        let mid_ratio = mid_rms / in_mid_rms;
+        assert!(
+            (0.80..=1.01).contains(&mid_ratio),
+            "DeHiss muss bei 1400 Hz resonanzfrei und offen bleiben (mid_ratio = {:.3})",
+            mid_ratio
         );
 
         // 4. Transienten-Schutz (Hi-Hat / Snare Burst):

@@ -34,10 +34,18 @@ pub fn pcm8_to_i16(b: u8) -> i16 {
 pub fn apply_live_sound_settings(seq: &mut Sequencer, new_settings: SoundSettings) {
     let old_settings = seq.module.state.sound_settings;
 
-    // 1. Kosmetische/historische Optionen, Clean-Mode & De-Click übernehmen (TimerMode, CleanMode, DeClick, nBuffers)
+    // 1. Kosmetische/historische Optionen, Clean-Mode, De-Click & Post-Filter übernehmen
     seq.module.state.sound_settings.set_timer_mode(new_settings.timer_mode());
     seq.module.state.sound_settings.set_clean_mode(new_settings.clean_mode());
     seq.module.state.sound_settings.set_declick(new_settings.declick());
+    seq.module
+        .state
+        .sound_settings
+        .set_amiga_filter(new_settings.amiga_filter());
+    seq.module
+        .state
+        .sound_settings
+        .set_dehiss(new_settings.dehiss());
     seq.module.state.sound_settings.n_buffers = new_settings.n_buffers.clamp(1, 99);
     // Im Live-Soundkarten-Betrieb muss `device_id` immer `DEV_DAC` (0) sein, damit `process_sample_block`
     // keine 32-KB-HDD-Block-Teilung ausführt.
