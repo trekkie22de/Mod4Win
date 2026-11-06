@@ -3304,58 +3304,56 @@ pub fn apply_post_filters(
         }
     }
 
-    // 2. Authentischer Amiga-Paula-Tiefpassfilter (offene, musikalische Abstimmung ohne "Telefon-Decke")
+    // 2. Amiga "A1200 / Paula Warmth" Filter (Sanftes -6 dB High-Shelf + 11.5 kHz Anti-Staircase-Abrundung)
+    //    Verzichtet bewusst auf den dumpfen 3,1-kHz-A500-LED-Sperrfilter und mischt stattdessen den
+    //    4,5-kHz-Paula-RC-Zweig zu 50 % mit dem Originalsignal (entspricht einem analogen -6 dB High-Shelf
+    //    ab ~6 kHz), gefolgt von einer sanften Glättung der allerhöchsten 8-Bit-Treppenstufen-Spitzen (> 11,5 kHz).
     if use_amiga {
         let af = &mut mem.amiga_filter;
         af.active = true;
 
-        // Wenn DeHiss bereits das hochfrequente Rauschen absenkt, nutzt der Amiga-Filter eine höhere,
-        // seidige Analog-Grenzfrequenz (6.4 kHz / 5.6 kHz), damit sich beide Filter nicht gegenseitig abdunkeln.
-        let (fc_rc_hz, fc_led_hz) = if use_dehiss {
-            (6400.0f64, 5600.0f64)
+        // Stufe 1: Paula-RC-Zweig (4500 Hz) mit Parallel-Blend -> sanftes High-Shelf ab ~6 kHz
+        let fc_shelf = 4500.0f64.min(nyq_limit);
+        let g_sh_tan = (std::f64::consts::PI * fc_shelf / sr).tan();
+        let g_sh = g_sh_tan / (1.0 + g_sh_tan);
+        // Wenn DeHiss bereits aktiv ist, noch etwas transparenter mischen (58 % Dry / 42 % Wet)
+        let (dry_mix, wet_mix) = if use_dehiss {
+            (0.58f64, 0.42f64)
         } else {
-            (5200.0f64, 4400.0f64)
+            (0.48f64, 0.52f64)
         };
 
-        let fc_rc = fc_rc_hz.min(nyq_limit);
-        let g_rc_tan = (std::f64::consts::PI * fc_rc / sr).tan();
-        let g_rc = g_rc_tan / (1.0 + g_rc_tan);
-
-        let fc_led = fc_led_hz.min(nyq_limit);
-        let g = (std::f64::consts::PI * fc_led / sr).tan();
-        let k = 1.0 / 0.71;
-        let a1 = 1.0 / (1.0 + g * (g + k));
-        let a2 = g * a1;
-        let a3 = g * a2;
+        // Stufe 2: Sanfter 1-Pol Top-End-Filter bei 11.5 kHz nur gegen harte Ultraschall-Treppenstufen
+        let fc_top = 11500.0f64.min(nyq_limit);
+        let g_top_tan = (std::f64::consts::PI * fc_top / sr).tan();
+        let g_top = g_top_tan / (1.0 + g_top_tan);
 
         for frame in &mut mem.mix_buffer[..limit] {
             let xl = frame.left as f64;
             let xr = frame.right as f64;
 
-            // 1-Pol RC Tiefpass
-            let vl_rc = (xl - af.rc_l) * g_rc;
+            // High-Shelf über 50/50 Paula-RC-Blend
+            let vl_rc = (xl - af.rc_l) * g_sh;
             let yl_rc = vl_rc + af.rc_l;
             af.rc_l = yl_rc + vl_rc;
+            let sh_l = dry_mix * xl + wet_mix * yl_rc;
 
-            let vr_rc = (xr - af.rc_r) * g_rc;
+            let vr_rc = (xr - af.rc_r) * g_sh;
             let yr_rc = vr_rc + af.rc_r;
             af.rc_r = yr_rc + vr_rc;
+            let sh_r = dry_mix * xr + wet_mix * yr_rc;
 
-            // 2-Pol Sallen-Key / ZDF-SVF Tiefpass
-            let v3_l = yl_rc - af.svf_ic2_l;
-            let v1_l = a1 * af.svf_ic1_l + a2 * v3_l;
-            let v2_l = af.svf_ic2_l + a2 * af.svf_ic1_l + a3 * v3_l;
-            af.svf_ic1_l = 2.0 * v1_l - af.svf_ic1_l;
-            af.svf_ic2_l = 2.0 * v2_l - af.svf_ic2_l;
+            // Sanfte Abrundung der allerhöchsten Treppenstufen-Spitzen (> 11.5 kHz)
+            let vl_top = (sh_l - af.svf_ic1_l) * g_top;
+            let out_l = vl_top + af.svf_ic1_l;
+            af.svf_ic1_l = out_l + vl_top;
 
-            let v3_r = yr_rc - af.svf_ic2_r;
-            let v1_r = a1 * af.svf_ic1_r + a2 * v3_r;
-            let v2_r = af.svf_ic2_r + a2 * af.svf_ic1_r + a3 * v3_r;
-            af.svf_ic1_r = 2.0 * v1_r - af.svf_ic1_r;
-            af.svf_ic2_r = 2.0 * v2_r - af.svf_ic2_r;
+            let vr_top = (sh_r - af.svf_ic1_r) * g_top;
+            let out_r = vr_top + af.svf_ic1_r;
+            af.svf_ic1_r = out_r + vr_top;
 
-            frame.left = v2_l.round().clamp(i32::MIN as f64, i32::MAX as f64) as i32;
-            frame.right = v2_r.round().clamp(i32::MIN as f64, i32::MAX as f64) as i32;
+            frame.left = out_l.round().clamp(i32::MIN as f64, i32::MAX as f64) as i32;
+            frame.right = out_r.round().clamp(i32::MIN as f64, i32::MAX as f64) as i32;
         }
     }
 }
@@ -4157,8 +4155,8 @@ mod tests {
             rms_250
         );
         assert!(
-            rms_7000 < rms_250 * 0.22,
-            "Amiga-Filter muss 7000 Hz stark dämpfen (rms_250 = {}, rms_7000 = {})",
+            (0.45..=0.68).contains(&(rms_7000 / rms_250)),
+            "Amiga-Warmth-Filter muss 7000 Hz sanft um ca. -5..-6 dB absenken statt dumpf abzuwürgen (rms_250 = {}, rms_7000 = {})",
             rms_250,
             rms_7000
         );
