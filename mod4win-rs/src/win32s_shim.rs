@@ -241,6 +241,16 @@ mod x86_retro_impl {
         unsafe { x87_cos(x as f64) as f32 }
     }
 
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn tan(x: f64) -> f64 {
+        unsafe { x87_sin(x) / x87_cos(x) }
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn tanf(x: f32) -> f32 {
+        unsafe { (x87_sin(x as f64) / x87_cos(x as f64)) as f32 }
+    }
+
     #[inline]
     unsafe fn x87_sqrt(x: f64) -> f64 {
         if x <= 0.0 {
