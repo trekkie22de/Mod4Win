@@ -17,8 +17,8 @@ use crate::engine::formats::it::{
     map_it_vol_cmd_to_m4w_effect, ItEnvelope, ItModuleData, ItNoteCell, ItSample,
 };
 use crate::engine::mixer::{
-    apply_click_removal_slide, mix_out_and_clip, process_surround_buffer, DacMixMemory,
-    MixOutputBuffer, StereoSample32,
+    apply_click_removal_slide, apply_post_filters, mix_out_and_clip, process_surround_buffer,
+    DacMixMemory, MixOutputBuffer, StereoSample32,
 };
 use crate::engine::types::{EngineState, MAX_M4W_CHANNELS, MAX_MIX_BUF_SAMPLES, MAX_PATTERNS};
 
@@ -2772,6 +2772,7 @@ impl ItEngine {
                     &mut state.buf_end,
                 );
             }
+            apply_post_filters(state, mem, buf_samples);
         }
 
         mix_out_and_clip(

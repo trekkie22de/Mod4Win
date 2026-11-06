@@ -226,7 +226,7 @@ impl Mod4WinApp {
             dh,
             22,
             4,
-            loc.tr_or("win", "setup_title", "MOD4WIN 3.00 Setup"),
+            loc.tr_or("win", "setup_title", "MOD4WIN 3.10 Setup"),
             [48, 56, 68, 255],
         );
         self.assets
@@ -453,18 +453,14 @@ impl Mod4WinApp {
             pan_pos,
             &self.assets.switch_bmp,
         );
-        let clip_pos = match (cfg.clipping, cfg.declick) {
-            (false, _) => 1,
-            (true, false) => 2,
-            (true, true) => 3,
-        };
+        let clip_pos = if cfg.clipping { 2 } else { 1 };
         draw_vswitch(
             frame,
             dw,
             dh,
             423,
-            cap_dy + 47,
-            3,
+            cap_dy + 55,
+            2,
             clip_pos,
             &self.assets.switch_bmp,
         );
@@ -1234,6 +1230,12 @@ impl Mod4WinApp {
             let old_playlist = st.playlist.clone();
             let old_idx = st.playlist_idx;
             let old_pos = st.curr_pos;
+            let live_declick = st.sound_settings.declick();
+            let live_amiga = st.sound_settings.amiga_filter();
+            let live_dehiss = st.sound_settings.dehiss();
+            self.setup_cfg.declick = live_declick;
+            self.setup_cfg.amiga_filter = live_amiga;
+            self.setup_cfg.dehiss = live_dehiss;
             st.ini_config = self.setup_cfg.clone();
             if st.ini_config.peaks.is_empty() {
                 st.ini_config.peaks = old_peaks;
@@ -1471,39 +1473,9 @@ impl Mod4WinApp {
                 return;
             }
 
-            // `bPAmp` / Clipping & De-Click (421..444, 58..100: 0 = Clip Off [vy < 76], 1 = Clip On [76..87], 2 = CL+DC [> 87])
-            if (421..=444).contains(&vx) && (58..=100).contains(&vy) {
-                let cur_vis: u8 = match (self.setup_cfg.clipping, self.setup_cfg.declick) {
-                    (false, _) => 0,
-                    (true, false) => 1,
-                    (true, true) => 2,
-                };
-                let clicked_vis: u8 = if vy < 76 {
-                    0
-                } else if vy <= 87 {
-                    1
-                } else {
-                    2
-                };
-                let next_vis = if clicked_vis == cur_vis {
-                    (cur_vis + 1) % 3
-                } else {
-                    clicked_vis
-                };
-                match next_vis {
-                    0 => {
-                        self.setup_cfg.clipping = false;
-                        self.setup_cfg.declick = false;
-                    }
-                    1 => {
-                        self.setup_cfg.clipping = true;
-                        self.setup_cfg.declick = false;
-                    }
-                    _ => {
-                        self.setup_cfg.clipping = true;
-                        self.setup_cfg.declick = true;
-                    }
-                }
+            // `bPAmp` / Clipping (421..444, 70..98)
+            if (421..=444).contains(&vx) && (70..=98).contains(&vy) {
+                self.setup_cfg.clipping = !self.setup_cfg.clipping;
                 self.sync_live_setup_to_state();
                 return;
             }

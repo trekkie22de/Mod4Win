@@ -50,7 +50,7 @@ impl Mod4WinApp {
         } else if !state.filename.is_empty() {
             state.filename.as_str()
         } else {
-            "MOD4WIN 3.00"
+            "MOD4WIN 3.10"
         };
         let scroll_ms = state.main_title_scroll_elapsed_ms();
         draw_bmp_text_16x20_marquee(
@@ -241,17 +241,12 @@ impl Mod4WinApp {
         }
 
         // 8. Interaktive Status-Symbole im rechten Display
-        // Clip / CL+DC (x_Qmix: 447, 35, 18x9 aus SH_REP_SCAN.bmp bzw. 23x7 CL+DC-Text bei (444, 35))
+        // Clip (x_Qmix: 447, 35, 18x9 aus SH_REP_SCAN.bmp – reiner 2-Stufen-Schalter)
         let clip_on = (state.sound_settings.pre_amp & 0x80) != 0;
-        if state.sound_settings.declick() {
-            fill_rect(frame, dw, dh, 444, 34, 26, 10, [0, 0, 0, 255]);
-            draw_cl_dc_lcd_badge(frame, dw, dh, 444, 35, [0, 0, 0, 255]);
-        } else {
-            let clip_sx = if clip_on { 0 } else { 26 };
-            self.assets
-                .sh_rep_scan
-                .blit_rect_to(clip_sx, 83, 18, 9, frame, dw, dh, 447, 35);
-        }
+        let clip_sx = if clip_on { 0 } else { 26 };
+        self.assets
+            .sh_rep_scan
+            .blit_rect_to(clip_sx, 83, 18, 9, frame, dw, dh, 447, 35);
 
         // Stereo / Mono / Surround (x_m_st: 472, 31, 27x11 aus M_ST.bmp)
         let mst_idx = if state.sound_settings.stereo < 2 {
@@ -297,11 +292,18 @@ impl Mod4WinApp {
             );
         }
 
-        // TMode (x_tmode: 448, 71, 23x9 aus TMODE.bmp)
-        let tmode_sy = (state.sound_settings.timer_mode() as u32) * 9;
-        self.assets
-            .tmode
-            .blit_rect_to(0, tmode_sy, 23, 9, frame, dw, dh, 448, 71);
+        // Ehemaliges TMode+Mode-Feld (445..498, 70..80): Aufgeteilt in DClick (links unter PAN) und DeHiss/Amiga (rechts unter iDO)
+        fill_rect(frame, dw, dh, 445, 70, 54, 10, [0, 0, 0, 255]);
+        draw_classic_declick_badge(frame, dw, dh, 445, 71, state.sound_settings.declick());
+        draw_classic_filter_badge(
+            frame,
+            dw,
+            dh,
+            474,
+            71,
+            state.sound_settings.dehiss(),
+            state.sound_settings.amiga_filter(),
+        );
 
         // 9. PreAmp-Schieberegler (509, 27, 23x72 aus PREAMP.bmp) + dB-Anzeige (515, 101)
         let raw_preamp = (state.sound_settings.pre_amp & 0x7F).min(40) as i32;
@@ -420,7 +422,7 @@ impl Mod4WinApp {
             dh,
             22,
             4,
-            self.locale.tr_or("win", "main_title", "MOD4WIN 3.00"),
+            self.locale.tr_or("win", "main_title", "MOD4WIN 3.10"),
             [48, 56, 68, 255],
         );
 
@@ -957,12 +959,12 @@ impl Mod4WinApp {
         // Titelleisten-Buttons im Mini-Status (`HandleSwName` in `mod4win.pas:2496`: zeigt den Namen des laufenden Moduls!)
         let mini_caption = if state.show_filename && !state.filename.is_empty() {
             state.filename.as_str()
-        } else if !state.title.trim().is_empty() && state.title.trim() != "MOD4WIN 3.00" {
+        } else if !state.title.trim().is_empty() && state.title.trim() != "MOD4WIN 3.10" {
             state.title.trim()
         } else if !state.filename.is_empty() {
             state.filename.as_str()
         } else {
-            self.locale.tr_or("win", "main_title", "MOD4WIN 3.00")
+            self.locale.tr_or("win", "main_title", "MOD4WIN 3.10")
         };
         let mini_caption_disp: String = mini_caption.chars().take(28).collect();
         for y in 1..18 {
@@ -1109,7 +1111,7 @@ impl Mod4WinApp {
             dh,
             22,
             4,
-            self.locale.tr_or("win", "about_title", "MOD4WIN 3.00 About"),
+            self.locale.tr_or("win", "about_title", "MOD4WIN 3.10 About"),
             [48, 56, 68, 255],
         );
         self.assets
@@ -1158,7 +1160,7 @@ impl Mod4WinApp {
 
         // Vertikale Credit-Laufschrift (`laufschrift` in `ABOUT.PAS`, `x_abscr=118, y_abscr=38, dx_abscr=308, dy_abscr=40`)
         let credits: [&str; 19] = [
-            "MOD4WIN 3.00",
+            "MOD4WIN 3.10",
             "(c) 1993-96 by Kay Bruns",
             "",
             self.locale.tr_or("about", "prog_dsp", "Programming, DSP & Design:"),
@@ -1267,7 +1269,7 @@ impl Mod4WinApp {
                 state.playing_track_detached = false;
                 state.current_file_path = None;
                 state.filename.clear();
-                state.title = "MOD4WIN 3.00".to_string();
+                state.title = "MOD4WIN 3.10".to_string();
                 state.is_playing = false;
                 state.is_paused = false;
             } else {
@@ -1283,7 +1285,7 @@ impl Mod4WinApp {
         } else if cur_path.is_some() {
             state.current_file_path = None;
             state.filename.clear();
-            state.title = "MOD4WIN 3.00".to_string();
+            state.title = "MOD4WIN 3.10".to_string();
             state.is_playing = false;
             state.is_paused = false;
         }
@@ -1638,12 +1640,11 @@ impl Mod4WinApp {
             self.setup_cfg.bits_per_sample = state.ini_config.bits_per_sample;
             return;
         }
-        // main_Clip / CL+DC (444..470, 33..45)
+        // main_Clip (444..470, 33..45)
         if (444..=470).contains(&vx) && (33..=45).contains(&vy) {
             let mut state = self.shared_state.lock().unwrap();
-            state.step_clip_declick(1);
+            state.toggle_clipping();
             self.setup_cfg.clipping = state.ini_config.clipping;
-            self.setup_cfg.declick = state.ini_config.declick;
             return;
         }
         // Main_MS (Stereo / Mono / Surround: 471..500, 30..43)
@@ -1687,14 +1688,25 @@ impl Mod4WinApp {
             self.setup_cfg.over_sampling = state.ini_config.over_sampling;
             return;
         }
-        // main_tmode (447..472, 70..81)
-        if (447..=472).contains(&vx) && (70..=81).contains(&vy) {
+        // main_declick (445..471, 69..81): De-Click Filter ein/ausschalten
+        if (445..=471).contains(&vx) && (69..=81).contains(&vy) {
             let mut state = self.shared_state.lock().unwrap();
-            let next_tm = (state.sound_settings.timer_mode() + 1) % 3;
-            state.sound_settings.set_timer_mode(next_tm);
-            state.settings_dirty = true;
-            state.sync_runtime_to_ini();
-            self.setup_cfg.timer_mode = state.ini_config.timer_mode;
+            state.toggle_declick();
+            self.setup_cfg.declick = state.ini_config.declick;
+            let _ = state
+                .ini_config
+                .save_to_file(&Mod4WinIniConfig::default_ini_path());
+            return;
+        }
+        // main_filter (472..500, 69..81): Rauschfilter zyklisch umschalten (Off -> DeHiss -> Amiga -> Am+DH)
+        if (472..=500).contains(&vx) && (69..=81).contains(&vy) {
+            let mut state = self.shared_state.lock().unwrap();
+            state.step_noise_filter(1);
+            self.setup_cfg.dehiss = state.ini_config.dehiss;
+            self.setup_cfg.amiga_filter = state.ini_config.amiga_filter;
+            let _ = state
+                .ini_config
+                .save_to_file(&Mod4WinIniConfig::default_ini_path());
             return;
         }
         // Main_Percnt (370..407, 62..82) & PBar (368..374, 29..82):
@@ -2118,41 +2130,97 @@ pub(crate) fn draw_it_lcd_badge(
     }
 }
 
-/// Zeichnet den `23x7` Pixel-Art-`CL+DC`-Schriftzug ohne Glow passend zu `Bit` / `BPM` / `PAN`
-/// für die 3. Stellung des Clip-Schalters (`Clip + De-Click`).
-pub(crate) fn draw_cl_dc_lcd_badge(
+/// Hilfsfunktion zum Zeichnen eines 7px hohen LCD-Sprites im originalen `SH_REP_SCAN.bmp`-Stil
+/// (hellgrün `[0, 255, 0]` wenn aktiv, 50%-Schachbrett-Dither wenn inaktiv).
+fn draw_classic_lcd_sprite_7px(
     frame: &mut [u8],
     dw: u32,
     dh: u32,
     x: i32,
     y: i32,
-    bg_col: [u8; 4],
+    sprite: &[&str; 7],
+    active: bool,
 ) {
-    fill_rect(frame, dw, dh, x, y, 23, 7, bg_col);
-    let col_bright = [0, 255, 0, 255];
-
-    const CL_DC_SPRITE: [&str; 7] = [
-        " ### #        ###   ###",
-        "#    #        #  # #   ",
-        "#    #     #  #  # #   ",
-        "#    #    ### #  # #   ",
-        "#    #     #  #  # #   ",
-        "#    #        #  # #   ",
-        " ### ####     ###   ###",
-    ];
-
-    for (ry, row_str) in CL_DC_SPRITE.iter().enumerate() {
+    let col_on = [0, 255, 0, 255];
+    for (ry, row_str) in sprite.iter().enumerate() {
         for (rx, ch) in row_str.chars().enumerate() {
-            if ch == '#' {
+            if ch == '#' && (active || (rx + ry) % 2 == 0) {
                 let px = x + rx as i32;
                 let py = y + ry as i32;
                 if px >= 0 && py >= 0 && (px as u32) < dw && (py as u32) < dh {
                     let idx = ((py as u32 * dw + px as u32) * 4) as usize;
                     if idx + 3 < frame.len() {
-                        frame[idx..idx + 4].copy_from_slice(&col_bright);
+                        frame[idx..idx + 4].copy_from_slice(&col_on);
                     }
                 }
             }
         }
+    }
+}
+
+/// Zeichnet das `DClick`-Badge (`22x7`) im linken Teil des ehemaligen `TMode`-Felds (`445, 71`).
+pub(crate) fn draw_classic_declick_badge(
+    frame: &mut [u8],
+    dw: u32,
+    dh: u32,
+    x: i32,
+    y: i32,
+    active: bool,
+) {
+    const DCLICK_SPRITE: [&str; 7] = [
+        "###   ### #   #     # ",
+        "#  # #    #         # ",
+        "#  # #    #   #  ## # #",
+        "#  # #    #   # #   ## ",
+        "#  # #    #   # #   ## ",
+        "#  # #    #   # #   # #",
+        "###   ###  #  #  ## # #",
+    ];
+    draw_classic_lcd_sprite_7px(frame, dw, dh, x, y, &DCLICK_SPRITE, active);
+}
+
+/// Zeichnet das Rauschfilter-Badge (`DeHiss` / `Amiga` / `Am+DH`, `24x7`) im rechten Teil des ehemaligen `TMode`-Felds (`474, 71`).
+pub(crate) fn draw_classic_filter_badge(
+    frame: &mut [u8],
+    dw: u32,
+    dh: u32,
+    x: i32,
+    y: i32,
+    dehiss: bool,
+    amiga: bool,
+) {
+    const DEHISS_SPRITE: [&str; 7] = [
+        "###       #  #   #      ",
+        "#  #      #  #          ",
+        "#  #  ##  ####   #  ##  ##",
+        "#  # #  # #  #   # #   #  ",
+        "#  # #### #  #   #  #   # ",
+        "#  # #    #  #   #   #   #",
+        "###   ##  #  #   # ##  ## ",
+    ];
+    const AMIGA_SPRITE: [&str; 7] = [
+        " ###          #         ",
+        "#   #                   ",
+        "#   # ### ##  #  ###  ##",
+        "##### #  #  # # #  # #  #",
+        "#   # #  #  # #  ###  ###",
+        "#   # #  #  # #    # #  #",
+        "#   # #  #  # # ###   ###",
+    ];
+    const AM_DH_SPRITE: [&str; 7] = [
+        " ##             ###  #  #",
+        "#  #            #  # #  #",
+        "#  # ###    #   #  # #  #",
+        "#### # # # ###  #  # ####",
+        "#  # # # #  #   #  # #  #",
+        "#  # # # #      #  # #  #",
+        "#  # #   #      ###  #  #",
+    ];
+
+    match (dehiss, amiga) {
+        (false, false) => draw_classic_lcd_sprite_7px(frame, dw, dh, x, y, &DEHISS_SPRITE, false),
+        (true, false) => draw_classic_lcd_sprite_7px(frame, dw, dh, x, y, &DEHISS_SPRITE, true),
+        (false, true) => draw_classic_lcd_sprite_7px(frame, dw, dh, x, y, &AMIGA_SPRITE, true),
+        (true, true) => draw_classic_lcd_sprite_7px(frame, dw, dh, x, y, &AM_DH_SPRITE, true),
     }
 }

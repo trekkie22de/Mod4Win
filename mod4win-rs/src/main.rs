@@ -88,7 +88,7 @@ fn print_cli_help(bin_name: &str) {
     println!(
         "\
 ======================================================================
-MOD4WIN 3.00 - 100% Bit-Exact Rust Port (Audio Engine & UI)
+MOD4WIN 3.10 - 100% Bit-Exact Rust Port (Audio Engine & UI)
 ======================================================================
 
 VERWENDUNG:
@@ -693,7 +693,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
         (m, true, f_len)
     } else {
-        println!("Starte MOD4WIN 3.00 ohne Startdatei (bereit für Drag & Drop / Open)...");
+        println!("Starte MOD4WIN 3.10 ohne Startdatei (bereit für Drag & Drop / Open)...");
         (create_idle_module(), false, 0u32)
     };
 
@@ -763,6 +763,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     settings.set_timer_mode(ini_cfg.timer_mode.min(2));
     settings.set_clean_mode(ini_cfg.clean_mode);
+    settings.set_declick(ini_cfg.declick);
+    settings.set_amiga_filter(ini_cfg.amiga_filter);
+    settings.set_dehiss(ini_cfg.dehiss);
     settings.n_buffers = ini_cfg.output_buffers.clamp(2, 99);
     let clip_bit = if ini_cfg.clipping { 0x80 } else { 0x00 };
     settings.pre_amp = clip_bit | ini_cfg.pre_amplification.min(40);
@@ -782,7 +785,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // UI-Shared State vorbereiten
     let mut init_ui_state = UiSharedState::new(
-        if has_initial_module { &mod_name } else { "MOD4WIN 3.00" },
+        if has_initial_module { &mod_name } else { "MOD4WIN 3.10" },
         &format!("{:?}", file_type),
         if has_initial_module { num_tracks as usize } else { 0 },
         if has_initial_module { diff_patterns as usize } else { 0 },

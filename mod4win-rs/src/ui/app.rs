@@ -755,9 +755,11 @@ impl UiSharedState {
         self.sound_settings.set_timer_mode(self.ini_config.timer_mode.min(2));
         self.sound_settings.set_clean_mode(self.ini_config.clean_mode);
         self.sound_settings.set_declick(self.ini_config.declick);
+        self.sound_settings.set_amiga_filter(self.ini_config.amiga_filter);
+        self.sound_settings.set_dehiss(self.ini_config.dehiss);
         self.sound_settings.oversamp = self.ini_config.over_sampling.min(6);
         self.sound_settings.panning = self.ini_config.enable_panning;
-        let clip_bit = if self.ini_config.clipping || self.ini_config.declick {
+        let clip_bit = if self.ini_config.clipping {
             0x80
         } else {
             0x00
@@ -777,6 +779,8 @@ impl UiSharedState {
         self.ini_config.timer_mode = self.sound_settings.timer_mode();
         self.ini_config.clean_mode = self.sound_settings.clean_mode();
         self.ini_config.declick = self.sound_settings.declick();
+        self.ini_config.amiga_filter = self.sound_settings.amiga_filter();
+        self.ini_config.dehiss = self.sound_settings.dehiss();
         self.ini_config.clipping = (self.sound_settings.pre_amp & 0x80) != 0;
         self.ini_config.pre_amplification = (self.sound_settings.pre_amp & 0x7F).min(40);
         self.ini_config.over_sampling = self.sound_settings.oversamp.min(6);
@@ -851,34 +855,85 @@ impl UiSharedState {
         }
     }
 
-    /// Schaltet die 3-stufige Clip / De-Click-Anzeige vorwärts (`delta > 0`) oder rückwärts (`delta < 0`):
-    /// - Stufe `0`: `Clip aus` (`clipping = false`, `declick = false`)
-    /// - Stufe `1`: `Clip an` (`clipping = true`, `declick = false`)
-    /// - Stufe `2`: `CL+DC` (`clipping = true`, `declick = true`)
-    pub fn step_clip_declick(&mut self, delta: i32) {
-        let clip_on = (self.sound_settings.pre_amp & 0x80) != 0;
-        let dc_on = self.sound_settings.declick();
-        let cur: i32 = match (clip_on, dc_on) {
-            (false, _) => 0,
-            (true, false) => 1,
-            (true, true) => 2,
-        };
-        let next = if delta >= 0 {
-            (cur + 1) % 3
-        } else {
-            (cur + 2) % 3
-        };
-        let (new_clip, new_dc, banner) = match next {
-            0 => (false, false, "CLIP: OFF"),
-            1 => (true, false, "CLIP: ON"),
-            _ => (true, true, "CLIP + DE-CLICK"),
-        };
+    /// Schaltet das Mixer-Clipping (`Clip`) ein oder aus.
+    pub fn toggle_clipping(&mut self) {
+        let new_clip = (self.sound_settings.pre_amp & 0x80) == 0;
         if new_clip {
             self.sound_settings.pre_amp |= 0x80;
+            self.set_status_banner("CLIP: ON");
         } else {
             self.sound_settings.pre_amp &= 0x7F;
+            self.set_status_banner("CLIP: OFF");
         }
-        self.sound_settings.set_declick(new_dc);
+        self.settings_dirty = true;
+        self.sync_runtime_to_ini();
+    }
+
+    /// Rückwärtskompatibler Alias für `toggle_clipping` (z. B. für Hotkey 28).
+    pub fn step_clip_declick(&mut self, _delta: i32) {
+        self.toggle_clipping();
+    }
+
+    /// Schaltet den Per-Kanal-De-Click-Filter (`DeClick`) ein oder aus.
+    pub fn toggle_declick(&mut self) {
+        let next = !self.sound_settings.declick();
+        self.sound_settings.set_declick(next);
+        self.set_status_banner(if next { "DE-CLICK: ON" } else { "DE-CLICK: OFF" });
+        self.settings_dirty = true;
+        self.sync_runtime_to_ini();
+    }
+
+    /// Schaltet den authentischen Amiga-Paula-Tiefpassfilter (`Amiga`) ein oder aus.
+    pub fn toggle_amiga_filter(&mut self) {
+        let next = !self.sound_settings.amiga_filter();
+        self.sound_settings.set_amiga_filter(next);
+        self.set_status_banner(if next {
+            "AMIGA FILTER: ON"
+        } else {
+            "AMIGA FILTER: OFF"
+        });
+        self.settings_dirty = true;
+        self.sync_runtime_to_ini();
+    }
+
+    /// Schaltet den modernen adaptiven Mehrband-Denoiser (`DeHiss`) ein oder aus.
+    pub fn toggle_dehiss(&mut self) {
+        let next = !self.sound_settings.dehiss();
+        self.sound_settings.set_dehiss(next);
+        self.set_status_banner(if next {
+            "DE-HISS: ON (ADAPT)"
+        } else {
+            "DE-HISS: OFF"
+        });
+        self.settings_dirty = true;
+        self.sync_runtime_to_ini();
+    }
+
+    /// Schaltet im Classic Skin (`2.40`) die Rauschfilter-Anzeige zyklisch durch:
+    /// `0 = Off` -> `1 = DeHiss (Adaptiver Mehrband-Denoiser)` -> `2 = Amiga (Paula LED-Filter)` -> `3 = Am+DH (Beide)`.
+    pub fn step_noise_filter(&mut self, delta: i32) {
+        let cur: i32 = match (
+            self.sound_settings.dehiss(),
+            self.sound_settings.amiga_filter(),
+        ) {
+            (false, false) => 0,
+            (true, false) => 1,
+            (false, true) => 2,
+            (true, true) => 3,
+        };
+        let next = if delta >= 0 {
+            (cur + 1) % 4
+        } else {
+            (cur + 3) % 4
+        };
+        let (new_dh, new_amiga, banner) = match next {
+            0 => (false, false, "FILTER: OFF"),
+            1 => (true, false, "DE-HISS: ON (ADAPT)"),
+            2 => (false, true, "AMIGA FILTER: ON"),
+            _ => (true, true, "AMIGA + DE-HISS: ON"),
+        };
+        self.sound_settings.set_dehiss(new_dh);
+        self.sound_settings.set_amiga_filter(new_amiga);
         self.set_status_banner(banner);
         self.settings_dirty = true;
         self.sync_runtime_to_ini();
@@ -2100,7 +2155,7 @@ impl Mod4WinApp {
                             self.locale.tr_or("win", "mini_title", "MOD4WIN Mini-Status").to_string(),
                         );
                     } else {
-                        return (w, h, "MOD4WIN 3.00".to_string());
+                        return (w, h, "MOD4WIN 3.10".to_string());
                     }
                 }
                 WindowKind::ModuleInfo | WindowKind::InstrumentInfo => {
@@ -2117,7 +2172,7 @@ impl Mod4WinApp {
                     return (w, h, "[13] MOD4WIN Setup".to_string());
                 }
                 WindowKind::About => {
-                    return (w, h, "[5] About MOD4WIN 3.00".to_string());
+                    return (w, h, "[5] About MOD4WIN 3.10".to_string());
                 }
                 _ => {}
             }
@@ -2134,14 +2189,14 @@ impl Mod4WinApp {
                     (
                         w,
                         h,
-                        self.locale.tr_or("win", "main_title", "MOD4WIN 3.00").to_string(),
+                        self.locale.tr_or("win", "main_title", "MOD4WIN 3.10").to_string(),
                     )
                 }
             }
             WindowKind::ModuleInfo => (
                 w,
                 h,
-                self.locale.tr_or("win", "info_title", "MOD4WIN 3.00 Module Info").to_string(),
+                self.locale.tr_or("win", "info_title", "MOD4WIN 3.10 Module Info").to_string(),
             ),
             WindowKind::InstrumentInfo => (
                 w,
@@ -2171,7 +2226,7 @@ impl Mod4WinApp {
             WindowKind::SetupDialog => (
                 w,
                 h,
-                self.locale.tr_or("win", "setup_title", "MOD4WIN 3.00 Setup").to_string(),
+                self.locale.tr_or("win", "setup_title", "MOD4WIN 3.10 Setup").to_string(),
             ),
             WindowKind::WavAskDialog => (
                 w,
@@ -2205,7 +2260,7 @@ impl Mod4WinApp {
             WindowKind::About => (
                 w,
                 h,
-                self.locale.tr_or("win", "about_title", "MOD4WIN 3.00 About").to_string(),
+                self.locale.tr_or("win", "about_title", "MOD4WIN 3.10 About").to_string(),
             ),
             WindowKind::HelpViewer => (
                 w,
@@ -3185,10 +3240,26 @@ impl Mod4WinApp {
             }
             if (444..=470).contains(&vx) && (33..=45).contains(&vy) {
                 let mut state = self.shared_state.lock().unwrap();
-                state.step_clip_declick(-1);
+                state.toggle_clipping();
                 self.setup_cfg.clipping = state.ini_config.clipping;
-                self.setup_cfg.declick = state.ini_config.declick;
                 return;
+            }
+            // Rechtsklick auf DeClick (445..471, 69..81) oder Rauschfilter (472..500, 69..81) im Classic Skin
+            if (69..=81).contains(&vy) {
+                if (445..=471).contains(&vx) {
+                    let mut state = self.shared_state.lock().unwrap();
+                    state.toggle_declick();
+                    self.setup_cfg.declick = state.ini_config.declick;
+                    let _ = state.ini_config.save_to_file(&Mod4WinIniConfig::default_ini_path());
+                    return;
+                } else if (472..=500).contains(&vx) {
+                    let mut state = self.shared_state.lock().unwrap();
+                    state.step_noise_filter(-1);
+                    self.setup_cfg.dehiss = state.ini_config.dehiss;
+                    self.setup_cfg.amiga_filter = state.ini_config.amiga_filter;
+                    let _ = state.ini_config.save_to_file(&Mod4WinIniConfig::default_ini_path());
+                    return;
+                }
             }
             // Rechtsklick auf CPU-Prozentanzeige (`Main_Percnt`) oder CPU-Balken (`PBar`) schaltet die Retro-CPU-Profile rückwärts durch
             if ((368..=374).contains(&vx) && (29..=82).contains(&vy))

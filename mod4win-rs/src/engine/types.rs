@@ -76,13 +76,19 @@ pub const DEV_DS: i16 = 256;
 pub const TMODE_MM_TASK: u8 = 0;
 pub const TMODE_WM_TIMER: u8 = 1;
 pub const TMODE_MM_TIMER: u8 = 2;
-/// Bit 6 (`0x40`) in `SoundSettings::t_mode` kodiert den optionalen Kanal-De-Click-Filter (`CL+DC`).
+/// Bit 4 (`0x10`) in `SoundSettings::t_mode` kodiert den authentischen Amiga-Paula-Tiefpassfilter
+/// (4.42 kHz RC + ~3.275 kHz 12 dB/Okt Sallen-Key LED-Filter).
+pub const TMODE_AMIGA_FILTER_FLAG: u8 = 0x10;
+/// Bit 5 (`0x20`) in `SoundSettings::t_mode` kodiert den modernen adaptiven Mehrband-Denoiser (`DeHiss`).
+pub const TMODE_DEHISS_FLAG: u8 = 0x20;
+/// Bit 6 (`0x40`) in `SoundSettings::t_mode` kodiert den optionalen Kanal-De-Click-Filter (`DeClick`).
 pub const TMODE_DECLICK_FLAG: u8 = 0x40;
 /// Bit 7 (`0x80`) in `SoundSettings::t_mode` kodiert den optionalen Clean-Mode
 /// (`true` = 1995er Stack-/Speicher-Bugs bereinigt, `false` = 100% bit-identische Full-Emulation).
 pub const TMODE_CLEAN_FLAG: u8 = 0x80;
-/// Maske für alle Zusatzflags in `SoundSettings::t_mode` (`TMODE_CLEAN_FLAG | TMODE_DECLICK_FLAG`).
-pub const TMODE_FLAGS_MASK: u8 = TMODE_CLEAN_FLAG | TMODE_DECLICK_FLAG;
+/// Maske für alle Zusatzflags in `SoundSettings::t_mode`.
+pub const TMODE_FLAGS_MASK: u8 =
+    TMODE_CLEAN_FLAG | TMODE_DECLICK_FLAG | TMODE_DEHISS_FLAG | TMODE_AMIGA_FILTER_FLAG;
 
 // --- Fehler-Codes (playdefs.pas / modc.pas) ---
 
@@ -509,20 +515,52 @@ impl SoundSettings {
         }
     }
 
-    /// Gibt zurück, ob der zusätzliche Kanal-De-Click-Filter (`CL+DC`) aktiv ist.
+    /// Gibt zurück, ob der zusätzliche Kanal-De-Click-Filter (`DeClick`) aktiv ist.
     #[inline]
     pub fn declick(&self) -> bool {
         (self.t_mode & TMODE_DECLICK_FLAG) != 0
     }
 
-    /// Schaltet den zusätzlichen Kanal-De-Click-Filter (`CL+DC`) ein (`true`) oder aus (`false`),
-    /// ohne den visuellen Timer-Modus (`0..=2`) oder das Clean-Mode-Flag zu verändern.
+    /// Schaltet den zusätzlichen Kanal-De-Click-Filter (`DeClick`) ein (`true`) oder aus (`false`),
+    /// ohne die übrigen Flags in `t_mode` zu verändern.
     #[inline]
     pub fn set_declick(&mut self, declick: bool) {
         if declick {
             self.t_mode |= TMODE_DECLICK_FLAG;
         } else {
             self.t_mode &= !TMODE_DECLICK_FLAG;
+        }
+    }
+
+    /// Gibt zurück, ob der authentische Amiga-Paula-Tiefpassfilter (`Amiga`) aktiv ist.
+    #[inline]
+    pub fn amiga_filter(&self) -> bool {
+        (self.t_mode & TMODE_AMIGA_FILTER_FLAG) != 0
+    }
+
+    /// Schaltet den authentischen Amiga-Paula-Tiefpassfilter (`Amiga`) ein (`true`) oder aus (`false`).
+    #[inline]
+    pub fn set_amiga_filter(&mut self, enabled: bool) {
+        if enabled {
+            self.t_mode |= TMODE_AMIGA_FILTER_FLAG;
+        } else {
+            self.t_mode &= !TMODE_AMIGA_FILTER_FLAG;
+        }
+    }
+
+    /// Gibt zurück, ob der moderne adaptive Mehrband-Denoiser (`DeHiss`) aktiv ist.
+    #[inline]
+    pub fn dehiss(&self) -> bool {
+        (self.t_mode & TMODE_DEHISS_FLAG) != 0
+    }
+
+    /// Schaltet den modernen adaptiven Mehrband-Denoiser (`DeHiss`) ein (`true`) oder aus (`false`).
+    #[inline]
+    pub fn set_dehiss(&mut self, enabled: bool) {
+        if enabled {
+            self.t_mode |= TMODE_DEHISS_FLAG;
+        } else {
+            self.t_mode &= !TMODE_DEHISS_FLAG;
         }
     }
 

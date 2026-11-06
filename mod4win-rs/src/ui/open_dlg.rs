@@ -529,7 +529,7 @@ impl Mod4WinApp {
             dh,
             22,
             4,
-            "MOD4WIN 3.00 Open Files",
+            "MOD4WIN 3.10 Open Files",
             [0, 0, 0, 255],
         );
         self.assets

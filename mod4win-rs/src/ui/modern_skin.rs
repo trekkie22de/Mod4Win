@@ -1120,7 +1120,7 @@ impl Mod4WinApp {
             dw,
             dh,
             true,
-            "MOD4WIN 3.00",
+            "MOD4WIN 3.10",
             true,
             false,
         );
@@ -1194,10 +1194,10 @@ impl Mod4WinApp {
         stroke_rounded_rect(frame, dw, dh, 368, cap_y, 10, 11, 2, [0x7c, 0x95, 0xb2, 255]);
         fill_rect(frame, dw, dh, 370, cap_y + 4, 6, 3, led_col);
 
-        // Zeile 2 (y = 63..111, 48px hoch): 2 getrennte LCD-Boxen (Links: 6..210 = 204px, Rechts: 215..378 = 164px)
-        draw_modern_lcd_box(frame, dw, dh, 6, 63, 204, 48);
-        draw_modern_ui_text(frame, dw, dh, 23, 68, "MIN", COL_LCD_BRIGHT);
-        draw_modern_ui_text(frame, dw, dh, 58, 68, "SEC", COL_LCD_BRIGHT);
+        // Zeile 2 (y = 63..111, 48px hoch): 2 getrennte LCD-Boxen (Links: 6..188 = 182px, Rechts: 192..379 = 187px)
+        draw_modern_lcd_box(frame, dw, dh, 6, 63, 182, 48);
+        draw_modern_ui_text(frame, dw, dh, 21, 68, "MIN", COL_LCD_BRIGHT);
+        draw_modern_ui_text(frame, dw, dh, 56, 68, "SEC", COL_LCD_BRIGHT);
 
         let disp_secs = if state.minus_mode && state.total_time_secs > 0 {
             state.total_time_secs.saturating_sub(state.elapsed_secs)
@@ -1212,11 +1212,11 @@ impl Mod4WinApp {
             mins,
             secs
         );
-        draw_modern_seg_value(frame, dw, dh, 11, 82, "-88:88", &time_str, true);
+        draw_modern_seg_value(frame, dw, dh, 10, 82, "-88:88", &time_str, true);
 
         // Rechts in Box 1: Song / Total (linksbündig mit der Anzeige darunter, ab 10.000 mit "K" hinter den 4 Ziffern)
-        draw_modern_ui_text(frame, dw, dh, 100, 68, "Song", COL_LCD_BRIGHT);
-        draw_modern_ui_text(frame, dw, dh, 156, 68, "Total", COL_LCD_BRIGHT);
+        draw_modern_ui_text(frame, dw, dh, 91, 68, "Song", COL_LCD_BRIGHT);
+        draw_modern_ui_text(frame, dw, dh, 145, 68, "Total", COL_LCD_BRIGHT);
         let curr_song = if state.playlist.is_empty() && state.current_file_path.is_none() {
             0
         } else {
@@ -1227,35 +1227,35 @@ impl Mod4WinApp {
         } else {
             state.playlist.len().max(1) as u32
         };
-        draw_modern_song_count(frame, dw, dh, 100, 85, curr_song);
-        let of_x = if curr_song >= 10_000 { 143 } else { 139 };
+        draw_modern_song_count(frame, dw, dh, 91, 85, curr_song);
+        let of_x = if curr_song >= 10_000 { 133 } else { 129 };
         draw_modern_ui_text(frame, dw, dh, of_x, 88, "of", COL_LCD_BRIGHT);
-        draw_modern_song_count(frame, dw, dh, 156, 85, total_songs);
+        draw_modern_song_count(frame, dw, dh, 145, 85, total_songs);
 
-        // Rechtes LCD in Zeile 2 (x = 215, y = 63, w = 164, h = 48): Pattern + Shuffle / Repeat / Introscan
+        // Rechtes LCD in Zeile 2 (x = 192, y = 63, w = 187, h = 48): Pattern + Shuffle/Repeat/Introscan + DeClick/Amiga/DeHiss
         let (disp_pos, disp_orders) = if let Some((_, scan_ord, max_ord)) = peak_disp {
             (scan_ord, max_ord)
         } else {
             (state.curr_pos, state.num_orders)
         };
-        draw_modern_lcd_box(frame, dw, dh, 215, 63, 164, 48);
-        draw_modern_ui_text(frame, dw, dh, 222, 68, "Pattern", COL_LCD_BRIGHT);
+        draw_modern_lcd_box(frame, dw, dh, 192, 63, 187, 48);
+        draw_modern_ui_text(frame, dw, dh, 198, 68, "Pattern", COL_LCD_BRIGHT);
         draw_modern_seg_value(
             frame,
             dw,
             dh,
-            222,
+            198,
             85,
             "888",
             &format!("{:>3}", disp_pos.min(999)),
             false,
         );
-        draw_modern_ui_text(frame, dw, dh, 250, 88, "of", COL_LCD_BRIGHT);
+        draw_modern_ui_text(frame, dw, dh, 225, 88, "of", COL_LCD_BRIGHT);
         draw_modern_seg_value(
             frame,
             dw,
             dh,
-            266,
+            240,
             85,
             "888",
             &format!("{:>3}", disp_orders.min(999)),
@@ -1282,18 +1282,38 @@ impl Mod4WinApp {
         } else {
             COL_LCD_DIM
         };
-        draw_modern_ui_text(frame, dw, dh, 310, 68, "Shuffle", shuf_col);
-        draw_modern_ui_text(frame, dw, dh, 310, 82, "Repeat", rep_col);
+        draw_modern_ui_text(frame, dw, dh, 271, 68, "Shuffle", shuf_col);
+        draw_modern_ui_text(frame, dw, dh, 271, 82, "Repeat", rep_col);
         draw_modern_ui_text(
             frame,
             dw,
             dh,
-            310 + modern_ui_text_width("Repeat "),
+            271 + modern_ui_text_width("Repeat "),
             82,
             "1",
             rep1_col,
         );
-        draw_modern_ui_text(frame, dw, dh, 310, 96, "Introscan", scan_col);
+        draw_modern_ui_text(frame, dw, dh, 271, 96, "Introscan", scan_col);
+
+        // Neue 2. Spalte rechts neben Shuffle/Repeat/Introscan: DeClick | Amiga | DeHiss
+        let declick_col = if state.sound_settings.declick() {
+            COL_LCD_BRIGHT
+        } else {
+            COL_LCD_DIM
+        };
+        let amiga_col = if state.sound_settings.amiga_filter() {
+            COL_LCD_BRIGHT
+        } else {
+            COL_LCD_DIM
+        };
+        let dehiss_col = if state.sound_settings.dehiss() {
+            COL_LCD_BRIGHT
+        } else {
+            COL_LCD_DIM
+        };
+        draw_modern_ui_text(frame, dw, dh, 332, 68, "DeClick", declick_col);
+        draw_modern_ui_text(frame, dw, dh, 332, 82, "Amiga", amiga_col);
+        draw_modern_ui_text(frame, dw, dh, 332, 96, "DeHiss", dehiss_col);
 
         // Zeile 3 (y = 116..142, 26px hoch): 7er-Transportleiste (`transport-bar-7`, radius = 5px)
         fill_rounded_rect_grad(
@@ -1363,19 +1383,15 @@ impl Mod4WinApp {
         draw_modern_ui_text(frame, dw, dh, 451, 37, "Bit", COL_LCD_BRIGHT);
 
         let clip_on = (state.sound_settings.pre_amp & 0x80) != 0;
-        if state.sound_settings.declick() {
-            super::main_win::draw_cl_dc_lcd_badge(frame, dw, dh, 469, 37, COL_LCD_BG);
-        } else {
-            draw_modern_ui_text(
-                frame,
-                dw,
-                dh,
-                471,
-                37,
-                "Clip",
-                if clip_on { COL_LCD_BRIGHT } else { COL_LCD_DIM },
-            );
-        }
+        draw_modern_ui_text(
+            frame,
+            dw,
+            dh,
+            471,
+            37,
+            "Clip",
+            if clip_on { COL_LCD_BRIGHT } else { COL_LCD_DIM },
+        );
 
         let mst_idx = if state.sound_settings.stereo < 2 {
             0
@@ -1927,20 +1943,20 @@ impl Mod4WinApp {
 
         // Spalte 1, Zeile 2: Dual-LCDs (y = 63..111)
         if (63..=111).contains(&vy) {
-            if (6..=100).contains(&vx) {
+            if (6..=88).contains(&vx) {
                 // Klick auf Zeitanzeige toggelt Elapsed / Remaining
                 let mut state = self.shared_state.lock().unwrap();
                 state.minus_mode = !state.minus_mode;
                 state.sync_runtime_to_ini();
                 return;
-            } else if (101..=210).contains(&vx) {
+            } else if (89..=188).contains(&vx) {
                 self.next_song();
                 return;
-            } else if (215..=294).contains(&vx) {
+            } else if (192..=268).contains(&vx) {
                 let mut state = self.shared_state.lock().unwrap();
                 state.pending_seek_delta += 1;
                 return;
-            } else if (295..=374).contains(&vx) {
+            } else if (269..=328).contains(&vx) {
                 let mut state = self.shared_state.lock().unwrap();
                 if vy < 79 {
                     state.shuffle = !state.shuffle;
@@ -1951,6 +1967,22 @@ impl Mod4WinApp {
                     state.intro_scan = !state.intro_scan;
                 }
                 state.sync_runtime_to_ini();
+                return;
+            } else if (329..=378).contains(&vx) {
+                let mut state = self.shared_state.lock().unwrap();
+                if vy < 79 {
+                    state.toggle_declick();
+                    self.setup_cfg.declick = state.ini_config.declick;
+                } else if vy < 93 {
+                    state.toggle_amiga_filter();
+                    self.setup_cfg.amiga_filter = state.ini_config.amiga_filter;
+                } else {
+                    state.toggle_dehiss();
+                    self.setup_cfg.dehiss = state.ini_config.dehiss;
+                }
+                let _ = state
+                    .ini_config
+                    .save_to_file(&Mod4WinIniConfig::default_ini_path());
                 return;
             }
         }
@@ -2012,9 +2044,8 @@ impl Mod4WinApp {
                     self.setup_cfg.bits_per_sample = state.ini_config.bits_per_sample;
                 } else if vx < 496 {
                     let mut state = self.shared_state.lock().unwrap();
-                    state.step_clip_declick(1);
+                    state.toggle_clipping();
                     self.setup_cfg.clipping = state.ini_config.clipping;
-                    self.setup_cfg.declick = state.ini_config.declick;
                 } else {
                     let mut state = self.shared_state.lock().unwrap();
                     if state.sound_settings.stereo < 2 {
@@ -4032,7 +4063,7 @@ impl Mod4WinApp {
         dh: u32,
         _state: &UiSharedState,
     ) {
-        draw_modern_window_shell(frame, dw, dh, false, "[5] About MOD4WIN 3.00", false, false);
+        draw_modern_window_shell(frame, dw, dh, false, "[5] About MOD4WIN 3.10", false, false);
 
         // Obere Box mit 2 animierten Lautsprecher-Konussen links/rechts + MOD 4 WIN Pill
         fill_rounded_rect_grad(
@@ -4070,7 +4101,7 @@ impl Mod4WinApp {
             [0x06, 0x1c, 0x24, 255],
         );
         stroke_rounded_rect(frame, dw, dh, 116, 52, 128, 22, 2, [0x00, 0xa2, 0xb8, 255]);
-        draw_modern_ui_text(frame, dw, dh, 146, 60, "MOD4WIN 3.00", COL_CYAN_BRAND);
+        draw_modern_ui_text(frame, dw, dh, 146, 60, "MOD4WIN 3.10", COL_CYAN_BRAND);
         draw_modern_ui_text(
             frame,
             dw,

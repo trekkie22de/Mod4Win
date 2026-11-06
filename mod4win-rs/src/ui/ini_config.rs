@@ -98,8 +98,12 @@ pub struct Mod4WinIniConfig {
     /// `true` = Clean Mode (bereinigte Hüllkurven/Perioden).
     pub clean_mode: bool,
     pub clipping: bool,
-    /// Optionaler Per-Kanal-De-Click-Filter (`CL+DC`, 3. Position des Clip-Schalters).
+    /// Optionaler Per-Kanal-De-Click-Filter (`DeClick`).
     pub declick: bool,
+    /// Authentischer Amiga-Paula-Tiefpassfilter (`Amiga`: 4.42 kHz RC + ~3.275 kHz Sallen-Key LED-Filter).
+    pub amiga_filter: bool,
+    /// Moderner adaptiver 5-Band-Wiener-/Spektral-Denoiser (`DeHiss`).
+    pub dehiss: bool,
     /// OverSampling (IDO): `0` = Off, `1` = Linear, `2` = Kubisch (FPU).
     pub over_sampling: u8,
     pub enable_panning: bool,
@@ -211,6 +215,8 @@ impl Default for Mod4WinIniConfig {
             clean_mode: false,
             clipping: true,
             declick: false,
+            amiga_filter: false,
+            dehiss: false,
             over_sampling: 2, // Kubisch (FPU) als Standard
             enable_panning: true,
             pre_amplification: 20,
@@ -390,6 +396,12 @@ impl Mod4WinIniConfig {
                     }
                     "DECLICK" => {
                         cfg.declick = val != "0" && !val.eq_ignore_ascii_case("false");
+                    }
+                    "AMIGAFILTER" | "AMIGA" => {
+                        cfg.amiga_filter = val != "0" && !val.eq_ignore_ascii_case("false");
+                    }
+                    "DEHISS" => {
+                        cfg.dehiss = val != "0" && !val.eq_ignore_ascii_case("false");
                     }
                     "OVERSAMPLING" => {
                         if let Ok(os) = val.parse::<u8>() {
@@ -632,6 +644,8 @@ impl Mod4WinIniConfig {
         out.push_str(&format!("CleanMode={}\r\n", u8::from(self.clean_mode)));
         out.push_str(&format!("Clipping={}\r\n", u8::from(self.clipping)));
         out.push_str(&format!("DeClick={}\r\n", u8::from(self.declick)));
+        out.push_str(&format!("AmigaFilter={}\r\n", u8::from(self.amiga_filter)));
+        out.push_str(&format!("DeHiss={}\r\n", u8::from(self.dehiss)));
         // Im Original: 0=Off, 1=Linear, 3=Cub (bzw. 2 in unserer UI-Darstellung)
         out.push_str(&format!("OverSampling={}\r\n", self.over_sampling));
         out.push_str(&format!("EnablePanning={}\r\n", u8::from(self.enable_panning)));
@@ -896,6 +910,8 @@ pub fn export_module_to_wav_file(
     hdd_settings.surround = ini_cfg.surround && ch == 2;
     hdd_settings.set_clean_mode(ini_cfg.clean_mode);
     hdd_settings.set_declick(ini_cfg.declick);
+    hdd_settings.set_amiga_filter(ini_cfg.amiga_filter);
+    hdd_settings.set_dehiss(ini_cfg.dehiss);
     hdd_settings.pre_amp = 0x80 + 40;
 
     // 1. Exakter PeakSearch-Vorlauf (wie im Original bei DEV_HDD und in --diff-suite)
