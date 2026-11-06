@@ -10,7 +10,7 @@ use super::app::{
 };
 use super::widgets::{
     draw_3d_frame_only, draw_3d_panel, draw_bmp_button_2state, draw_bmp_lcd_number,
-    draw_bmp_text_16x20_centered, draw_oem_text, draw_oem_text_centered, draw_oem_text_right,
+    draw_bmp_text_16x20_marquee, draw_oem_text, draw_oem_text_centered, draw_oem_text_right,
     fill_rect,
 };
 
@@ -56,7 +56,7 @@ impl Mod4WinApp {
             dh,
             22,
             4,
-            self.locale.tr_or("win", "info_title", "MOD4WIN [3.0 Beta] Module Info"),
+            self.locale.tr_or("win", "info_title", "MOD4WIN 3.00 Module Info"),
             [48, 56, 68, 255],
         );
         self.assets
@@ -72,7 +72,18 @@ impl Mod4WinApp {
         } else {
             state.filename.as_str()
         };
-        draw_bmp_text_16x20_centered(frame, dw, dh, 18, 30, 26, title_disp, &self.assets.font_16x20);
+        let info_scroll_ms = state.info_title_scroll_elapsed_ms();
+        draw_bmp_text_16x20_marquee(
+            frame,
+            dw,
+            dh,
+            18,
+            30,
+            26,
+            title_disp,
+            info_scroll_ms,
+            &self.assets.font_16x20,
+        );
 
         // 3. [-]/[+] Scroll-Buttons (BOMINUS / BOPLUS 14x14, 2-State) bei (10, 60) und (208, 60)
         draw_bmp_button_2state(

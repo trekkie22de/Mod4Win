@@ -4,12 +4,12 @@
 
 pub use super::font::{
     char_to_oem_code, draw_3d_frame_only, draw_3d_panel, draw_bmp_button_2state,
-    draw_bmp_button_3state, draw_bmp_lcd_number, draw_bmp_text_16x20_centered, draw_frame_3d,
-    draw_frame_3d_1px, draw_hkonoff_led, draw_lrswitch, draw_modern_ui_text, draw_num_7x5_note,
-    draw_num_7x5_text, draw_oem_char, draw_oem_text, draw_oem_text_centered,
-    draw_oem_text_mnemonic, draw_oem_text_right, draw_pegel_stereo_meter, draw_rect_outline,
-    draw_text, draw_up_down_btn, draw_vswitch, fill_rect, modern_ui_glyph_6x10,
-    modern_ui_text_width,
+    draw_bmp_button_3state, draw_bmp_lcd_number, draw_bmp_text_16x20_centered,
+    draw_bmp_text_16x20_marquee, draw_frame_3d, draw_frame_3d_1px, draw_hkonoff_led,
+    draw_lrswitch, draw_modern_ui_text, draw_num_7x5_note, draw_num_7x5_text, draw_oem_char,
+    draw_oem_text, draw_oem_text_centered, draw_oem_text_mnemonic, draw_oem_text_right,
+    draw_pegel_stereo_meter, draw_rect_outline, draw_text, draw_up_down_btn, draw_vswitch,
+    fill_rect, format_bmp_marquee_field, modern_ui_glyph_6x10, modern_ui_text_width,
 };
 
 use super::app::Mod4WinApp;

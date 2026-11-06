@@ -9,7 +9,7 @@ use super::cpu_sim::CpuProfile;
 use super::ini_config::Mod4WinIniConfig;
 use super::widgets::{
     draw_3d_panel, draw_bmp_button_2state, draw_bmp_button_3state, draw_bmp_lcd_number,
-    draw_bmp_text_16x20_centered, draw_frame_3d, draw_frame_3d_1px, draw_oem_text,
+    draw_bmp_text_16x20_marquee, draw_frame_3d, draw_frame_3d_1px, draw_oem_text,
     draw_oem_text_centered, draw_oem_text_mnemonic, draw_oem_text_right, draw_rect_outline,
     draw_vswitch, fill_rect,
 };
@@ -50,9 +50,20 @@ impl Mod4WinApp {
         } else if !state.filename.is_empty() {
             state.filename.as_str()
         } else {
-            "MOD4WIN 3.0 Beta"
+            "MOD4WIN 3.00"
         };
-        draw_bmp_text_16x20_centered(frame, dw, dh, 10, 29, 20, display_name, &self.assets.font_16x20);
+        let scroll_ms = state.main_title_scroll_elapsed_ms();
+        draw_bmp_text_16x20_marquee(
+            frame,
+            dw,
+            dh,
+            10,
+            29,
+            20,
+            display_name,
+            scroll_ms,
+            &self.assets.font_16x20,
+        );
 
         // 3. Umschalter Dateiname / Modultitel (pSWName: 341, 28, 2-stufiger TSwitch 18x22 aus SWITCH.bmp: Oben=1=Dateiname, Unten=2=Songtitel)
         let sw_pos = if state.show_filename { 1 } else { 2 };
@@ -409,7 +420,7 @@ impl Mod4WinApp {
             dh,
             22,
             4,
-            self.locale.tr_or("win", "main_title", "MOD4WIN [3.0 Beta]"),
+            self.locale.tr_or("win", "main_title", "MOD4WIN 3.00"),
             [48, 56, 68, 255],
         );
 
@@ -946,12 +957,12 @@ impl Mod4WinApp {
         // Titelleisten-Buttons im Mini-Status (`HandleSwName` in `mod4win.pas:2496`: zeigt den Namen des laufenden Moduls!)
         let mini_caption = if state.show_filename && !state.filename.is_empty() {
             state.filename.as_str()
-        } else if !state.title.trim().is_empty() && state.title.trim() != "MOD4WIN 3.0 Beta" {
+        } else if !state.title.trim().is_empty() && state.title.trim() != "MOD4WIN 3.00" {
             state.title.trim()
         } else if !state.filename.is_empty() {
             state.filename.as_str()
         } else {
-            self.locale.tr_or("win", "main_title", "MOD4WIN [3.0 Beta]")
+            self.locale.tr_or("win", "main_title", "MOD4WIN 3.00")
         };
         let mini_caption_disp: String = mini_caption.chars().take(28).collect();
         for y in 1..18 {
@@ -1098,7 +1109,7 @@ impl Mod4WinApp {
             dh,
             22,
             4,
-            self.locale.tr_or("win", "about_title", "MOD4WIN [3.0 Beta] About"),
+            self.locale.tr_or("win", "about_title", "MOD4WIN 3.00 About"),
             [48, 56, 68, 255],
         );
         self.assets
@@ -1147,7 +1158,7 @@ impl Mod4WinApp {
 
         // Vertikale Credit-Laufschrift (`laufschrift` in `ABOUT.PAS`, `x_abscr=118, y_abscr=38, dx_abscr=308, dy_abscr=40`)
         let credits: [&str; 19] = [
-            "MOD4WIN [3.0 Beta]",
+            "MOD4WIN 3.00",
             "(c) 1993-96 by Kay Bruns",
             "",
             self.locale.tr_or("about", "prog_dsp", "Programming, DSP & Design:"),
@@ -1256,7 +1267,7 @@ impl Mod4WinApp {
                 state.playing_track_detached = false;
                 state.current_file_path = None;
                 state.filename.clear();
-                state.title = "MOD4WIN 3.0 Beta".to_string();
+                state.title = "MOD4WIN 3.00".to_string();
                 state.is_playing = false;
                 state.is_paused = false;
             } else {
@@ -1272,7 +1283,7 @@ impl Mod4WinApp {
         } else if cur_path.is_some() {
             state.current_file_path = None;
             state.filename.clear();
-            state.title = "MOD4WIN 3.0 Beta".to_string();
+            state.title = "MOD4WIN 3.00".to_string();
             state.is_playing = false;
             state.is_paused = false;
         }
@@ -1557,6 +1568,7 @@ impl Mod4WinApp {
             } else {
                 state.show_filename = clicked_top;
             }
+            state.reset_title_scroll();
             state.sync_runtime_to_ini();
             return;
         }

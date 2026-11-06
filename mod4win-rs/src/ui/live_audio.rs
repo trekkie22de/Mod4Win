@@ -551,6 +551,41 @@ impl LiveAudioProcessor {
     }
 }
 
+/// Dekodiert einen Tracker-String (Modultitel oder Instrumentenname):
+/// - Falls gültiges UTF-8 vorliegt, wird es direkt übernommen.
+/// - Andernfalls werden 8-Bit-Zeichen aus DOS-CP437 / Windows-1252 (insb. deutsche Umlaute `ä, ö, ü, Ä, Ö, Ü, ß`)
+///   verlustfrei nach Unicode überführt, statt zum Ersatzzeichen `\u{FFFD}` zu werden.
+pub fn decode_tracker_text(raw: &[u8]) -> String {
+    let slice = match raw.iter().position(|&b| b == 0) {
+        Some(nul) => &raw[..nul],
+        None => raw,
+    };
+    if let Ok(s) = std::str::from_utf8(slice) {
+        return s.trim().to_string();
+    }
+    let mut out = String::with_capacity(slice.len());
+    for &b in slice {
+        let ch = match b {
+            0x00..=0x1F => ' ',
+            0x20..=0x7E => b as char,
+            0x84 | 0xE4 => 'ä',
+            0x8E | 0xC4 => 'Ä',
+            0x94 | 0xF6 => 'ö',
+            0x99 | 0xD6 => 'Ö',
+            0x81 | 0xFC => 'ü',
+            0x9A | 0xDC => 'Ü',
+            0xE1 | 0xDF => 'ß',
+            0x82 | 0xE9 => 'é',
+            0x8A | 0xE8 => 'è',
+            0x88 | 0xEA => 'ê',
+            0xA0 | 0xE1..=0xFF => b as char,
+            _ => ' ',
+        };
+        out.push(ch);
+    }
+    out.trim().to_string()
+}
+
 /// Extrahiert die Instrumenten-Namen (`bm10` Module Info) und detaillierten Sample-/Loop-Metadaten
 /// (`bm11` Instrument Info) konsistent für sowohl `.IT` (1-basiert in `mi.instruments[1..=count]`)
 /// als auch alle klassischen Formate (`.MOD`, `.S3M`, `.XM`, `.MTM`, `.669`, `.STM`, `.FAR`, `.OKT`,
@@ -565,7 +600,7 @@ pub fn extract_ui_instruments(
         for i in 1..=count {
             let inst = &mi.instruments[i];
             let len = (inst.name_len as usize).min(40);
-            let name_str = String::from_utf8_lossy(&inst.name[..len]).trim().to_string();
+            let name_str = decode_tracker_text(&inst.name[..len]);
             inst_names.push(name_str.clone());
             let length = (inst.iend - inst.offset).max(0);
             let (loop_start, loop_length) = if inst.loop_end > 0 {
@@ -605,7 +640,7 @@ pub fn extract_ui_instruments(
         for idx in 0..slot_count {
             let inst = &mi.instruments[idx];
             let len = (inst.name_len as usize).min(40);
-            let name_str = String::from_utf8_lossy(&inst.name[..len]).trim().to_string();
+            let name_str = decode_tracker_text(&inst.name[..len]);
             inst_names.push(name_str.clone());
             let length = (inst.iend - inst.offset).max(0);
             let (loop_start, loop_length) = if inst.loop_end > inst.offset {
@@ -654,9 +689,7 @@ pub fn load_and_prepare_module_isolated(
     };
 
     let mod_name_len = new_mod.state.mi.mod_name_len as usize;
-    let mod_name = String::from_utf8_lossy(&new_mod.state.mi.mod_name[..mod_name_len.min(40)])
-        .trim()
-        .to_string();
+    let mod_name = decode_tracker_text(&new_mod.state.mi.mod_name[..mod_name_len.min(40)]);
     let (inst_names, inst_infos) = extract_ui_instruments(&new_mod.state.mi);
 
     if new_mod.state.mi.file_type != ModType::IT && base_settings.oversamp >= 4 {
@@ -712,6 +745,7 @@ fn apply_ready_loaded_module(
         .unwrap_or("")
         .to_uppercase();
     ui.current_file_path = Some(ready.path);
+    ui.reset_all_title_scrolls();
     ui.format_str = format!("{:?}", ready.module.state.mi.file_type);
     ui.num_channels = (ready.module.state.mi.num_tracks as usize).min(32);
     ui.num_patterns = ready.module.state.mi.num_patterns as usize;

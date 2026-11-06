@@ -6,7 +6,7 @@ pub enum SkinMode {
     /// 1. `2.40 Classic` (`0`): MOD4WIN 2.40 Classic (Windows 95 Silber-Blau-Titelleiste + 3D-Grau)
     #[default]
     Classic240 = 0,
-    /// 2. `Modern` (`3`): Modern Skin (MOD4WIN 3.0 Beta)
+    /// 2. `Modern` (`3`): Modern Skin (MOD4WIN 3.00)
     Modern = 3,
 }
 

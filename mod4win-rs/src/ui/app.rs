@@ -347,6 +347,10 @@ pub struct UiSharedState {
     pub pending_initial_peak_search: Option<PendingPeakSearch>,
     /// Zeitpunkt unmittelbar vor dem Öffnen der GUI (`run_ui`).
     pub gui_launch_instant: Instant,
+    /// Startzeitpunkt für das Marquee-Scrolling im Haupt-/Mini-Fenster (`BMPFont.TimerScroll`: `2000 ms` Initial-Pause, danach `120 ms`/Zeichen).
+    pub title_scroll_epoch: Instant,
+    /// Startzeitpunkt für das Marquee-Scrolling im Module-Info-Fenster (`2600 ms` bzw. `3100 ms` Initial-Pause, danach `120 ms`/Zeichen).
+    pub info_scroll_epoch: Instant,
 }
 
 impl UiSharedState {
@@ -447,7 +451,46 @@ impl UiSharedState {
             peak_search: None,
             pending_initial_peak_search: None,
             gui_launch_instant: Instant::now(),
+            title_scroll_epoch: Instant::now(),
+            info_scroll_epoch: Instant::now(),
         }
+    }
+
+    /// Setzt den Marquee-Scroll-Timer der Haupt-/Mini-Anzeige zurück (damit die `n * 100 ms` Initial-Pause von vorn beginnt).
+    pub fn reset_title_scroll(&mut self) {
+        self.title_scroll_epoch = Instant::now();
+    }
+
+    /// Setzt die Marquee-Scroll-Timer sowohl für Haupt-/Mini-Fenster als auch für das Module-Info-Fenster zurück.
+    pub fn reset_all_title_scrolls(&mut self) {
+        let now = Instant::now();
+        self.title_scroll_epoch = now;
+        self.info_scroll_epoch = now;
+    }
+
+    /// Liefert die verstrichene Zeit in Millisekunden für das Marquee-Scrolling in der Haupt-/Mini-Anzeige (`Main_Info`):
+    /// - Während `PEAK SEARCH ... XX%` oder ein temporäres `status_banner` aktiv ist, wird `0` zurückgegeben (statisch zentriert).
+    /// - Nach Ablauf eines `status_banner` beginnt die `2000 ms` Initial-Pause sauber ab dem Ende des Banners.
+    pub fn main_title_scroll_elapsed_ms(&self) -> u64 {
+        if self.active_peak_search_display().is_some() {
+            return 0;
+        }
+        let mut start = self.title_scroll_epoch;
+        if let Some((_, ts)) = self.status_banner {
+            if ts.elapsed().as_secs_f32() < 2.2 {
+                return 0;
+            }
+            let banner_end = ts + std::time::Duration::from_millis(2200);
+            if banner_end > start {
+                start = banner_end;
+            }
+        }
+        Instant::now().saturating_duration_since(start).as_millis() as u64
+    }
+
+    /// Liefert die verstrichene Zeit in Millisekunden für das Marquee-Scrolling im Module-Info-Fenster (`Info_Title`).
+    pub fn info_title_scroll_elapsed_ms(&self) -> u64 {
+        self.info_scroll_epoch.elapsed().as_millis() as u64
     }
 
     /// Aktualisiert den Stereo-Ausgangspegel `output_vu_lr` (`0..=64`) direkt aus den tatsächlich ausgegebenen
@@ -617,6 +660,7 @@ impl UiSharedState {
             ps.percent = 100;
             ps.scanned_order = ps.total_orders.max(1);
             if now >= until {
+                self.reset_title_scroll();
                 return false;
             }
             self.peak_search = Some(ps);
@@ -1557,7 +1601,7 @@ fn cursor_for_resize_dir(dir: Option<ResizeDirection>) -> CursorIcon {
     }
 }
 
-/// Hauptanwendung für die MOD4WIN 3.0 Beta Multi-Window-Oberfläche.
+/// Hauptanwendung für die MOD4WIN 3.00 Multi-Window-Oberfläche.
 pub struct Mod4WinApp {
     pub(crate) shared_state: Arc<Mutex<UiSharedState>>,
     pub(crate) assets: EmbeddedAssets,
@@ -1611,7 +1655,8 @@ impl Mod4WinApp {
     pub fn new(shared_state: Arc<Mutex<UiSharedState>>) -> Self {
         let assets = EmbeddedAssets::load();
         let (initial_dir, initial_playlist, initial_ini, is_mini, st_clone) = {
-            let st = shared_state.lock().unwrap();
+            let mut st = shared_state.lock().unwrap();
+            st.reset_all_title_scrolls();
             let dir = st
                 .current_file_path
                 .as_ref()
@@ -2055,7 +2100,7 @@ impl Mod4WinApp {
                             self.locale.tr_or("win", "mini_title", "MOD4WIN Mini-Status").to_string(),
                         );
                     } else {
-                        return (w, h, "MOD4WIN [3.0 Beta]".to_string());
+                        return (w, h, "MOD4WIN 3.00".to_string());
                     }
                 }
                 WindowKind::ModuleInfo | WindowKind::InstrumentInfo => {
@@ -2072,7 +2117,7 @@ impl Mod4WinApp {
                     return (w, h, "[13] MOD4WIN Setup".to_string());
                 }
                 WindowKind::About => {
-                    return (w, h, "[5] About MOD4WIN 3.0 Beta".to_string());
+                    return (w, h, "[5] About MOD4WIN 3.00".to_string());
                 }
                 _ => {}
             }
@@ -2089,14 +2134,14 @@ impl Mod4WinApp {
                     (
                         w,
                         h,
-                        self.locale.tr_or("win", "main_title", "MOD4WIN [3.0 Beta]").to_string(),
+                        self.locale.tr_or("win", "main_title", "MOD4WIN 3.00").to_string(),
                     )
                 }
             }
             WindowKind::ModuleInfo => (
                 w,
                 h,
-                self.locale.tr_or("win", "info_title", "MOD4WIN [3.0 Beta] Module Info").to_string(),
+                self.locale.tr_or("win", "info_title", "MOD4WIN 3.00 Module Info").to_string(),
             ),
             WindowKind::InstrumentInfo => (
                 w,
@@ -2126,7 +2171,7 @@ impl Mod4WinApp {
             WindowKind::SetupDialog => (
                 w,
                 h,
-                self.locale.tr_or("win", "setup_title", "MOD4WIN [3.0 Beta] Setup").to_string(),
+                self.locale.tr_or("win", "setup_title", "MOD4WIN 3.00 Setup").to_string(),
             ),
             WindowKind::WavAskDialog => (
                 w,
@@ -2160,7 +2205,7 @@ impl Mod4WinApp {
             WindowKind::About => (
                 w,
                 h,
-                self.locale.tr_or("win", "about_title", "MOD4WIN [3.0 Beta] About").to_string(),
+                self.locale.tr_or("win", "about_title", "MOD4WIN 3.00 About").to_string(),
             ),
             WindowKind::HelpViewer => (
                 w,
@@ -2277,6 +2322,11 @@ impl Mod4WinApp {
                 return;
             }
 
+        if kind == WindowKind::ModuleInfo {
+            if let Ok(mut st) = self.shared_state.lock() {
+                st.info_scroll_epoch = Instant::now();
+            }
+        }
         let state = self.shared_state.lock().unwrap().clone();
         if kind == WindowKind::OpenDialog {
             if self.is_modern_skin(&state) {
@@ -3096,6 +3146,7 @@ impl Mod4WinApp {
             if (9..=331).contains(&vx) && (27..=50).contains(&vy) {
                 let mut state = self.shared_state.lock().unwrap();
                 state.show_filename = !state.show_filename;
+                state.reset_title_scroll();
                 return;
             }
             if (315..=360).contains(&vx) && (71..=81).contains(&vy) {

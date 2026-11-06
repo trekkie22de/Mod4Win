@@ -265,9 +265,9 @@ impl WinHelpBook {
                         bullet: false,
                         spans: vec![HelpSpan {
                             text: if is_ger {
-                                "In MOD4WIN 3.0 Beta berechnet die 4. IDO-Stufe (IDO-FPU, OverSamp = 3) die kubische 4-Punkt-Spline-Interpolation direkt ueber den mathematischen Coprozessor (80x87 FPU) bzw. die FPU-Spline-Tabelle.".to_string()
+                                "In MOD4WIN 3.00 berechnet die 4. IDO-Stufe (IDO-FPU, OverSamp = 3) die kubische 4-Punkt-Spline-Interpolation direkt ueber den mathematischen Coprozessor (80x87 FPU) bzw. die FPU-Spline-Tabelle.".to_string()
                             } else {
-                                "In MOD4WIN 3.0 Beta, the 4th IDO stage (IDO-FPU, OverSamp = 3) computes 4-point cubic spline interpolation using the math coprocessor (80x87 FPU) spline table.".to_string()
+                                "In MOD4WIN 3.00, the 4th IDO stage (IDO-FPU, OverSamp = 3) computes 4-point cubic spline interpolation using the math coprocessor (80x87 FPU) spline table.".to_string()
                             },
                             bold: false,
                             link: None,
@@ -277,7 +277,7 @@ impl WinHelpBook {
             });
         }
 
-        // Ergänze die Neuerungen von MOD4WIN 3.0 Beta in `main_index`, `Features` und `Revisions`
+        // Ergänze die Neuerungen von MOD4WIN 3.00 in `main_index`, `Features` und `Revisions`
         for t in topics.iter_mut() {
             if t.id.eq_ignore_ascii_case("main_index") {
                 let already_has_v30 = t.blocks.iter().any(|b| match b {
@@ -314,9 +314,9 @@ impl WinHelpBook {
                         bullet: false,
                         spans: vec![HelpSpan {
                             text: if is_ger {
-                                "Version 3.00 Beta       2026  Native 64-Bit-Edition".to_string()
+                                "Version 3.00            2026  Native 64-Bit-Edition".to_string()
                             } else {
-                                "Version 3.00 Beta       2026  Native 64-Bit Edition".to_string()
+                                "Version 3.00            2026  Native 64-Bit Edition".to_string()
                             },
                             bold: true,
                             link: None,
@@ -358,9 +358,9 @@ impl WinHelpBook {
 
     fn build_v30_new_features_blocks(is_ger: bool) -> Vec<HelpBlock> {
         let heading = if is_ger {
-            "NEU IN MOD4WIN 3.0 BETA:"
+            "NEU IN MOD4WIN 3.00:"
         } else {
-            "NEW IN MOD4WIN 3.0 BETA:"
+            "NEW IN MOD4WIN 3.00:"
         };
         #[allow(clippy::type_complexity)]
         let bullets: [(&str, &str, Option<(&str, bool)>); 6] = if is_ger {

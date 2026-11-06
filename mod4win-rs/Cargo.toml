@@ -1,6 +1,6 @@
 [package]
 name = "mod4win-rs"
-version = "0.1.0"
+version = "3.0.0"
 edition = "2024"
 description = "Bit-exact Rust port of the MOD4WIN 2.40 Beta audio engine (Kay Bruns)"
 

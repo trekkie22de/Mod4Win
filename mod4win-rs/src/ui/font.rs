@@ -276,7 +276,18 @@ pub fn draw_bmp_text_16x20(
     font_bmp: &BmpImage,
 ) {
     for c in text.chars() {
-        let up = c.to_ascii_uppercase() as u8;
+        let mapped = match c {
+            '~' => '-',
+            '{' => '(',
+            '}' => ')',
+            '|' => '!',
+            '`' | '´' | '’' | '‘' => '\'',
+            '“' | '”' | '„' => '"',
+            '«' => '<',
+            '»' => '>',
+            other => other,
+        };
+        let up = mapped.to_ascii_uppercase() as u8;
         let k = if (32..96).contains(&up) {
             (up - 32) as u32
         } else {
@@ -286,6 +297,82 @@ pub fn draw_bmp_text_16x20(
         font_bmp.blit_rect_to(src_x, 0, 16, 20, dst, dst_width, dst_height, x, y);
         x += 16;
     }
+}
+
+/// Formatiert einen Text für ein `n`-stelliges Dot-Matrix-Feld exakt nach `BMPFont.setbmptext` und
+/// `BMPFont.TimerScroll` in `winunit.pas` (Zeilen 2539–2624):
+/// - Deutsche Umlaute werden wie im Original (`CharsInFont <= 64`) zu `AE`, `OE`, `UE`, `SS` expandiert.
+/// - Ist die Zeichenkette `<= n` Zeichen lang, wird sie im `n`-Zeichen-Feld zentriert.
+/// - Ist die Zeichenkette `> n` Zeichen lang (`L = chars.len()`), bleibt sie zunächst für `n * 100 ms`
+///   (`2000 ms` bei `n = 20`, `2600 ms` bei `n = 26`, `3100 ms` bei `n = 31`) am linken Anschlag stehen
+///   und scrollt danach im `120 ms`-Takt zeichenweise durch einen Ringpuffer der Länge `L + n`
+///   (`L` Textzeichen gefolgt von `n` Leerzeichen).
+pub fn format_bmp_marquee_field(text: &str, n: usize, elapsed_ms: u64) -> String {
+    if n == 0 {
+        return String::new();
+    }
+    let mut normalized = String::new();
+    for ch in text.chars() {
+        match ch {
+            'ä' | 'Ä' => normalized.push_str("AE"),
+            'ö' | 'Ö' => normalized.push_str("OE"),
+            'ü' | 'Ü' => normalized.push_str("UE"),
+            'ß' => normalized.push_str("SS"),
+            _ => normalized.push(ch.to_ascii_uppercase()),
+        }
+    }
+    let trimmed = normalized.trim();
+    let chars: Vec<char> = trimmed.chars().collect();
+    if chars.len() <= n {
+        let pad_left = (n.saturating_sub(chars.len())) / 2;
+        let mut field = String::with_capacity(n);
+        for _ in 0..pad_left {
+            field.push(' ');
+        }
+        for c in chars {
+            field.push(c);
+        }
+        while field.chars().count() < n {
+            field.push(' ');
+        }
+        return field;
+    }
+
+    let hold_ms = (n as u64) * 100;
+    let step = if elapsed_ms < hold_ms {
+        0usize
+    } else {
+        1 + ((elapsed_ms - hold_ms) / 120) as usize
+    };
+    let period = chars.len() + n;
+    let mut field = String::with_capacity(n);
+    for i in 0..n {
+        let idx = (step + i) % period;
+        if idx < chars.len() {
+            field.push(chars[idx]);
+        } else {
+            field.push(' ');
+        }
+    }
+    field
+}
+
+/// Zeichnet ein Textfeld fester Breite `n` Zeichen mit `FONT_16X20.bmp` inklusive originalgetreuem
+/// Marquee-Scrolling für überlange Titel (`BMPFont` in `winunit.pas`).
+#[allow(clippy::too_many_arguments)]
+pub fn draw_bmp_text_16x20_marquee(
+    dst: &mut [u8],
+    dst_width: u32,
+    dst_height: u32,
+    x: i32,
+    y: i32,
+    n: usize,
+    text: &str,
+    elapsed_ms: u64,
+    font_bmp: &BmpImage,
+) {
+    let field = format_bmp_marquee_field(text, n, elapsed_ms);
+    draw_bmp_text_16x20(dst, dst_width, dst_height, x, y, &field, font_bmp);
 }
 
 /// Zeichnet ein zentriertes Textfeld fester Breite `n` Zeichen mit `FONT_16X20.bmp` exakt wie `BMPText` in `winunit.pas`.
@@ -299,30 +386,7 @@ pub fn draw_bmp_text_16x20_centered(
     text: &str,
     font_bmp: &BmpImage,
 ) {
-    let mut normalized = String::new();
-    for ch in text.chars() {
-        match ch {
-            'ä' | 'Ä' => normalized.push_str("AE"),
-            'ö' | 'Ö' => normalized.push_str("OE"),
-            'ü' | 'Ü' => normalized.push_str("UE"),
-            'ß' => normalized.push_str("SS"),
-            _ => normalized.push(ch.to_ascii_uppercase()),
-        }
-    }
-    let trimmed = normalized.trim();
-    let chars: Vec<char> = trimmed.chars().take(n).collect();
-    let pad_left = (n.saturating_sub(chars.len())) / 2;
-    let mut field = String::with_capacity(n);
-    for _ in 0..pad_left {
-        field.push(' ');
-    }
-    for c in chars {
-        field.push(c);
-    }
-    while field.len() < n {
-        field.push(' ');
-    }
-    draw_bmp_text_16x20(dst, dst_width, dst_height, x, y, &field, font_bmp);
+    draw_bmp_text_16x20_marquee(dst, dst_width, dst_height, x, y, n, text, 0, font_bmp);
 }
 
 /// Zeichnet eine 7-Segment-LCD-Ziffer aus einem Sprite-Sheet (z.B. `LCD_15X24`, `LCD_13X20`, `LCD_08X13`).
@@ -931,13 +995,19 @@ pub fn modern_ui_glyph_6x10(ch: char) -> (u8, [u8; 10]) {
         '?' => (4, [0b0110, 0b1001, 0b0010, 0b0100, 0b0100, 0, 0b0100, 0, 0, 0]),
         '#' => (5, [0, 0b01010, 0b11111, 0b01010, 0b11111, 0b01010, 0, 0, 0, 0]),
         '$' => (5, [0b00100, 0b01111, 0b10100, 0b01110, 0b00101, 0b11110, 0b00100, 0, 0, 0]),
-        '\'' | '`' | '´' => (2, [0b10, 0b10, 0b01, 0, 0, 0, 0, 0, 0, 0]),
-        '"' => (4, [0b1001, 0b1001, 0b1001, 0, 0, 0, 0, 0, 0, 0]),
+        '\'' | '`' | '´' | '’' | '‘' => (2, [0b10, 0b10, 0b01, 0, 0, 0, 0, 0, 0, 0]),
+        '"' | '“' | '”' | '„' => (4, [0b1001, 0b1001, 0b1001, 0, 0, 0, 0, 0, 0, 0]),
         '_' => (5, [0, 0, 0, 0, 0, 0, 0b11111, 0, 0, 0]),
         '(' => (3, [0b001, 0b010, 0b100, 0b100, 0b100, 0b010, 0b001, 0, 0, 0]),
         ')' => (3, [0b100, 0b010, 0b001, 0b001, 0b001, 0b010, 0b100, 0, 0, 0]),
         '[' => (3, [0b111, 0b100, 0b100, 0b100, 0b100, 0b100, 0b111, 0, 0, 0]),
         ']' => (3, [0b111, 0b001, 0b001, 0b001, 0b001, 0b001, 0b111, 0, 0, 0]),
+        '{' => (3, [0b011, 0b010, 0b010, 0b100, 0b010, 0b010, 0b011, 0, 0, 0]),
+        '}' => (3, [0b110, 0b010, 0b010, 0b001, 0b010, 0b010, 0b110, 0, 0, 0]),
+        '|' => (2, [0b10, 0b10, 0b10, 0b10, 0b10, 0b10, 0b10, 0b10, 0, 0]),
+        '@' => (5, [0b01110, 0b10001, 0b10111, 0b10101, 0b10111, 0b10000, 0b01110, 0, 0, 0]),
+        '^' => (5, [0b00100, 0b01010, 0b10001, 0, 0, 0, 0, 0, 0, 0]),
+        '~' => (5, [0, 0, 0b01101, 0b10010, 0, 0, 0, 0, 0, 0]),
         '%' => (5, [0b11001, 0b11010, 0b00100, 0b00100, 0b01011, 0b10011, 0, 0, 0, 0]),
         '&' => (5, [0b01100, 0b10010, 0b01100, 0b10101, 0b10010, 0b10010, 0b01101, 0, 0, 0]),
         '0' => (5, [0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110, 0, 0, 0]),

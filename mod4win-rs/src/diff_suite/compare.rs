@@ -128,7 +128,7 @@ pub fn run_single_ido_diff_in_memory(
     );
     let _ = writeln!(
         report,
-        "MOD4WIN [3.0 Beta] Direct-to-Disk Diagnose-Suite (--diff-suite)"
+        "MOD4WIN 3.00 Direct-to-Disk Diagnose-Suite (--diff-suite)"
     );
     let _ = writeln!(
         report,
@@ -202,7 +202,7 @@ pub fn run_diff_suite(
     ffmpeg_bin_arg: Option<&str>,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     println!("\n======================================================================");
-    println!("MOD4WIN [3.0 Beta] Direct-to-Disk Diagnose-Suite (--diff-suite)");
+    println!("MOD4WIN 3.00 Direct-to-Disk Diagnose-Suite (--diff-suite)");
     println!("======================================================================");
 
     let is_it = loaded_module.state.mi.file_type == ModType::IT;

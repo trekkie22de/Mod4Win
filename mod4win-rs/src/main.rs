@@ -88,7 +88,7 @@ fn print_cli_help(bin_name: &str) {
     println!(
         "\
 ======================================================================
-MOD4WIN [3.0 Beta] - 100% Bit-Exact Rust Port (Audio Engine & UI)
+MOD4WIN 3.00 - 100% Bit-Exact Rust Port (Audio Engine & UI)
 ======================================================================
 
 VERWENDUNG:
@@ -693,15 +693,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
         (m, true, f_len)
     } else {
-        println!("Starte MOD4WIN 3.0 Beta ohne Startdatei (bereit für Drag & Drop / Open)...");
+        println!("Starte MOD4WIN 3.00 ohne Startdatei (bereit für Drag & Drop / Open)...");
         (create_idle_module(), false, 0u32)
     };
 
     let mod_name_len = loaded_module.state.mi.mod_name_len as usize;
     let mod_name_bytes = loaded_module.state.mi.mod_name;
-    let mod_name = String::from_utf8_lossy(&mod_name_bytes[..mod_name_len.min(40)])
-        .trim()
-        .to_string();
+    let mod_name =
+        mod4win_rs::ui::live_audio::decode_tracker_text(&mod_name_bytes[..mod_name_len.min(40)]);
 
     let num_tracks = loaded_module.state.mi.num_tracks;
     let num_patterns = loaded_module.state.mi.num_patterns;
@@ -783,7 +782,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // UI-Shared State vorbereiten
     let mut init_ui_state = UiSharedState::new(
-        if has_initial_module { &mod_name } else { "MOD4WIN 3.0 Beta" },
+        if has_initial_module { &mod_name } else { "MOD4WIN 3.00" },
         &format!("{:?}", file_type),
         if has_initial_module { num_tracks as usize } else { 0 },
         if has_initial_module { diff_patterns as usize } else { 0 },
@@ -939,8 +938,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             default_config.sample_format()
         );
 
-        let sample_rate = default_config.sample_rate();
-        let channels = default_config.channels();
+        let sample_rate = if default_config.sample_rate() > 0 {
+            default_config.sample_rate()
+        } else {
+            48000
+        };
+        let channels = if default_config.channels() > 0 {
+            default_config.channels()
+        } else {
+            2
+        };
         let ui_state_for_audio = Arc::clone(&shared_ui_state);
         let seq_for_audio = Arc::clone(&sequencer_mutex);
 
@@ -949,7 +956,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let is_stereo = channels >= 2;
 
         let err_fn = |err| eprintln!("Audio-Stream-Fehler: {}", err);
-        let stream_config: StreamConfig = default_config.into();
+        let mut stream_config: StreamConfig = default_config.into();
+        stream_config.sample_rate = sample_rate;
+        stream_config.channels = channels;
         let sr_f32 = (sample_rate as f32).max(8000.0);
 
         let stream = match default_config.sample_format() {

@@ -32,6 +32,10 @@ try {
     if (-not (Test-Path $StubSrc)) {
         $StubSrc = Join-Path $ScriptDir "scripts\alsa_stub.c"
     }
+    $StubVer = Join-Path $CrateDir "scripts\alsa_stub.ver"
+    if (-not (Test-Path $StubVer)) {
+        $StubVer = Join-Path $ScriptDir "scripts\alsa_stub.ver"
+    }
 
     $OrigPath = $env:PATH
     $env:PKG_CONFIG_ALLOW_CROSS = "1"
@@ -57,7 +61,7 @@ try {
         $SoRelPath = "target/$StubSubdir/libasound.so"
 
         Write-Host "[1/3] Kompiliere dynamischen ALSA-Shared-Library-Stub ($SoPath)..." -ForegroundColor Yellow
-        zig cc -target $ZigTarget -fPIC -shared "-Wl,-soname,libasound.so.2" $StubSrc -o $SoPath
+        zig cc -target $ZigTarget -fPIC -shared "-Wl,-soname,libasound.so.2" "-Wl,--version-script=scripts/alsa_stub.ver" $StubSrc -o $SoPath
         if ($LASTEXITCODE -ne 0) {
             throw "zig cc (libasound.so) für $ArchLabel fehlgeschlagen!"
         }
@@ -95,13 +99,15 @@ exit /b 0
         $env:PATH = "$StubDir;$OrigPath"
         $env:RUSTFLAGS = "-C link-arg=-Wl,--no-as-needed -C link-arg=$SoRelPath -C link-arg=-Wl,--allow-shlib-undefined"
 
+        $BinPath = Join-Path $CrateDir "target\$BinBase\release\mod4win-rs"
+        Remove-Item -Path $BinPath -Force -ErrorAction SilentlyContinue
+
         Write-Host "[3/3] Starte cargo zigbuild --release --target $RustTarget..." -ForegroundColor Yellow
         cargo zigbuild --release --target $RustTarget
         if ($LASTEXITCODE -ne 0) {
             throw "cargo zigbuild für $RustTarget fehlgeschlagen!"
         }
 
-        $BinPath = Join-Path $CrateDir "target\$BinBase\release\mod4win-rs"
         if (Test-Path $BinPath) {
             $SizeMB = [math]::Round((Get-Item $BinPath).Length / 1MB, 2)
             Write-Host "[OK] Linux-Binary erstellt: $BinPath ($SizeMB MB)" -ForegroundColor Green

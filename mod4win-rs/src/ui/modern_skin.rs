@@ -319,14 +319,36 @@ fn font_5x7_glyph(ch: char) -> [&'static str; 7] {
         '7' => ["11111", "00001", "00010", "00100", "01000", "01000", "01000"],
         '8' => ["01110", "10001", "10001", "01110", "10001", "10001", "01110"],
         '9' => ["01110", "10001", "10001", "01111", "00001", "00001", "01110"],
-        '-' => ["00000", "00000", "00000", "01110", "00000", "00000", "00000"],
+        '-' | '—' | '–' => ["00000", "00000", "00000", "01110", "00000", "00000", "00000"],
         '.' => ["00000", "00000", "00000", "00000", "00000", "01100", "01100"],
+        ',' => ["00000", "00000", "00000", "00000", "01100", "01100", "01000"],
+        ';' => ["00000", "01100", "01100", "00000", "01100", "01100", "01000"],
         ':' => ["00000", "01100", "01100", "00000", "01100", "01100", "00000"],
+        '\'' | '`' | '´' | '’' | '‘' => ["00100", "00100", "01000", "00000", "00000", "00000", "00000"],
+        '"' | '“' | '”' | '„' => ["01010", "01010", "01010", "00000", "00000", "00000", "00000"],
+        '?' => ["01110", "10001", "00001", "00110", "00100", "00000", "00100"],
+        '&' => ["01100", "10010", "10100", "01000", "10101", "10010", "01101"],
+        '#' => ["01010", "11111", "01010", "01010", "11111", "01010", "00000"],
+        '$' => ["00100", "01111", "10100", "01110", "00101", "11110", "00100"],
+        '%' => ["11001", "11010", "00100", "00100", "01011", "10011", "00000"],
+        '*' => ["00000", "00100", "10101", "01110", "10101", "00100", "00000"],
+        '=' => ["00000", "00000", "11111", "00000", "11111", "00000", "00000"],
+        '<' | '«' => ["00010", "00100", "01000", "10000", "01000", "00100", "00010"],
+        '>' | '»' => ["01000", "00100", "00010", "00001", "00010", "00100", "01000"],
         '/' => ["00001", "00010", "00100", "00100", "01000", "10000", "00000"],
+        '\\' => ["10000", "01000", "00100", "00100", "00010", "00001", "00000"],
+        '|' => ["00100", "00100", "00100", "00100", "00100", "00100", "00100"],
+        '@' => ["01110", "10001", "10111", "10101", "10111", "10000", "01110"],
+        '^' => ["00100", "01010", "10001", "00000", "00000", "00000", "00000"],
+        '~' => ["00000", "00000", "01101", "10010", "00000", "00000", "00000"],
         '_' => ["00000", "00000", "00000", "00000", "00000", "00000", "11111"],
         '+' => ["00000", "00100", "00100", "11111", "00100", "00100", "00000"],
-        '(' | '[' => ["00110", "01000", "01000", "01000", "01000", "01000", "00110"],
-        ')' | ']' => ["01100", "00010", "00010", "00010", "00010", "00010", "01100"],
+        '(' => ["00110", "01000", "01000", "01000", "01000", "01000", "00110"],
+        ')' => ["01100", "00010", "00010", "00010", "00010", "00010", "01100"],
+        '[' => ["01110", "01000", "01000", "01000", "01000", "01000", "01110"],
+        ']' => ["01110", "00010", "00010", "00010", "00010", "00010", "01110"],
+        '{' => ["00011", "00100", "00100", "01000", "00100", "00100", "00011"],
+        '}' => ["11000", "00100", "00100", "00010", "00100", "00100", "11000"],
         _ => ["00000", "00000", "00000", "00000", "00000", "00000", "00000"],
     }
 }
@@ -346,7 +368,23 @@ pub fn render_mod4win_matrix20(
     box_h: u32,
     text: &str,
 ) {
-    render_mod4win_matrix_custom(frame, dw, dh, box_x, box_y, box_w, box_h, text, 20);
+    render_mod4win_matrix_custom(frame, dw, dh, box_x, box_y, box_w, box_h, text, 20, 0);
+}
+
+/// Rendert das 20-Zeichen Dot-Matrix-Banner inklusive originalgetreuem `BMPFont`-Marquee-Scrolling (`winunit.pas`).
+#[allow(clippy::too_many_arguments)]
+pub fn render_mod4win_matrix20_marquee(
+    frame: &mut [u8],
+    dw: u32,
+    dh: u32,
+    box_x: i32,
+    box_y: i32,
+    box_w: u32,
+    box_h: u32,
+    text: &str,
+    elapsed_ms: u64,
+) {
+    render_mod4win_matrix_custom(frame, dw, dh, box_x, box_y, box_w, box_h, text, 20, elapsed_ms);
 }
 
 /// Rendert das Dot-Matrix-Banner über die volle Innenbreite (`~555px`, 31 Zeichen / `185 × 7` Dots) im `580px` breiten Info-Fenster.
@@ -360,9 +398,26 @@ pub fn render_mod4win_matrix_info(
     box_h: u32,
     text: &str,
 ) {
-    render_mod4win_matrix_custom(frame, dw, dh, box_x, box_y, box_w, box_h, text, 31);
+    render_mod4win_matrix_custom(frame, dw, dh, box_x, box_y, box_w, box_h, text, 31, 0);
 }
 
+/// Rendert das 31-Zeichen Dot-Matrix-Banner im Info-Fenster inklusive originalgetreuem `BMPFont`-Marquee-Scrolling (`winunit.pas`).
+#[allow(clippy::too_many_arguments)]
+pub fn render_mod4win_matrix_info_marquee(
+    frame: &mut [u8],
+    dw: u32,
+    dh: u32,
+    box_x: i32,
+    box_y: i32,
+    box_w: u32,
+    box_h: u32,
+    text: &str,
+    elapsed_ms: u64,
+) {
+    render_mod4win_matrix_custom(frame, dw, dh, box_x, box_y, box_w, box_h, text, 31, elapsed_ms);
+}
+
+#[allow(clippy::too_many_arguments)]
 fn render_mod4win_matrix_custom(
     frame: &mut [u8],
     dw: u32,
@@ -373,6 +428,7 @@ fn render_mod4win_matrix_custom(
     box_h: u32,
     text: &str,
     total_chars: usize,
+    elapsed_ms: u64,
 ) {
     draw_modern_lcd_box(frame, dw, dh, box_x, box_y, box_w, box_h);
 
@@ -388,15 +444,10 @@ fn render_mod4win_matrix_custom(
     let start_x = box_x + ((box_w as i32 - visual_w) / 2).max(2);
     let start_y = box_y + ((box_h as i32 - visual_h) / 2).max(2);
 
-    // Zentriere kürzere Texte auf `total_chars` Zeichen
-    let trimmed: Vec<char> = text.chars().take(total_chars).collect();
-    let pad_left = (total_chars.saturating_sub(trimmed.len())) / 2;
-    let mut fixed = vec![' '; total_chars];
-    for (i, &c) in trimmed.iter().enumerate() {
-        if pad_left + i < total_chars {
-            fixed[pad_left + i] = c;
-        }
-    }
+    // Zentriert kürzere Texte auf `total_chars` Zeichen bzw. scrollt überlange Texte nach `BMPFont.TimerScroll` (`winunit.pas`)
+    let formatted = super::widgets::format_bmp_marquee_field(text, total_chars, elapsed_ms);
+    let mut fixed: Vec<char> = formatted.chars().collect();
+    fixed.resize(total_chars, ' ');
 
     for col in 0..total_cols {
         let char_idx = col / 6;
@@ -1069,7 +1120,7 @@ impl Mod4WinApp {
             dw,
             dh,
             true,
-            "MOD4WIN [3.0 Beta]",
+            "MOD4WIN 3.00",
             true,
             false,
         );
@@ -1102,7 +1153,8 @@ impl Mod4WinApp {
 
         // --- SPALTE 1 (LINKS, x = 6..378) ---
         // Zeile 1 (y = 30..58, 28px hoch): Volle 357x21 Dot-Matrix (119x7 * 3px) im 359x28 Rahmen + echter mechanischer Schiebeschalter (12x28)
-        render_mod4win_matrix20(frame, dw, dh, 6, 30, 359, 28, display_name);
+        let scroll_ms = state.main_title_scroll_elapsed_ms();
+        render_mod4win_matrix20_marquee(frame, dw, dh, 6, 30, 359, 28, display_name, scroll_ms);
 
         // Physisches Schalter-Gehäuse (`orig-title-switch`, exakt 28px hoch wie das Titel-LCD: x = 367, y = 30, w = 12, h = 28)
         fill_rounded_rect_grad(
@@ -1868,6 +1920,7 @@ impl Mod4WinApp {
             } else {
                 state.show_filename = !state.show_filename;
             }
+            state.reset_title_scroll();
             state.sync_runtime_to_ini();
             return;
         }
@@ -2174,7 +2227,8 @@ impl Mod4WinApp {
         } else {
             "MOD4WIN MINI"
         };
-        render_mod4win_matrix20(frame, dw, dh, 6, 29, 253, 28, display_name);
+        let scroll_ms = state.main_title_scroll_elapsed_ms();
+        render_mod4win_matrix20_marquee(frame, dw, dh, 6, 29, 253, 28, display_name, scroll_ms);
         let is_play = state.is_playing && !state.is_paused;
         let is_stop = !state.is_playing && !state.is_paused;
         draw_transport_btn(frame, dw, dh, 264, 30, 26, 26, 1, is_play);
@@ -2251,7 +2305,8 @@ impl Mod4WinApp {
         } else {
             "NO MODULE LOADED"
         };
-        render_mod4win_matrix_info(frame, dw, dh, 6, 29, 568, 29, title);
+        let info_scroll_ms = state.info_title_scroll_elapsed_ms();
+        render_mod4win_matrix_info_marquee(frame, dw, dh, 6, 29, 568, 29, title, info_scroll_ms);
 
         // Zweispaltige Sample-Liste (x = 6, y = 63, w = 568, h = 215)
         draw_modern_lcd_box(frame, dw, dh, 6, 63, 568, 215);
@@ -3977,7 +4032,7 @@ impl Mod4WinApp {
         dh: u32,
         _state: &UiSharedState,
     ) {
-        draw_modern_window_shell(frame, dw, dh, false, "[5] About MOD4WIN 3.0 Beta", false, false);
+        draw_modern_window_shell(frame, dw, dh, false, "[5] About MOD4WIN 3.00", false, false);
 
         // Obere Box mit 2 animierten Lautsprecher-Konussen links/rechts + MOD 4 WIN Pill
         fill_rounded_rect_grad(
@@ -4015,7 +4070,7 @@ impl Mod4WinApp {
             [0x06, 0x1c, 0x24, 255],
         );
         stroke_rounded_rect(frame, dw, dh, 116, 52, 128, 22, 2, [0x00, 0xa2, 0xb8, 255]);
-        draw_modern_ui_text(frame, dw, dh, 134, 60, "MOD4WIN 3.0 Beta", COL_CYAN_BRAND);
+        draw_modern_ui_text(frame, dw, dh, 146, 60, "MOD4WIN 3.00", COL_CYAN_BRAND);
         draw_modern_ui_text(
             frame,
             dw,
@@ -4610,6 +4665,72 @@ mod tests {
         assert!(
             has_diag_dim,
             "Matrix20 muss dunkle Diagonal-Striche (#0d4a1f) für ungesetzte Dots enthalten"
+        );
+    }
+
+    #[test]
+    fn test_font_5x7_special_chars_and_marquee_scrolling() {
+        for ch in [
+            ',', ';', ':', '.', '!', '?', '\'', '"', '&', '#', '$', '%', '*', '=', '<', '>', '/',
+            '\\', '|', '@', '^', '~', '_', '+', '-', '(', ')', '[', ']', '{', '}',
+        ] {
+            let glyph = font_5x7_glyph(ch);
+            let has_lit_dot = glyph.iter().any(|row| row.as_bytes().contains(&b'1'));
+            assert!(
+                has_lit_dot,
+                "Sonderzeichen {:?} muss in font_5x7_glyph gesetzte Dots besitzen",
+                ch
+            );
+        }
+
+        let title = "Heo, Spann dan Wagen an"; // 23 Zeichen (> 20 im Hauptfenster)
+        assert_eq!(
+            super::super::widgets::format_bmp_marquee_field(title, 20, 0),
+            "HEO, SPANN DAN WAGEN"
+        );
+        assert_eq!(
+            super::super::widgets::format_bmp_marquee_field(title, 20, 1999),
+            "HEO, SPANN DAN WAGEN"
+        );
+        assert_eq!(
+            super::super::widgets::format_bmp_marquee_field(title, 20, 2000),
+            "EO, SPANN DAN WAGEN "
+        );
+        assert_eq!(
+            super::super::widgets::format_bmp_marquee_field(title, 20, 2120),
+            "O, SPANN DAN WAGEN A"
+        );
+        assert_eq!(
+            super::super::widgets::format_bmp_marquee_field(title, 20, 2240),
+            ", SPANN DAN WAGEN AN"
+        );
+        assert_eq!(
+            super::super::widgets::format_bmp_marquee_field(title, 20, 2360),
+            " SPANN DAN WAGEN AN "
+        );
+
+        // Im Info-Fenster (n = 26 Classic, n = 31 Modern) passt ein 23-Zeichen-Titel zentriert hinein:
+        assert_eq!(
+            super::super::widgets::format_bmp_marquee_field(title, 26, 5000),
+            " HEO, SPANN DAN WAGEN AN  "
+        );
+        // Überlanger Titel (> 31 Zeichen) scrollt auch im Info-Fenster nach n * 100 ms (2600 ms / 3100 ms):
+        let long_info_title = "CAPTAIN FUTURE - MAIN THEME (REMIX 1995)";
+        assert_eq!(
+            super::super::widgets::format_bmp_marquee_field(long_info_title, 26, 2599),
+            "CAPTAIN FUTURE - MAIN THEM"
+        );
+        assert_eq!(
+            super::super::widgets::format_bmp_marquee_field(long_info_title, 26, 2600),
+            "APTAIN FUTURE - MAIN THEME"
+        );
+        assert_eq!(
+            super::super::widgets::format_bmp_marquee_field(long_info_title, 31, 3099),
+            "CAPTAIN FUTURE - MAIN THEME (RE"
+        );
+        assert_eq!(
+            super::super::widgets::format_bmp_marquee_field(long_info_title, 31, 3100),
+            "APTAIN FUTURE - MAIN THEME (REM"
         );
     }
 }
