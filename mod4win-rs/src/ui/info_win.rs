@@ -384,8 +384,9 @@ impl Mod4WinApp {
             .enumerate()
             .map(|(idx, p)| {
                 let name = p
-                    .file_name()
-                    .and_then(|n| n.to_str())
+                    .to_str()
+                    .and_then(|s| s.rsplit(['/', '\\']).find(|seg| !seg.is_empty()))
+                    .or_else(|| p.file_name().and_then(|n| n.to_str()))
                     .unwrap_or("module.mod")
                     .to_lowercase();
                 (idx, name)
@@ -460,8 +461,9 @@ impl Mod4WinApp {
                 }
                 let text_col = if is_cursor { col_black } else { col_green };
                 let name = p
-                    .file_name()
-                    .and_then(|n| n.to_str())
+                    .to_str()
+                    .and_then(|s| s.rsplit(['/', '\\']).find(|seg| !seg.is_empty()))
+                    .or_else(|| p.file_name().and_then(|n| n.to_str()))
                     .unwrap_or("module.mod")
                     .to_lowercase();
                 let line = format!("{:4}:{}", orig_idx + 1, name);

@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Baut das echte 32-Bit 80486 / Windows 3.11 (Win32s 1.30c) / Windows 95 Retro-Binary `MOD4WIN32.EXE`.
 .DESCRIPTION
@@ -11,11 +11,35 @@
 $ErrorActionPreference = "Stop"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$TargetDir = if ($env:CARGO_TARGET_DIR) {
+    $env:CARGO_TARGET_DIR
+} elseif ($IsLinux -and (Test-Path "/var/tmp/mod4win-target")) {
+    "/var/tmp/mod4win-target"
+} else {
+    Join-Path $ScriptDir "target"
+}
+
 Push-Location $ScriptDir
 try {
+    if ($IsLinux) {
+        $env:PATH = "/usr/local/bin:$HOME/.cargo/bin:$([System.IO.Path]::PathSeparator)$env:PATH"
+        $env:XWIN_ARCH = "x86,x86_64"
+        $xwinDir = Join-Path $HOME ".cache/cargo-xwin/xwin"
+        if (-not (Test-Path (Join-Path $xwinDir "sdk/lib/um/x86"))) {
+            Write-Host "[xwin] Lade 32-Bit Windows SDK Bibliotheken in den Cache..." -ForegroundColor Cyan
+            cargo xwin cache xwin --xwin-arch x86,x86_64
+        }
+        $env:CARGO_TARGET_I486_WIN32S_WINDOWS_MSVC_LINKER = "lld-link"
+        $umLib   = Join-Path $xwinDir "sdk/lib/um/x86"
+        $ucrtLib = Join-Path $xwinDir "sdk/lib/ucrt/x86"
+        $crtLib  = Join-Path $xwinDir "crt/lib/x86"
+        $env:RUSTFLAGS = "-Z unstable-options -C opt-level=2 -C link-arg=/LIBPATH:$umLib -C link-arg=/LIBPATH:$ucrtLib -C link-arg=/LIBPATH:$crtLib"
+    } else {
+        $env:RUSTFLAGS = "-Z unstable-options -C opt-level=2"
+    }
+
     $env:RUSTC_BOOTSTRAP = "1"
     $env:RUST_TARGET_PATH = $ScriptDir
-    $env:RUSTFLAGS = "-Z unstable-options -C opt-level=2"
 
     Write-Host "[1/3] Kompiliere mod4win-rs (Target: i486-win32s-windows-msvc, Feature: retro-win32)..." -ForegroundColor Cyan
     cargo build --release --target i486-win32s-windows-msvc --no-default-features --features retro-win32 -Z json-target-spec -Z build-std=std,panic_abort
@@ -23,7 +47,7 @@ try {
         throw "cargo build fehlgeschlagen mit Exit-Code $LASTEXITCODE"
     }
 
-    $SrcExe = Join-Path $ScriptDir "target\i486-win32s-windows-msvc\release\mod4win-rs.exe"
+    $SrcExe = Join-Path $TargetDir "i486-win32s-windows-msvc/release/mod4win-rs.exe"
     $DstExe = Join-Path $ScriptDir "MOD4WIN32.EXE"
     Copy-Item -Path $SrcExe -Destination $DstExe -Force
 
@@ -49,6 +73,7 @@ try {
     $sizeKb = [Math]::Round((Get-Item $DstExe).Length / 1024.0, 1)
     Write-Host "[3/3] Fertig: $DstExe & $DstExe83 ($sizeKb KB)" -ForegroundColor Green
 } finally {
+    Remove-Item Env:\RUSTFLAGS -ErrorAction SilentlyContinue
+    Remove-Item Env:\CARGO_TARGET_I486_WIN32S_WINDOWS_MSVC_LINKER -ErrorAction SilentlyContinue
     Pop-Location
 }
-
