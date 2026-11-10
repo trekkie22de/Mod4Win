@@ -2,7 +2,7 @@ $ErrorActionPreference = "Stop"
 
 # Arbeitsverzeichnis auf mod4win-rs setzen (funktioniert sowohl aus Repo-Root als auch aus mod4win-rs/)
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-if (Test-Path (Join-Path $ScriptDir "mod4win-rs\Cargo.toml")) {
+if (Test-Path (Join-Path $ScriptDir "mod4win-rs/Cargo.toml")) {
     $CrateDir = Join-Path $ScriptDir "mod4win-rs"
 } elseif (Test-Path (Join-Path $ScriptDir "Cargo.toml")) {
     $CrateDir = $ScriptDir
@@ -10,17 +10,34 @@ if (Test-Path (Join-Path $ScriptDir "mod4win-rs\Cargo.toml")) {
     throw "Cargo.toml konnte nicht gefunden werden."
 }
 
+$TargetDir = if ($env:CARGO_TARGET_DIR) {
+    $env:CARGO_TARGET_DIR
+} elseif ($IsLinux -and (Test-Path "/var/tmp/mod4win-target")) {
+    "/var/tmp/mod4win-target"
+} else {
+    Join-Path $CrateDir "target"
+}
+
 Push-Location $CrateDir
 try {
-    # 1. Zig im PATH sicherstellen (inkl. automatischer Erkennung einer WinGet-Zig-Installation)
+    $PathSep = [System.IO.Path]::PathSeparator
+    if ($IsLinux) {
+        $env:PATH = "/usr/local/bin:$HOME/.cargo/bin$PathSep$env:PATH"
+    }
+
+    # 1. Zig im PATH sicherstellen (inkl. automatischer Erkennung einer WinGet-Zig-Installation unter Windows)
     if (-not (Get-Command "zig" -ErrorAction SilentlyContinue)) {
-        $wingetZig = Get-ChildItem -Path "$env:LOCALAPPDATA\Microsoft\WinGet\Packages" -Filter "zig.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-        if ($wingetZig) {
-            $zigDir = $wingetZig.DirectoryName
-            Write-Host "[Zig] Gefunden unter: $zigDir" -ForegroundColor Cyan
-            $env:PATH = "$zigDir;$env:PATH"
+        if ($IsWindows) {
+            $wingetZig = Get-ChildItem -Path "$env:LOCALAPPDATA\Microsoft\WinGet\Packages" -Filter "zig.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($wingetZig) {
+                $zigDir = $wingetZig.DirectoryName
+                Write-Host "[Zig] Gefunden unter: $zigDir" -ForegroundColor Cyan
+                $env:PATH = "$zigDir$PathSep$env:PATH"
+            } else {
+                throw "zig.exe wurde weder im PATH noch unter WinGet gefunden!"
+            }
         } else {
-            throw "zig.exe wurde weder im PATH noch unter WinGet gefunden!"
+            throw "zig wurde nicht im PATH gefunden!"
         }
     }
 
@@ -28,14 +45,8 @@ try {
     Write-Host "[Rustup] Prüfe Linux-Targets (x86_64 & aarch64)..." -ForegroundColor Cyan
     rustup target add x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu
 
-    $StubSrc = Join-Path $CrateDir "scripts\alsa_stub.c"
-    if (-not (Test-Path $StubSrc)) {
-        $StubSrc = Join-Path $ScriptDir "scripts\alsa_stub.c"
-    }
-    $StubVer = Join-Path $CrateDir "scripts\alsa_stub.ver"
-    if (-not (Test-Path $StubVer)) {
-        $StubVer = Join-Path $ScriptDir "scripts\alsa_stub.ver"
-    }
+    $StubSrc = Join-Path $CrateDir "scripts/alsa_stub.c"
+    $StubVer = Join-Path $CrateDir "scripts/alsa_stub.ver"
 
     $OrigPath = $env:PATH
     $env:PKG_CONFIG_ALLOW_CROSS = "1"
@@ -49,30 +60,27 @@ try {
         )
 
         Write-Host "`n============================================================" -ForegroundColor Green
-        Write-Host " Baue MOD4WIN 3.0 Beta für $ArchLabel ($RustTarget)" -ForegroundColor Green
+        Write-Host " Baue MOD4WIN für $ArchLabel ($RustTarget)" -ForegroundColor Green
         Write-Host "============================================================" -ForegroundColor Green
 
-        $StubDir = Join-Path $CrateDir "target\$StubSubdir"
+        $StubDir = Join-Path $TargetDir $StubSubdir
         New-Item -ItemType Directory -Force -Path $StubDir | Out-Null
         Remove-Item (Join-Path $StubDir "libasound*") -Force -ErrorAction SilentlyContinue
 
         $SoPath = Join-Path $StubDir "libasound.so"
         $So2Path = Join-Path $StubDir "libasound.so.2"
-        $SoRelPath = "target/$StubSubdir/libasound.so"
 
         Write-Host "[1/3] Kompiliere dynamischen ALSA-Shared-Library-Stub ($SoPath)..." -ForegroundColor Yellow
-        zig cc -target $ZigTarget -fPIC -shared "-Wl,-soname,libasound.so.2" "-Wl,--version-script=scripts/alsa_stub.ver" $StubSrc -o $SoPath
+        zig cc -target $ZigTarget -fPIC -shared "-Wl,-soname,libasound.so.2" "-Wl,--version-script=$StubVer" $StubSrc -o $SoPath
         if ($LASTEXITCODE -ne 0) {
             throw "zig cc (libasound.so) für $ArchLabel fehlgeschlagen!"
         }
         Copy-Item -Path $SoPath -Destination $So2Path -Force
 
-        # Temporären pkg-config.bat Wrapper erzeugen:
-        # Hinweis: Unter Zig 0.17 auf Windows wandelt 'zig cc' ein '-lasound' intern in '-l:F:\...\libasound.so' um,
-        # was ld.lld wegen des Windows-Laufwerks-Doppelpunkts ablehnt. Darum gibt pkg-config.bat bei --libs keinen
-        # '-lasound'-Schalter aus, und wir übergeben die Shared Library 'target/.../libasound.so' direkt per link-arg!
-        $PkgConfigBat = Join-Path $StubDir "pkg-config.bat"
-        $BatContent = @"
+        $BinBase = $RustTarget.Split('.')[0]
+        if ($IsWindows) {
+            $PkgConfigCmd = Join-Path $StubDir "pkg-config.bat"
+            $BatContent = @"
 @echo off
 setlocal
 for %%A in (%*) do (
@@ -87,19 +95,31 @@ for %%A in (%*) do (
 )
 exit /b 0
 "@
-        $BinBase = $RustTarget.Split('.')[0]
-        if (-not (Test-Path $PkgConfigBat)) {
-            $AlsaBuildDirs = Join-Path $CrateDir "target\$BinBase\release\build\alsa-sys-*"
-            Remove-Item -Path $AlsaBuildDirs -Recurse -Force -ErrorAction SilentlyContinue
+            Set-Content -Path $PkgConfigCmd -Value $BatContent -Encoding ASCII
+            $SoLinkArg = $SoPath.Replace('\', '/')
+        } else {
+            $PkgConfigCmd = Join-Path $StubDir "pkg-config"
+            $ShContent = @"
+#!/bin/sh
+for arg in "`$@"; do
+    case "`$arg" in
+        --version) echo "0.29.2"; exit 0 ;;
+        --modversion) echo "1.2.8"; exit 0 ;;
+    esac
+done
+exit 0
+"@
+            [System.IO.File]::WriteAllText($PkgConfigCmd, $ShContent.Replace("`r`n", "`n"))
+            chmod +x $PkgConfigCmd
+            $SoLinkArg = $SoPath
         }
-        Set-Content -Path $PkgConfigBat -Value $BatContent -Encoding ASCII
 
-        Write-Host "[2/3] Konfiguriere pkg-config Stub ($PkgConfigBat)..." -ForegroundColor Yellow
-        $env:PKG_CONFIG = $PkgConfigBat
-        $env:PATH = "$StubDir;$OrigPath"
-        $env:RUSTFLAGS = "-C link-arg=-Wl,--no-as-needed -C link-arg=$SoRelPath -C link-arg=-Wl,--allow-shlib-undefined"
+        Write-Host "[2/3] Konfiguriere pkg-config Stub ($PkgConfigCmd)..." -ForegroundColor Yellow
+        $env:PKG_CONFIG = $PkgConfigCmd
+        $env:PATH = "$StubDir$PathSep$OrigPath"
+        $env:RUSTFLAGS = "-C link-arg=-Wl,--no-as-needed -C link-arg=$SoLinkArg -C link-arg=-Wl,--allow-shlib-undefined"
 
-        $BinPath = Join-Path $CrateDir "target\$BinBase\release\mod4win-rs"
+        $BinPath = Join-Path $TargetDir "$BinBase/release/mod4win-rs"
         Remove-Item -Path $BinPath -Force -ErrorAction SilentlyContinue
 
         Write-Host "[3/3] Starte cargo zigbuild --release --target $RustTarget..." -ForegroundColor Yellow

@@ -1,8 +1,8 @@
-$ErrorActionPreference = "Stop"
+﻿$ErrorActionPreference = "Stop"
 
 # Repo-Root und Crate-Verzeichnis ermitteln
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-if (Test-Path (Join-Path $ScriptDir "mod4win-rs\Cargo.toml")) {
+if (Test-Path (Join-Path $ScriptDir "mod4win-rs/Cargo.toml")) {
     $RootDir = $ScriptDir
     $CrateDir = Join-Path $ScriptDir "mod4win-rs"
 } elseif (Test-Path (Join-Path $ScriptDir "Cargo.toml")) {
@@ -12,14 +12,36 @@ if (Test-Path (Join-Path $ScriptDir "mod4win-rs\Cargo.toml")) {
     throw "Cargo.toml konnte nicht gefunden werden."
 }
 
-$WinBin   = Join-Path $CrateDir "target\release\mod4win-rs.exe"
-$LinX64   = Join-Path $CrateDir "target\x86_64-unknown-linux-gnu\release\mod4win-rs"
-$LinArm64 = Join-Path $CrateDir "target\aarch64-unknown-linux-gnu\release\mod4win-rs"
+if ($IsLinux) {
+    $env:PATH = "/usr/local/bin:$HOME/.cargo/bin:$([System.IO.Path]::PathSeparator)$env:PATH"
+    $env:XWIN_ARCH = "x86,x86_64"
+}
+
+$TargetDir = if ($env:CARGO_TARGET_DIR) {
+    $env:CARGO_TARGET_DIR
+} elseif ($IsLinux -and (Test-Path "/var/tmp/mod4win-target")) {
+    "/var/tmp/mod4win-target"
+} else {
+    Join-Path $CrateDir "target"
+}
+
+$WinBin = if ($IsWindows) {
+    Join-Path $TargetDir "release/mod4win-rs.exe"
+} else {
+    Join-Path $TargetDir "x86_64-pc-windows-msvc/release/mod4win-rs.exe"
+}
+$LinX64   = Join-Path $TargetDir "x86_64-unknown-linux-gnu/release/mod4win-rs"
+$LinArm64 = Join-Path $TargetDir "aarch64-unknown-linux-gnu/release/mod4win-rs"
 
 # 1. Prüfen, ob alle drei Release-Binaries existieren (ggf. automatisch bauen)
 if (-not (Test-Path $WinBin)) {
-    Write-Host "[Build] Windows x64 Release-Binary fehlt – starte cargo build --release..." -ForegroundColor Yellow
-    cargo build --release --manifest-path (Join-Path $CrateDir "Cargo.toml")
+    if ($IsWindows) {
+        Write-Host "[Build] Windows x64 Release-Binary fehlt – starte cargo build --release..." -ForegroundColor Yellow
+        cargo build --release --manifest-path (Join-Path $CrateDir "Cargo.toml")
+    } else {
+        Write-Host "[Build] Windows x64 Release-Binary fehlt – starte cargo xwin build --release --target x86_64-pc-windows-msvc..." -ForegroundColor Yellow
+        cargo xwin build --release --target x86_64-pc-windows-msvc --manifest-path (Join-Path $CrateDir "Cargo.toml")
+    }
     if ($LASTEXITCODE -ne 0) { throw "Windows Release-Build fehlgeschlagen!" }
 }
 
@@ -88,7 +110,7 @@ case "`$ARCH" in
         LEN=$Arm64Len
         ;;
     *)
-        echo "MOD4WIN 3.0 Beta: Nicht unterstuetzte Linux-Architektur: `$ARCH" >&2
+        echo "MOD4WIN: Nicht unterstuetzte Linux-Architektur: `$ARCH" >&2
         exit 1
         ;;
 esac
@@ -158,4 +180,3 @@ Write-Host "  e_lfanew (0x3C)  : 0x$($e_lfanew_after.ToString('X4')) (unverände
 Write-Host "  SH_OFFSET (1-b)  : $ShOffset1 (SH_LEN = $ShLen Bytes)"
 Write-Host "  X64_OFFSET (1-b) : $X64Offset1 (X64_LEN = $X64Len Bytes)"
 Write-Host "  ARM_OFFSET (1-b) : $Arm64Offset1 (ARM_LEN = $Arm64Len Bytes)"
-
