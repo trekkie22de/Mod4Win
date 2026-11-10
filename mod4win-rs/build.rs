@@ -212,12 +212,12 @@ fn push_res_record(
 fn main() {
     println!("cargo:rerun-if-changed=assets/MOD4WIN.ico");
     println!("cargo:rerun-if-changed=help");
-    println!("cargo:rerun-if-changed=src");
 
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
 
-    // 1. Sync & compress all 7 language help HTML files into OUT_DIR/help_*.deflate
+    // 1. Read & compress all 7 language help HTML files into OUT_DIR/help_*.deflate
+    //    (Read-only selection of whichever copy is newer — never mutate source tree during build!)
     let crate_help_dir = manifest_dir.join("help");
     let root_help_dir = manifest_dir.parent().map(|p| p.join("help"));
 
@@ -230,15 +230,19 @@ fn main() {
         if let Some(ref rdir) = root_help_dir {
             let root_path = rdir.join(&filename);
             println!("cargo:rerun-if-changed={}", root_path.display());
-            if let (Ok(m_crate), Ok(m_root)) = (fs::metadata(&crate_path), fs::metadata(&root_path))
-                && let (Ok(t_crate), Ok(t_root)) = (m_crate.modified(), m_root.modified()) {
-                    if t_root > t_crate {
-                        let _ = fs::copy(&root_path, &crate_path);
+            match (fs::metadata(&crate_path), fs::metadata(&root_path)) {
+                (Ok(m_crate), Ok(m_root)) => {
+                    if let (Ok(t_crate), Ok(t_root)) = (m_crate.modified(), m_root.modified())
+                        && t_root > t_crate
+                    {
                         src_path = root_path;
-                    } else if t_crate > t_root {
-                        let _ = fs::copy(&crate_path, &root_path);
                     }
                 }
+                (Err(_), Ok(_)) => {
+                    src_path = root_path;
+                }
+                _ => {}
+            }
         }
 
         let html_bytes = fs::read(&src_path)
@@ -255,11 +259,22 @@ fn main() {
         return;
     }
 
+    // Auf 32-Bit x86 (insb. Windows 3.11 + Win32s 1.30c auf 80486 mit 8-16 MB RAM!) reservieren wir
+    // schlanke 2 MB Stack (64 KB initial commit), während 64-Bit-Builds weiterhin 16 MB erhalten.
+    let target_arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
     let target_env = env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
     if target_env == "msvc" {
-        println!("cargo:rustc-link-arg=/STACK:16777216");
+        if target_arch == "x86" {
+            println!("cargo:rustc-link-arg=/STACK:2097152,65536");
+        } else {
+            println!("cargo:rustc-link-arg=/STACK:16777216");
+        }
     } else if target_env == "gnu" {
-        println!("cargo:rustc-link-arg=-Wl,--stack,16777216");
+        if target_arch == "x86" {
+            println!("cargo:rustc-link-arg=-Wl,--stack,2097152");
+        } else {
+            println!("cargo:rustc-link-arg=-Wl,--stack,16777216");
+        }
     }
 
     let ico_path = manifest_dir.join("assets").join("MOD4WIN.ico");
@@ -283,13 +298,16 @@ fn main() {
     let mut grp_data = Vec::with_capacity(6 + count * 14);
     grp_data.extend_from_slice(&0u16.to_le_bytes()); // idReserved = 0
     grp_data.extend_from_slice(&1u16.to_le_bytes()); // idType = 1 (ICON)
-    grp_data.extend_from_slice(&(count as u16).to_le_bytes());
+    grp_data.extend_from_slice(&0u16.to_le_bytes()); // Platzhalter für valid_count
 
+    let mut valid_count: u16 = 0;
     for idx in 0..count {
         let entry_off = 6 + idx * 16;
         let width = ico_bytes[entry_off];
         let height = ico_bytes[entry_off + 1];
         let color_count = ico_bytes[entry_off + 2];
+        let dir_planes = u16::from_le_bytes([ico_bytes[entry_off + 4], ico_bytes[entry_off + 5]]);
+        let dir_bpp = u16::from_le_bytes([ico_bytes[entry_off + 6], ico_bytes[entry_off + 7]]);
         let bytes_in_res = u32::from_le_bytes([
             ico_bytes[entry_off + 8],
             ico_bytes[entry_off + 9],
@@ -303,13 +321,24 @@ fn main() {
             ico_bytes[entry_off + 15],
         ]) as usize;
 
-        if img_off + bytes_in_res > ico_bytes.len() || bytes_in_res < 40 {
+        if img_off.saturating_add(bytes_in_res) > ico_bytes.len() || bytes_in_res < 40 {
             continue;
         }
         let img_slice = &ico_bytes[img_off..img_off + bytes_in_res];
-        let planes = u16::from_le_bytes([img_slice[12], img_slice[13]]).max(1);
-        let bit_count = u16::from_le_bytes([img_slice[14], img_slice[15]]).max(4);
-        let icon_id = (idx + 1) as u16;
+        let is_png = img_slice.starts_with(b"\x89PNG\r\n\x1a\n");
+        let (planes, bit_count) = if is_png {
+            (
+                dir_planes.max(1),
+                if dir_bpp > 0 { dir_bpp } else { 32 },
+            )
+        } else {
+            (
+                u16::from_le_bytes([img_slice[12], img_slice[13]]).max(1),
+                u16::from_le_bytes([img_slice[14], img_slice[15]]).max(4),
+            )
+        };
+        valid_count = valid_count.saturating_add(1);
+        let icon_id = valid_count;
 
         // RT_ICON = 3
         push_res_record(&mut res, 3, icon_id, 0x1010, 0x0409, img_slice);
@@ -324,6 +353,11 @@ fn main() {
         grp_data.extend_from_slice(&(bytes_in_res as u32).to_le_bytes());
         grp_data.extend_from_slice(&icon_id.to_le_bytes());
     }
+
+    if valid_count == 0 {
+        return;
+    }
+    grp_data[4..6].copy_from_slice(&valid_count.to_le_bytes());
 
     // 3. RT_GROUP_ICON = 14, Name Ordinal = 1 (Main EXE icon)
     push_res_record(&mut res, 14, 1, 0x1030, 0x0409, &grp_data);

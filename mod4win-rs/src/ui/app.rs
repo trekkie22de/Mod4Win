@@ -2322,10 +2322,10 @@ impl Mod4WinApp {
                 return;
             }
 
-        if kind == WindowKind::ModuleInfo {
-            if let Ok(mut st) = self.shared_state.lock() {
-                st.info_scroll_epoch = Instant::now();
-            }
+        if kind == WindowKind::ModuleInfo
+            && let Ok(mut st) = self.shared_state.lock()
+        {
+            st.info_scroll_epoch = Instant::now();
         }
         let state = self.shared_state.lock().unwrap().clone();
         if kind == WindowKind::OpenDialog {

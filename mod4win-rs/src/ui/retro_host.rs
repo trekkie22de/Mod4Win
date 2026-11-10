@@ -887,8 +887,7 @@ pub mod window {
         pub fn set_min_inner_size(&self, _size: Option<LogicalSize<f64>>) {}
 
         pub fn set_title(&self, title: &str) {
-            let mut bytes: Vec<u8> = title.bytes().filter(|&b| b != 0).collect();
-            bytes.push(0);
+            let bytes = crate::win32s_shim::utf8_to_ansi_z(title);
             unsafe {
                 SetWindowTextA(self.hwnd, bytes.as_ptr());
             }
@@ -1049,8 +1048,7 @@ pub mod event_loop {
                     (((sw - w) / 2).max(0), ((sh - h) / 3).max(0))
                 });
 
-            let mut title_a: Vec<u8> = attrs.title.bytes().filter(|&b| b != 0).collect();
-            title_a.push(0);
+            let title_a = crate::win32s_shim::utf8_to_ansi_z(&attrs.title);
 
             const WS_EX_TOOLWINDOW: u32 = 0x0000_0080;
             let ex_style = if attrs.skip_taskbar {
@@ -1223,12 +1221,12 @@ pub mod pixels {
                 virt_h: h,
                 surf_w: self.surface_texture.width.max(1),
                 surf_h: self.surface_texture.height.max(1),
-                rgba: vec![0u8; (w * h * 4) as usize],
                 bgr24: vec![0u8; stride * (h as usize)],
             }));
             register_hwnd_surface(self.surface_texture.window.hwnd, Rc::clone(&state));
             Ok(Pixels {
                 hwnd: self.surface_texture.window.hwnd,
+                rgba: vec![0u8; (w * h * 4) as usize],
                 state,
                 _marker: std::marker::PhantomData,
             })
@@ -1237,6 +1235,7 @@ pub mod pixels {
 
     pub struct Pixels<'a> {
         hwnd: HWND,
+        rgba: Vec<u8>,
         state: Rc<RefCell<GdiSurfaceBuffer>>,
         _marker: std::marker::PhantomData<&'a ()>,
     }
@@ -1245,11 +1244,11 @@ pub mod pixels {
         pub fn set_scaling_mode(&mut self, _mode: ScalingMode) {}
 
         pub fn frame_mut(&mut self) -> &mut [u8] {
-            // Sicherer direkter Zugriff im Single-Thread UI-Loop
-            unsafe { &mut (*self.state.as_ptr()).rgba }
+            &mut self.rgba
         }
 
         pub fn render(&self) -> Result<(), &'static str> {
+            update_surface_bgr24(&mut self.state.borrow_mut(), &self.rgba);
             blit_hwnd_surface(self.hwnd, None);
             Ok(())
         }
@@ -1258,10 +1257,10 @@ pub mod pixels {
             let w = width.max(1);
             let h = height.max(1);
             let stride = ((w * 3 + 3) & !3) as usize;
+            self.rgba.resize((w * h * 4) as usize, 0);
             let mut st = self.state.borrow_mut();
             st.virt_w = w;
             st.virt_h = h;
-            st.rgba.resize((w * h * 4) as usize, 0);
             st.bgr24.resize(stride * (h as usize), 0);
             Ok(())
         }
@@ -1302,7 +1301,6 @@ pub(crate) struct GdiSurfaceBuffer {
     virt_h: u32,
     surf_w: u32,
     surf_h: u32,
-    rgba: Vec<u8>,
     bgr24: Vec<u8>,
 }
 
@@ -1469,8 +1467,35 @@ fn start_interactive_resize(hwnd: HWND, dir: window::ResizeDirection) {
 }
 
 /// Konvertiert den virtuellen RGBA-Puffer (`virt_w x virt_h`) in ein Bottom-Up 24-Bit BGR DIB
-/// (`BI_RGB`, 4-Byte-aligned Scanlines) und blittet ihn via `SetDIBitsToDevice` / `StretchDIBits`
-/// auf das Win32-Fenster.
+/// (`BI_RGB`, 4-Byte-aligned Scanlines).
+fn update_surface_bgr24(st: &mut GdiSurfaceBuffer, rgba: &[u8]) {
+    let vw = st.virt_w.max(1) as usize;
+    let vh = st.virt_h.max(1) as usize;
+    let stride = (vw * 3 + 3) & !3;
+    if st.bgr24.len() < stride * vh {
+        st.bgr24.resize(stride * vh, 0);
+    }
+
+    // Bottom-Up Konvertierung (Scanline 0 im DIB ist die unterste Bildschirmzeile `vh - 1`)
+    for y in 0..vh {
+        let src_row = (vh - 1 - y) * vw * 4;
+        let dst_row = y * stride;
+        if src_row + vw * 4 <= rgba.len() && dst_row + vw * 3 <= st.bgr24.len() {
+            let src_slice = &rgba[src_row..src_row + vw * 4];
+            let dst_slice = &mut st.bgr24[dst_row..dst_row + vw * 3];
+            for x in 0..vw {
+                let s = x * 4;
+                let d = x * 3;
+                dst_slice[d] = src_slice[s + 2]; // B
+                dst_slice[d + 1] = src_slice[s + 1]; // G
+                dst_slice[d + 2] = src_slice[s]; // R
+            }
+        }
+    }
+}
+
+/// Blittet das vorbereitete Bottom-Up 24-Bit BGR DIB (`st.bgr24`) via `SetDIBitsToDevice` /
+/// `StretchDIBits` auf das Win32-Fenster.
 fn blit_hwnd_surface(hwnd: HWND, paint_hdc: Option<HDC>) {
     let surf_rc = HOST_STATE.with(|cell| {
         cell.borrow()
@@ -1489,30 +1514,6 @@ fn blit_hwnd_surface(hwnd: HWND, paint_hdc: Option<HDC>) {
     let stride = (vw * 3 + 3) & !3;
     if st.bgr24.len() < stride * vh {
         st.bgr24.resize(stride * vh, 0);
-    }
-
-    // Bottom-Up Konvertierung (Scanline 0 im DIB ist die unterste Bildschirmzeile `vh - 1`)
-    {
-        let GdiSurfaceBuffer {
-            ref rgba,
-            ref mut bgr24,
-            ..
-        } = *st;
-        for y in 0..vh {
-            let src_row = (vh - 1 - y) * vw * 4;
-            let dst_row = y * stride;
-            if src_row + vw * 4 <= rgba.len() && dst_row + vw * 3 <= bgr24.len() {
-                let src_slice = &rgba[src_row..src_row + vw * 4];
-                let dst_slice = &mut bgr24[dst_row..dst_row + vw * 3];
-                for x in 0..vw {
-                    let s = x * 4;
-                    let d = x * 3;
-                    dst_slice[d] = src_slice[s + 2];     // B
-                    dst_slice[d + 1] = src_slice[s + 1]; // G
-                    dst_slice[d + 2] = src_slice[s];     // R
-                }
-            }
-        }
     }
 
     let bmi = BitmapInfo24 {
@@ -2001,7 +2002,7 @@ unsafe extern "system" fn retro_wnd_proc(
                         dyn_drag_query_file_a(h_drop, i, buf.as_mut_ptr(), buf.len() as UINT)
                             as usize;
                     if len > 0 && len < buf.len() {
-                        let s = String::from_utf8_lossy(&buf[..len]).into_owned();
+                        let s = crate::win32s_shim::ansi_bytes_to_string(&buf[..len]);
                         queue_window_event(
                             win_id,
                             event::WindowEvent::DroppedFile(PathBuf::from(s)),
@@ -2042,6 +2043,7 @@ struct RetroWaveOutEngine {
     stereo_scratch: Vec<(i16, i16)>,
     live_proc: LiveAudioProcessor,
     pending_settings: Option<SoundSettings>,
+    dummy_finished: Arc<AtomicBool>,
 }
 
 impl RetroWaveOutEngine {
@@ -2165,6 +2167,7 @@ impl RetroWaveOutEngine {
             stereo_scratch: vec![(0i16, 0i16); frames_per_buf],
             live_proc: LiveAudioProcessor::new(actual_rate),
             pending_settings: None,
+            dummy_finished: Arc::new(AtomicBool::new(false)),
         };
 
         // Sofort alle vorbereiteten Puffer initial befüllen und per waveOutWrite einreihen
@@ -2184,7 +2187,6 @@ impl RetroWaveOutEngine {
             return;
         }
 
-        let dummy_finished = Arc::new(AtomicBool::new(false));
         let sr_f32 = (self.sample_rate as f32).max(8000.0);
 
         for buf in &mut self.buffers {
@@ -2201,7 +2203,7 @@ impl RetroWaveOutEngine {
                     &mut self.live_proc,
                     &mut self.pending_settings,
                     false,
-                    &dummy_finished,
+                    &self.dummy_finished,
                 );
                 (
                     ui.is_playing,

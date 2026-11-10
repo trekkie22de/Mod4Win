@@ -18,11 +18,12 @@ $TargetDir = if ($env:CARGO_TARGET_DIR) {
     Join-Path $CrateDir "target"
 }
 
+$OrigPath = $env:PATH
 Push-Location $CrateDir
 try {
     $PathSep = [System.IO.Path]::PathSeparator
     if ($IsLinux) {
-        $env:PATH = "/usr/local/bin:$HOME/.cargo/bin$PathSep$env:PATH"
+        $env:PATH = "/usr/local/bin$PathSep$HOME/.cargo/bin$PathSep$env:PATH"
     }
 
     # 1. Zig im PATH sicherstellen (inkl. automatischer Erkennung einer WinGet-Zig-Installation unter Windows)
@@ -150,6 +151,9 @@ exit 0
 
     Write-Host "`nAlle Linux-Cross-Builds (x86_64 & aarch64) erfolgreich abgeschlossen!" -ForegroundColor Green
 } finally {
+    $env:PATH = $OrigPath
     Remove-Item Env:\RUSTFLAGS -ErrorAction SilentlyContinue
+    Remove-Item Env:\PKG_CONFIG -ErrorAction SilentlyContinue
+    Remove-Item Env:\PKG_CONFIG_ALLOW_CROSS -ErrorAction SilentlyContinue
     Pop-Location
 }

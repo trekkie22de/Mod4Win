@@ -27,7 +27,7 @@ mod x86_retro_impl {
     use core::arch::{asm, global_asm};
     use core::ffi::c_void;
     use core::ptr;
-    use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+    use core::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 
     type HANDLE = isize;
     type HMODULE = isize;
@@ -43,8 +43,10 @@ mod x86_retro_impl {
     const FILE_ATTRIBUTE_DIRECTORY: DWORD = 0x0000_0010;
     const FILE_ATTRIBUTE_NORMAL: DWORD = 0x0000_0080;
     const ERROR_FILE_NOT_FOUND: DWORD = 2;
+    const ERROR_TOO_MANY_OPEN_FILES: DWORD = 4;
     const ERROR_NO_MORE_FILES: DWORD = 18;
     const ERROR_CALL_NOT_IMPLEMENTED: DWORD = 120;
+    const ERROR_INSUFFICIENT_BUFFER: DWORD = 122;
 
     // =========================================================================
     // AUTHENTISCHE 1993 WIN32S 1.30C / WINDOWS 95 KERNEL32.DLL ANSI IMPORTE
@@ -141,6 +143,8 @@ mod x86_retro_impl {
             lp_file_part: *mut *mut u8,
         ) -> DWORD;
         fn GetTempPathA(n_buffer_length: DWORD, lp_buffer: *mut u8) -> DWORD;
+        fn GetWindowsDirectoryA(lp_buffer: *mut u8, u_size: u32) -> u32;
+        fn GetSystemDirectoryA(lp_buffer: *mut u8, u_size: u32) -> u32;
 
         fn FindFirstFileA(
             lp_file_name: *const u8,
@@ -164,12 +168,11 @@ mod x86_retro_impl {
     }
 
     pub fn show_retro_panic_and_exit(msg: &str) -> ! {
+        let ansi = utf8_to_ansi_z(msg);
         let mut buf = [0u8; 512];
-        let bytes = msg.as_bytes();
-        let copy_len = bytes.len().min(buf.len() - 1);
-        for i in 0..copy_len {
-            buf[i] = if bytes[i] == 0 { b' ' } else { bytes[i] };
-        }
+        let src = ansi.strip_suffix(&[0]).unwrap_or(&ansi);
+        let copy_len = src.len().min(buf.len() - 1);
+        buf[..copy_len].copy_from_slice(&src[..copy_len]);
         buf[copy_len] = 0;
         unsafe {
             MessageBoxA(
@@ -190,17 +193,58 @@ mod x86_retro_impl {
     pub static _fltused: i32 = 1;
 
     #[inline]
-    unsafe fn x87_sin(x: f64) -> f64 {
+    unsafe fn x87_reduce_trig(x: f64) -> f64 {
         let mut res: f64 = 0.0;
+        unsafe {
+            asm!(
+                "fldpi",
+                "fadd st(0), st(0)",
+                "fld qword ptr [{x}]",
+                "2:",
+                "fprem1",
+                "fnstsw ax",
+                "test ah, 4",
+                "jnz 2b",
+                "fstp st(1)",
+                "fstp qword ptr [{res}]",
+                x = in(reg) &x,
+                res = in(reg) &mut res,
+                out("ax") _,
+                options(nostack)
+            );
+        }
+        res
+    }
+
+    #[inline]
+    unsafe fn x87_sin(x: f64) -> f64 {
+        if !x.is_finite() {
+            return f64::NAN;
+        }
+        let mut res: f64 = 0.0;
+        let mut sw: u16;
         unsafe {
             asm!(
                 "fld qword ptr [{x}]",
                 "fsin",
+                "fnstsw ax",
                 "fstp qword ptr [{res}]",
                 x = in(reg) &x,
                 res = in(reg) &mut res,
+                out("ax") sw,
                 options(nostack)
             );
+            if (sw & 0x0400) != 0 {
+                let xr = x87_reduce_trig(x);
+                asm!(
+                    "fld qword ptr [{x}]",
+                    "fsin",
+                    "fstp qword ptr [{res}]",
+                    x = in(reg) &xr,
+                    res = in(reg) &mut res,
+                    options(nostack)
+                );
+            }
         }
         res
     }
@@ -217,16 +261,33 @@ mod x86_retro_impl {
 
     #[inline]
     unsafe fn x87_cos(x: f64) -> f64 {
+        if !x.is_finite() {
+            return f64::NAN;
+        }
         let mut res: f64 = 0.0;
+        let mut sw: u16;
         unsafe {
             asm!(
                 "fld qword ptr [{x}]",
                 "fcos",
+                "fnstsw ax",
                 "fstp qword ptr [{res}]",
                 x = in(reg) &x,
                 res = in(reg) &mut res,
+                out("ax") sw,
                 options(nostack)
             );
+            if (sw & 0x0400) != 0 {
+                let xr = x87_reduce_trig(x);
+                asm!(
+                    "fld qword ptr [{x}]",
+                    "fcos",
+                    "fstp qword ptr [{res}]",
+                    x = in(reg) &xr,
+                    res = in(reg) &mut res,
+                    options(nostack)
+                );
+            }
         }
         res
     }
@@ -243,8 +304,8 @@ mod x86_retro_impl {
 
     #[inline]
     unsafe fn x87_sqrt(x: f64) -> f64 {
-        if x <= 0.0 {
-            return 0.0;
+        if x < 0.0 {
+            return f64::NAN;
         }
         let mut res: f64 = 0.0;
         unsafe {
@@ -341,6 +402,9 @@ mod x86_retro_impl {
         if base == 1.0 {
             return 1.0;
         }
+        if base == -1.0 && exp.is_infinite() {
+            return 1.0;
+        }
         if base.is_nan() || exp.is_nan() {
             return f64::NAN;
         }
@@ -353,6 +417,14 @@ mod x86_retro_impl {
                 return x87_exp2(p);
             }
         }
+        if exp.is_infinite() {
+            let abs_b = f64::from_bits(base.to_bits() & 0x7FFF_FFFF_FFFF_FFFF);
+            return if (abs_b > 1.0) == exp.is_sign_positive() {
+                f64::INFINITY
+            } else {
+                0.0
+            };
+        }
         // Negative Basis: nur für ganzzahlige Exponenten definiert
         let exp_trunc = unsafe { x87_round_with_cw(exp, 0x0C00) };
         if exp_trunc != exp {
@@ -360,7 +432,8 @@ mod x86_retro_impl {
         }
         let abs_base = f64::from_bits(base.to_bits() & 0x7FFF_FFFF_FFFF_FFFF);
         let mag = unsafe { x87_exp2(x87_yl2x(abs_base, exp)) };
-        let is_odd = ((exp_trunc as i64) & 1) != 0;
+        // Alle IEEE-754 Doubles mit |exp| >= 2^53 sind gerade Ganzzahlen
+        let is_odd = exp_trunc.abs() < 9_007_199_254_740_992.0 && ((exp_trunc as i64) & 1) != 0;
         if is_odd { -mag } else { mag }
     }
 
@@ -578,31 +651,39 @@ mod x86_retro_impl {
     }
 
     // MSVC x87 Register-Intrinsics (`_CIsin`, `_CIcos`, `_CIsqrt`, `_CIfmod`, `_CIpow`, `_CIlog`, `_CIlog10`, `_CIexp`)
-    // Argumente liegen bereits in `st(0)` (bzw. `st(1)` = Basis, `st(0)` = Exponent bei `_CIpow`).
+    // Argumente liegen bereits in `st(0)` (bzw. `st(1)` = 1. Arg `x`, `st(0)` = 2. Arg `y` bei `_CIfmod` / `_CIpow`).
     global_asm!(
         ".global __CIsin",
         "__CIsin:",
-        "fsin",
+        "sub esp, 8",
+        "fstp qword ptr [esp]",
+        "call _sin",
+        "add esp, 8",
         "ret",
 
         ".global __CIcos",
         "__CIcos:",
-        "fcos",
+        "sub esp, 8",
+        "fstp qword ptr [esp]",
+        "call _cos",
+        "add esp, 8",
         "ret",
 
         ".global __CIsqrt",
         "__CIsqrt:",
-        "fsqrt",
+        "sub esp, 8",
+        "fstp qword ptr [esp]",
+        "call _sqrt",
+        "add esp, 8",
         "ret",
 
         ".global __CIfmod",
         "__CIfmod:",
-        "2:",
-        "fprem",
-        "fnstsw ax",
-        "test ah, 4",
-        "jnz 2b",
-        "fstp st(1)",
+        "sub esp, 16",
+        "fstp qword ptr [esp + 8]",
+        "fstp qword ptr [esp]",
+        "call _fmod",
+        "add esp, 16",
         "ret",
 
         ".global __CIpow",
@@ -954,24 +1035,51 @@ mod x86_retro_impl {
         if neg { r.wrapping_neg() } else { r }
     }
 
-    // 80486 64-Bit-Atomics-Ersatzfunktionen (da der 486er kein Pentium `CMPXCHG8B` besitzt!)
+    // 80486 64-Bit-Atomics-Ersatzfunktionen (da der 486er kein Pentium `CMPXCHG8B` besitzt!).
+    // Geschützt durch einen leichtgewichtigen `AtomicBool`-Spinlock (`XCHG` auf 80486), damit auch
+    // bei präemptiven Threads unter Win95/NT keine zerrissenen 64-Bit-Reads/Writes entstehen.
+    static ATOMIC64_LOCK: AtomicBool = AtomicBool::new(false);
+
+    #[inline]
+    fn lock_atomic64() {
+        while ATOMIC64_LOCK
+            .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
+            core::hint::spin_loop();
+        }
+    }
+
+    #[inline]
+    fn unlock_atomic64() {
+        ATOMIC64_LOCK.store(false, Ordering::Release);
+    }
+
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn __atomic_load_8(src: *const u64, _ordering: i32) -> u64 {
-        unsafe { ptr::read_volatile(src) }
+        lock_atomic64();
+        let val = unsafe { ptr::read_volatile(src) };
+        unlock_atomic64();
+        val
     }
 
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn __atomic_store_8(dst: *mut u64, val: u64, _ordering: i32) {
-        unsafe { ptr::write_volatile(dst, val) }
+        lock_atomic64();
+        unsafe { ptr::write_volatile(dst, val) };
+        unlock_atomic64();
     }
 
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn __atomic_exchange_8(dst: *mut u64, val: u64, _ordering: i32) -> u64 {
-        unsafe {
+        lock_atomic64();
+        let old = unsafe {
             let old = ptr::read_volatile(dst);
             ptr::write_volatile(dst, val);
             old
-        }
+        };
+        unlock_atomic64();
+        old
     }
 
     #[unsafe(no_mangle)]
@@ -983,7 +1091,8 @@ mod x86_retro_impl {
         _success_order: i32,
         _failure_order: i32,
     ) -> bool {
-        unsafe {
+        lock_atomic64();
+        let ok = unsafe {
             let cur = ptr::read_volatile(dst);
             let exp = ptr::read_volatile(expected);
             if cur == exp {
@@ -993,7 +1102,9 @@ mod x86_retro_impl {
                 ptr::write_volatile(expected, cur);
                 false
             }
-        }
+        };
+        unlock_atomic64();
+        ok
     }
 
     // =========================================================================
@@ -1114,54 +1225,296 @@ mod x86_retro_impl {
         pub information: usize,
     }
 
-    /// Konvertiert einen UTF-16 Pfad (`\\?\C:\...` oder `C:\...`) in einen nullterminierten ANSI-Pfad.
+    // =========================================================================
+    // KERNEL32 CODEPAGE-KONVERTIERUNG (`CP_ACP` + CP1252-Fallback + `CP_UTF8`)
+    // =========================================================================
+
+    static REAL_MB_TO_WC: AtomicUsize = AtomicUsize::new(0);
+    static REAL_WC_TO_MB: AtomicUsize = AtomicUsize::new(0);
+
+    type FnMultiByteToWideChar =
+        unsafe extern "system" fn(u32, DWORD, *const u8, i32, *mut u16, i32) -> i32;
+    type FnWideCharToMultiByte = unsafe extern "system" fn(
+        u32,
+        DWORD,
+        *const u16,
+        i32,
+        *mut u8,
+        i32,
+        *const u8,
+        *mut BOOL,
+    ) -> i32;
+
+    const CP1252_80_9F: [u16; 32] = [
+        0x20AC, 0x0081, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021, 0x02C6, 0x2030, 0x0160,
+        0x2039, 0x0152, 0x008D, 0x017D, 0x008F, 0x0090, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022,
+        0x2013, 0x2014, 0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0x009D, 0x017E, 0x0178,
+    ];
+
+    #[inline]
+    fn cp1252_byte_to_u16(b: u8) -> u16 {
+        if (0x80..=0x9F).contains(&b) {
+            CP1252_80_9F[(b - 0x80) as usize]
+        } else {
+            b as u16
+        }
+    }
+
+    #[inline]
+    fn u16_to_cp1252_byte(ch: u16) -> u8 {
+        if ch <= 0x7F || (0xA0..=0xFF).contains(&ch) {
+            return ch as u8;
+        }
+        for (idx, &u) in CP1252_80_9F.iter().enumerate() {
+            if u == ch {
+                return (0x80 + idx) as u8;
+            }
+        }
+        b'?'
+    }
+
+    unsafe fn get_real_mb_to_wc() -> Option<FnMultiByteToWideChar> {
+        let mut p = REAL_MB_TO_WC.load(Ordering::Relaxed);
+        if p == 0 {
+            let h_k32 = unsafe { GetModuleHandleA(b"KERNEL32.DLL\0".as_ptr()) };
+            if h_k32 != 0 {
+                p = unsafe { GetProcAddress(h_k32, b"MultiByteToWideChar\0".as_ptr()) } as usize;
+                REAL_MB_TO_WC.store(if p != 0 { p } else { usize::MAX }, Ordering::Relaxed);
+            }
+        }
+        if p != 0 && p != usize::MAX {
+            Some(unsafe { core::mem::transmute::<usize, FnMultiByteToWideChar>(p) })
+        } else {
+            None
+        }
+    }
+
+    unsafe fn get_real_wc_to_mb() -> Option<FnWideCharToMultiByte> {
+        let mut p = REAL_WC_TO_MB.load(Ordering::Relaxed);
+        if p == 0 {
+            let h_k32 = unsafe { GetModuleHandleA(b"KERNEL32.DLL\0".as_ptr()) };
+            if h_k32 != 0 {
+                p = unsafe { GetProcAddress(h_k32, b"WideCharToMultiByte\0".as_ptr()) } as usize;
+                REAL_WC_TO_MB.store(if p != 0 { p } else { usize::MAX }, Ordering::Relaxed);
+            }
+        }
+        if p != 0 && p != usize::MAX {
+            Some(unsafe { core::mem::transmute::<usize, FnWideCharToMultiByte>(p) })
+        } else {
+            None
+        }
+    }
+
+    /// Konvertiert ein ANSI-Byte-Slice (`CP_ACP` unter Win32s/Win95) verlustfrei in einen UTF-8 `String`.
+    pub fn ansi_bytes_to_string(bytes: &[u8]) -> String {
+        let nul_pos = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+        let slice = &bytes[..nul_pos];
+        if slice.is_empty() {
+            return String::new();
+        }
+        unsafe {
+            if let Some(f) = get_real_mb_to_wc() {
+                let needed = f(0, 0, slice.as_ptr(), slice.len() as i32, ptr::null_mut(), 0);
+                if needed > 0 {
+                    let mut wide = vec![0u16; needed as usize];
+                    let written = f(
+                        0,
+                        0,
+                        slice.as_ptr(),
+                        slice.len() as i32,
+                        wide.as_mut_ptr(),
+                        needed,
+                    );
+                    if written > 0 {
+                        wide.truncate(written as usize);
+                        return String::from_utf16_lossy(&wide);
+                    }
+                }
+            }
+        }
+        let wide: Vec<u16> = slice.iter().map(|&b| cp1252_byte_to_u16(b)).collect();
+        String::from_utf16_lossy(&wide)
+    }
+
+    /// Konvertiert einen UTF-8 `&str` in einen nullterminierten ANSI-Byte-Vektor (`CP_ACP`).
+    pub fn utf8_to_ansi_z(s: &str) -> Vec<u8> {
+        let wide: Vec<u16> = s
+            .encode_utf16()
+            .map(|ch| if ch == 0 { b' ' as u16 } else { ch })
+            .collect();
+        if wide.is_empty() {
+            return vec![0u8];
+        }
+        unsafe {
+            if let Some(f) = get_real_wc_to_mb() {
+                let needed = f(
+                    0,
+                    0,
+                    wide.as_ptr(),
+                    wide.len() as i32,
+                    ptr::null_mut(),
+                    0,
+                    ptr::null(),
+                    ptr::null_mut(),
+                );
+                if needed > 0 {
+                    let mut out = vec![0u8; needed as usize + 1];
+                    let written = f(
+                        0,
+                        0,
+                        wide.as_ptr(),
+                        wide.len() as i32,
+                        out.as_mut_ptr(),
+                        needed,
+                        ptr::null(),
+                        ptr::null_mut(),
+                    );
+                    if written > 0 {
+                        out[written as usize] = 0;
+                        out.truncate(written as usize + 1);
+                        return out;
+                    }
+                }
+            }
+        }
+        let mut out: Vec<u8> = wide.into_iter().map(u16_to_cp1252_byte).collect();
+        out.push(0);
+        out
+    }
+
+    /// Konvertiert einen UTF-16 Pfad (`\\?\UNC\...`, `\\?\C:\...` oder `C:\...`) in einen nullterminierten ANSI-Pfad.
     unsafe fn wide_path_to_ansi_buf(mut wptr: *const u16, out: &mut [u8; 520]) -> usize {
         if wptr.is_null() {
             out[0] = 0;
             return 0;
         }
-        // "\\?\" Prefix von Rust std::fs abstreifen (Win95 & Win32s unterstützen kein \\?\!)
+        let mut prepend_backslash = false;
+        // "\\?\" und "\\?\UNC\" Prefix von Rust std::fs abstreifen (Win95 & Win32s unterstützen kein \\?\!)
         unsafe {
             if *wptr == b'\\' as u16
                 && *wptr.add(1) == b'\\' as u16
                 && *wptr.add(2) == b'?' as u16
                 && *wptr.add(3) == b'\\' as u16
             {
-                wptr = wptr.add(4);
+                let u0 = *wptr.add(4);
+                let u1 = *wptr.add(5);
+                let u2 = *wptr.add(6);
+                let u3 = *wptr.add(7);
+                if (u0 == b'U' as u16 || u0 == b'u' as u16)
+                    && (u1 == b'N' as u16 || u1 == b'n' as u16)
+                    && (u2 == b'C' as u16 || u2 == b'c' as u16)
+                    && u3 == b'\\' as u16
+                {
+                    // "\\?\UNC\server\share" -> "\\server\share" (`wptr.add(7)` beginnt mit `\server\share`)
+                    prepend_backslash = true;
+                    wptr = wptr.add(7);
+                } else {
+                    wptr = wptr.add(4);
+                }
+            }
+        }
+        let wlen = unsafe { wcslen(wptr) };
+        if wlen == 0 {
+            out[0] = 0;
+            return 0;
+        }
+        let dst_start = if prepend_backslash {
+            out[0] = b'\\';
+            1usize
+        } else {
+            0usize
+        };
+        let cap = out.len() - 1 - dst_start;
+        unsafe {
+            if let Some(f) = get_real_wc_to_mb() {
+                let written = f(
+                    0,
+                    0,
+                    wptr,
+                    wlen as i32,
+                    out.as_mut_ptr().add(dst_start),
+                    cap as i32,
+                    ptr::null(),
+                    ptr::null_mut(),
+                );
+                if written > 0 {
+                    let total = dst_start + (written as usize).min(cap);
+                    out[total] = 0;
+                    return total;
+                }
             }
         }
         let mut idx = 0usize;
-        while idx + 1 < out.len() {
+        while idx < wlen && idx < cap {
             let ch = unsafe { *wptr.add(idx) };
-            if ch == 0 {
-                break;
-            }
-            out[idx] = if ch <= 0xFF { ch as u8 } else { b'?' };
+            out[dst_start + idx] = u16_to_cp1252_byte(ch);
             idx += 1;
         }
-        out[idx] = 0;
-        idx
+        let total = dst_start + idx;
+        out[total] = 0;
+        total
     }
 
+    /// Konvertiert einen nullterminierten ANSI-String nach UTF-16 (`dst` mit Kapazität `max_wide` inkl. NUL)
+    /// und liefert die geschriebene Zeichenanzahl **ohne** NUL.
     unsafe fn ansi_to_wide_buf(src: *const u8, dst: *mut u16, max_wide: usize) -> usize {
         if src.is_null() || dst.is_null() || max_wide == 0 {
             return 0;
         }
-        let mut i = 0usize;
-        while i + 1 < max_wide {
-            let b = unsafe { *src.add(i) };
-            if b == 0 {
-                break;
-            }
+        let slen = unsafe { strlen(src) };
+        if slen == 0 {
             unsafe {
-                *dst.add(i) = b as u16;
+                *dst = 0;
             }
-            i += 1;
+            return 0;
+        }
+        let cap = max_wide - 1;
+        if cap == 0 {
+            unsafe {
+                *dst = 0;
+            }
+            return 0;
         }
         unsafe {
-            *dst.add(i) = 0;
+            if let Some(f) = get_real_mb_to_wc() {
+                let written = f(0, 0, src, slen as i32, dst, cap as i32);
+                if written > 0 {
+                    let n = (written as usize).min(cap);
+                    *dst.add(n) = 0;
+                    return n;
+                }
+            }
         }
-        i
+        let copy_len = slen.min(cap);
+        for i in 0..copy_len {
+            let b = unsafe { *src.add(i) };
+            unsafe {
+                *dst.add(i) = cp1252_byte_to_u16(b);
+            }
+        }
+        unsafe {
+            *dst.add(copy_len) = 0;
+        }
+        copy_len
+    }
+
+    unsafe fn ansi_cstr_wide_len(src: *const u8) -> usize {
+        if src.is_null() {
+            return 0;
+        }
+        let slen = unsafe { strlen(src) };
+        if slen == 0 {
+            return 0;
+        }
+        unsafe {
+            if let Some(f) = get_real_mb_to_wc() {
+                let needed = f(0, 0, src, slen as i32, ptr::null_mut(), 0);
+                if needed > 0 {
+                    return needed as usize;
+                }
+            }
+        }
+        slen
     }
 
     unsafe fn copy_find_data_a_to_w(src: &Win32FindDataA, dst: &mut Win32FindDataW) {
@@ -1173,25 +1526,15 @@ mod x86_retro_impl {
         dst.n_file_size_low = src.n_file_size_low;
         dst.dw_reserved0 = src.dw_reserved0;
         dst.dw_reserved1 = src.dw_reserved1;
-        for i in 0..260 {
-            let b = src.c_file_name[i];
-            dst.c_file_name[i] = b as u16;
-            if b == 0 {
-                for j in (i + 1)..260 {
-                    dst.c_file_name[j] = 0;
-                }
-                break;
-            }
-        }
-        for i in 0..14 {
-            let b = src.c_alternate_file_name[i];
-            dst.c_alternate_file_name[i] = b as u16;
-            if b == 0 {
-                for j in (i + 1)..14 {
-                    dst.c_alternate_file_name[j] = 0;
-                }
-                break;
-            }
+        dst.c_file_name = [0u16; 260];
+        dst.c_alternate_file_name = [0u16; 14];
+        unsafe {
+            ansi_to_wide_buf(src.c_file_name.as_ptr(), dst.c_file_name.as_mut_ptr(), 260);
+            ansi_to_wide_buf(
+                src.c_alternate_file_name.as_ptr(),
+                dst.c_alternate_file_name.as_mut_ptr(),
+                14,
+            );
         }
     }
 
@@ -1199,7 +1542,9 @@ mod x86_retro_impl {
     // (Unter Win95/Win32s kann `CreateFileA` keine Verzeichnisse öffnen; `std::fs::metadata` / `is_dir`
     //  öffnet Pfade mit `dwDesiredAccess = 0` und fragt danach `GetFileInformationByHandle` ab.)
     const VIRT_META_BASE: HANDLE = 0x7FFE_0000;
-    const VIRT_META_SLOTS: usize = 32;
+    const VIRT_META_SLOTS: usize = 64;
+    const VIRT_META_IDX_MASK: isize = (VIRT_META_SLOTS - 1) as isize;
+    const VIRT_META_TAG_MASK: isize = !VIRT_META_IDX_MASK;
 
     #[derive(Clone, Copy)]
     struct VirtMetaSlot {
@@ -1229,13 +1574,8 @@ mod x86_retro_impl {
                     return VIRT_META_BASE | (i as HANDLE);
                 }
             }
-            VIRT_META_TABLE[0] = VirtMetaSlot {
-                in_use: true,
-                attr,
-                size_low,
-                size_high,
-            };
-            VIRT_META_BASE
+            SetLastError(ERROR_TOO_MANY_OPEN_FILES);
+            INVALID_HANDLE_VALUE
         }
     }
 
@@ -1311,8 +1651,8 @@ mod x86_retro_impl {
     static REAL_CLOSE_HANDLE: AtomicUsize = AtomicUsize::new(0);
 
     unsafe extern "system" fn shim_CloseHandle(h_object: HANDLE) -> BOOL {
-        if (h_object & 0xFFFF_FFE0u32 as isize) == VIRT_META_BASE {
-            let slot = (h_object & 0x1F) as usize;
+        if (h_object & VIRT_META_TAG_MASK) == VIRT_META_BASE {
+            let slot = (h_object & VIRT_META_IDX_MASK) as usize;
             unsafe {
                 VIRT_META_TABLE[slot].in_use = false;
             }
@@ -1346,8 +1686,8 @@ mod x86_retro_impl {
         }
         unsafe {
             ptr::write_bytes(lp_file_information, 0, 1);
-            if (h_file & 0xFFFF_FFE0u32 as isize) == VIRT_META_BASE {
-                let slot = (h_file & 0x1F) as usize;
+            if (h_file & VIRT_META_TAG_MASK) == VIRT_META_BASE {
+                let slot = (h_file & VIRT_META_IDX_MASK) as usize;
                 let entry = VIRT_META_TABLE[slot];
                 if !entry.in_use {
                     return 0;
@@ -1360,8 +1700,11 @@ mod x86_retro_impl {
             }
             let mut high: DWORD = 0;
             let low = GetFileSize(h_file, &mut high);
+            if low == 0xFFFF_FFFF && GetLastError() != 0 {
+                return 0;
+            }
             (*lp_file_information).dw_file_attributes = FILE_ATTRIBUTE_NORMAL;
-            (*lp_file_information).n_file_size_low = if low == 0xFFFF_FFFF { 0 } else { low };
+            (*lp_file_information).n_file_size_low = low;
             (*lp_file_information).n_file_size_high = high;
             (*lp_file_information).n_number_of_links = 1;
         }
@@ -1384,18 +1727,29 @@ mod x86_retro_impl {
         lp_file_information: *const c_void,
         _dw_buffer_size: DWORD,
     ) -> BOOL {
-        // FileEndOfFileInfo (6) / FileAllocationInfo (5) -> SetFilePointer + SetEndOfFile
-        if (file_information_class == 5 || file_information_class == 6)
-            && !lp_file_information.is_null()
-        {
+        // FileAllocationInfo (5) ist ein reiner Pre-Allocation-Hint -> ohne Dateizeiger-Änderung bestätigen
+        if file_information_class == 5 {
+            return 1;
+        }
+        // FileEndOfFileInfo (6) -> Dateilänge via SetFilePointer + SetEndOfFile anpassen und
+        // ursprünglichen Dateizeiger wiederherstellen (`File::set_len`-Vertrag!).
+        if file_information_class == 6 && !lp_file_information.is_null() {
             unsafe {
+                let mut orig_high: LONG = 0;
+                let orig_low = SetFilePointer(h_file, 0, &mut orig_high, 1); // FILE_CURRENT
+                let has_orig = !(orig_low == 0xFFFF_FFFF && GetLastError() != 0);
+
                 let pos = *(lp_file_information as *const i64);
                 let low = (pos & 0xFFFF_FFFF) as i32;
                 let mut high = (pos >> 32) as i32;
-                let saved_high = 0i32;
-                let _ = SetFilePointer(h_file, low, &mut high, 0); // FILE_BEGIN
+                let seek_res = SetFilePointer(h_file, low, &mut high, 0); // FILE_BEGIN
+                if seek_res == 0xFFFF_FFFF && GetLastError() != 0 {
+                    return 0;
+                }
                 let ok = SetEndOfFile(h_file);
-                let _ = saved_high;
+                if has_orig {
+                    let _ = SetFilePointer(h_file, orig_low as LONG, &mut orig_high, 0);
+                }
                 return ok;
             }
         }
@@ -1747,8 +2101,9 @@ mod x86_retro_impl {
         if len == 0 {
             return 0;
         }
-        if lp_buffer.is_null() || n_buffer_length == 0 {
-            return (len + 1) as DWORD;
+        let wlen = unsafe { ansi_cstr_wide_len(ansi.as_ptr()) };
+        if lp_buffer.is_null() || (n_buffer_length as usize) <= wlen {
+            return (wlen + 1) as DWORD;
         }
         unsafe { ansi_to_wide_buf(ansi.as_ptr(), lp_buffer, n_buffer_length as usize) as DWORD }
     }
@@ -1801,8 +2156,9 @@ mod x86_retro_impl {
         if len == 0 {
             return 0;
         }
-        if lp_buffer.is_null() || n_buffer_length == 0 {
-            return (len + 1) as DWORD;
+        let wlen = unsafe { ansi_cstr_wide_len(ansi.as_ptr()) };
+        if lp_buffer.is_null() || (n_buffer_length as usize) <= wlen {
+            return (wlen + 1) as DWORD;
         }
         unsafe { ansi_to_wide_buf(ansi.as_ptr(), lp_buffer, n_buffer_length as usize) as DWORD }
     }
@@ -1880,30 +2236,48 @@ mod x86_retro_impl {
         lp_buffer: *mut u16,
         n_size: DWORD,
     ) -> DWORD {
-        let mut name_a = [0u8; 260];
-        let mut val_a = [0u8; 1024];
+        if lp_name.is_null() {
+            return 0;
+        }
+        let mut name_a = [0u8; 520];
+        let mut val_stack = [0u8; 1024];
         unsafe {
-            wide_path_to_ansi_buf(lp_name, &mut [0u8; 520]);
-            let mut i = 0usize;
-            if !lp_name.is_null() {
-                while i + 1 < name_a.len() {
-                    let ch = *lp_name.add(i);
-                    if ch == 0 {
-                        break;
-                    }
-                    name_a[i] = ch as u8;
-                    i += 1;
-                }
-            }
-            name_a[i] = 0;
-            let len = GetEnvironmentVariableA(name_a.as_ptr(), val_a.as_mut_ptr(), val_a.len() as DWORD);
+            wide_path_to_ansi_buf(lp_name, &mut name_a);
+            let len = GetEnvironmentVariableA(
+                name_a.as_ptr(),
+                val_stack.as_mut_ptr(),
+                val_stack.len() as DWORD,
+            ) as usize;
             if len == 0 {
                 return 0;
             }
-            if lp_buffer.is_null() || n_size == 0 {
-                return len + 1;
+            if len < val_stack.len() {
+                let wlen = ansi_cstr_wide_len(val_stack.as_ptr());
+                if lp_buffer.is_null() || (n_size as usize) <= wlen {
+                    return (wlen + 1) as DWORD;
+                }
+                return ansi_to_wide_buf(val_stack.as_ptr(), lp_buffer, n_size as usize) as DWORD;
             }
-            ansi_to_wide_buf(val_a.as_ptr(), lp_buffer, n_size as usize) as DWORD
+            // Dynamischer Heap-Fallback für lange Umgebungsvariablen (z.B. `PATH` > 1024 Zeichen)
+            let hheap = GetProcessHeap();
+            let dyn_cap = len + 2;
+            let dyn_a = HeapAlloc(hheap, 0, dyn_cap) as *mut u8;
+            if dyn_a.is_null() {
+                return 0;
+            }
+            let len2 = GetEnvironmentVariableA(name_a.as_ptr(), dyn_a, dyn_cap as DWORD) as usize;
+            let res = if len2 == 0 {
+                0
+            } else {
+                let wlen = ansi_cstr_wide_len(dyn_a);
+                if lp_buffer.is_null() || (n_size as usize) <= wlen {
+                    (wlen + 1) as DWORD
+                } else {
+                    ansi_to_wide_buf(dyn_a, lp_buffer, n_size as usize) as DWORD
+                }
+            };
+            HeapFree(hheap, 0, dyn_a as *mut c_void);
+            res
         }
     }
 
@@ -1997,7 +2371,9 @@ mod x86_retro_impl {
     unsafe fn monotonic_ms_u64() -> u64 {
         let cur = unsafe { GetTickCount() };
         let prev = LAST_TICK.swap(cur, Ordering::Relaxed);
-        if cur < prev {
+        // Nur bei echtem 49,7-Tage-Überlauf (`prev - cur > 2^31`) inkrementieren,
+        // damit minimale Thread-Races nicht fälschlich +49,7 Tage addieren.
+        if prev.wrapping_sub(cur) > 0x8000_0000 {
             TICK_EPOCH_HI.fetch_add(1, Ordering::Relaxed);
         }
         let hi = TICK_EPOCH_HI.load(Ordering::Relaxed) as u64;
@@ -2204,15 +2580,55 @@ mod x86_retro_impl {
     }
 
     unsafe extern "system" fn shim_MultiByteToWideChar(
-        _code_page: u32,
-        _dw_flags: DWORD,
+        code_page: u32,
+        dw_flags: DWORD,
         lp_multi_byte_str: *const u8,
         cb_multi_byte: i32,
         lp_wide_char_str: *mut u16,
         cch_wide_char: i32,
     ) -> i32 {
-        if lp_multi_byte_str.is_null() {
+        if lp_multi_byte_str.is_null() || cb_multi_byte == 0 || cch_wide_char < 0 {
             return 0;
+        }
+        // Win32s 1.30c & frühes Win95 kennen `CP_UTF8` (`65001`) noch nicht in `KERNEL32.DLL` -> in Rust dekodieren!
+        if code_page == 65001 {
+            let src_len = if cb_multi_byte < 0 {
+                unsafe { strlen(lp_multi_byte_str) + 1 }
+            } else {
+                cb_multi_byte as usize
+            };
+            let bytes = unsafe { core::slice::from_raw_parts(lp_multi_byte_str, src_len) };
+            let decoded = String::from_utf8_lossy(bytes);
+            let wide_iter = decoded.encode_utf16();
+            let needed = wide_iter.clone().count();
+            if cch_wide_char == 0 || lp_wide_char_str.is_null() {
+                return needed as i32;
+            }
+            if (cch_wide_char as usize) < needed {
+                unsafe { SetLastError(ERROR_INSUFFICIENT_BUFFER) };
+                return 0;
+            }
+            for (i, w) in wide_iter.enumerate() {
+                unsafe {
+                    *lp_wide_char_str.add(i) = w;
+                }
+            }
+            return needed as i32;
+        }
+        unsafe {
+            if let Some(f) = get_real_mb_to_wc() {
+                let r = f(
+                    code_page,
+                    dw_flags,
+                    lp_multi_byte_str,
+                    cb_multi_byte,
+                    lp_wide_char_str,
+                    cch_wide_char,
+                );
+                if r > 0 || GetLastError() == ERROR_INSUFFICIENT_BUFFER {
+                    return r;
+                }
+            }
         }
         let len = if cb_multi_byte < 0 {
             unsafe { strlen(lp_multi_byte_str) + 1 }
@@ -2222,27 +2638,70 @@ mod x86_retro_impl {
         if cch_wide_char == 0 || lp_wide_char_str.is_null() {
             return len as i32;
         }
-        let copy_len = len.min(cch_wide_char as usize);
-        for i in 0..copy_len {
+        if (cch_wide_char as usize) < len {
+            unsafe { SetLastError(ERROR_INSUFFICIENT_BUFFER) };
+            return 0;
+        }
+        for i in 0..len {
+            let b = unsafe { *lp_multi_byte_str.add(i) };
             unsafe {
-                *lp_wide_char_str.add(i) = (*lp_multi_byte_str.add(i)) as u16;
+                *lp_wide_char_str.add(i) = cp1252_byte_to_u16(b);
             }
         }
-        copy_len as i32
+        len as i32
     }
 
     unsafe extern "system" fn shim_WideCharToMultiByte(
-        _code_page: u32,
-        _dw_flags: DWORD,
+        code_page: u32,
+        dw_flags: DWORD,
         lp_wide_char_str: *const u16,
         cch_wide_char: i32,
         lp_multi_byte_str: *mut u8,
         cb_multi_byte: i32,
-        _lp_default_char: *const u8,
-        _lp_used_default_char: *mut BOOL,
+        lp_default_char: *const u8,
+        lp_used_default_char: *mut BOOL,
     ) -> i32 {
-        if lp_wide_char_str.is_null() {
+        if lp_wide_char_str.is_null() || cch_wide_char == 0 || cb_multi_byte < 0 {
             return 0;
+        }
+        if code_page == 65001 {
+            let wlen = if cch_wide_char < 0 {
+                unsafe { wcslen(lp_wide_char_str) + 1 }
+            } else {
+                cch_wide_char as usize
+            };
+            let wslice = unsafe { core::slice::from_raw_parts(lp_wide_char_str, wlen) };
+            let utf8 = String::from_utf16_lossy(wslice);
+            let bytes = utf8.as_bytes();
+            let needed = bytes.len();
+            if cb_multi_byte == 0 || lp_multi_byte_str.is_null() {
+                return needed as i32;
+            }
+            if (cb_multi_byte as usize) < needed {
+                unsafe { SetLastError(ERROR_INSUFFICIENT_BUFFER) };
+                return 0;
+            }
+            unsafe {
+                ptr::copy_nonoverlapping(bytes.as_ptr(), lp_multi_byte_str, needed);
+            }
+            return needed as i32;
+        }
+        unsafe {
+            if let Some(f) = get_real_wc_to_mb() {
+                let r = f(
+                    code_page,
+                    dw_flags,
+                    lp_wide_char_str,
+                    cch_wide_char,
+                    lp_multi_byte_str,
+                    cb_multi_byte,
+                    lp_default_char,
+                    lp_used_default_char,
+                );
+                if r > 0 || GetLastError() == ERROR_INSUFFICIENT_BUFFER {
+                    return r;
+                }
+            }
         }
         let len = if cch_wide_char < 0 {
             unsafe { wcslen(lp_wide_char_str) + 1 }
@@ -2252,21 +2711,35 @@ mod x86_retro_impl {
         if cb_multi_byte == 0 || lp_multi_byte_str.is_null() {
             return len as i32;
         }
-        let copy_len = len.min(cb_multi_byte as usize);
-        for i in 0..copy_len {
+        if (cb_multi_byte as usize) < len {
+            unsafe { SetLastError(ERROR_INSUFFICIENT_BUFFER) };
+            return 0;
+        }
+        for i in 0..len {
             let ch = unsafe { *lp_wide_char_str.add(i) };
             unsafe {
-                *lp_multi_byte_str.add(i) = if ch <= 0xFF { ch as u8 } else { b'?' };
+                *lp_multi_byte_str.add(i) = u16_to_cp1252_byte(ch);
             }
         }
-        copy_len as i32
+        len as i32
     }
 
     unsafe extern "system" fn shim_GetWindowsDirectoryW(
         lp_buffer: *mut u16,
         u_size: u32,
     ) -> u32 {
-        unsafe { ansi_to_wide_buf(b"C:\\WINDOWS\0".as_ptr(), lp_buffer, u_size as usize) as u32 }
+        let mut ansi = [0u8; 520];
+        let len = unsafe { GetWindowsDirectoryA(ansi.as_mut_ptr(), ansi.len() as u32) } as usize;
+        let src = if len > 0 && len < ansi.len() {
+            ansi.as_ptr()
+        } else {
+            b"C:\\WINDOWS\0".as_ptr()
+        };
+        let wlen = unsafe { ansi_cstr_wide_len(src) };
+        if lp_buffer.is_null() || (u_size as usize) <= wlen {
+            return (wlen + 1) as u32;
+        }
+        unsafe { ansi_to_wide_buf(src, lp_buffer, u_size as usize) as u32 }
     }
 
     unsafe extern "system" fn shim_GetUserProfileDirectoryW(
@@ -2391,16 +2864,21 @@ mod x86_retro_impl {
         1
     }
 
-    // Statisches TLS-Array für Single-Thread Win32s / Win95
+    // Statisches TLS-Array für Single-Thread Win32s / Win95 (mit Bitmask-Slot-Wiederverwendung)
     static mut TLS_VALUES: [*mut c_void; 64] = [ptr::null_mut(); 64];
-    static NEXT_TLS_IDX: AtomicUsize = AtomicUsize::new(1);
+    static mut TLS_USED_MASK: u64 = 1; // Slot 0 reserviert
 
     unsafe extern "system" fn shim_TlsAlloc() -> DWORD {
-        let idx = NEXT_TLS_IDX.fetch_add(1, Ordering::Relaxed);
-        if idx < 64 {
-            idx as DWORD
-        } else {
-            0xFFFF_FFFF
+        unsafe {
+            let mask = TLS_USED_MASK;
+            let free_slot = (!mask).trailing_zeros() as usize;
+            if free_slot < 64 {
+                TLS_USED_MASK = mask | (1u64 << free_slot);
+                TLS_VALUES[free_slot] = ptr::null_mut();
+                free_slot as DWORD
+            } else {
+                0xFFFF_FFFF
+            }
         }
     }
 
@@ -2429,8 +2907,17 @@ mod x86_retro_impl {
         }
     }
 
-    unsafe extern "system" fn shim_TlsFree(_dw_tls_index: DWORD) -> BOOL {
-        1
+    unsafe extern "system" fn shim_TlsFree(dw_tls_index: DWORD) -> BOOL {
+        let idx = dw_tls_index as usize;
+        if (1..64).contains(&idx) {
+            unsafe {
+                TLS_VALUES[idx] = ptr::null_mut();
+                TLS_USED_MASK &= !(1u64 << idx);
+            }
+            1
+        } else {
+            0
+        }
     }
 
     unsafe extern "system" fn shim_FlsAlloc(_lp_callback: *mut c_void) -> DWORD {
@@ -2439,6 +2926,10 @@ mod x86_retro_impl {
 
     unsafe extern "system" fn shim_FlsFree(dw_fls_index: DWORD) -> BOOL {
         unsafe { shim_TlsFree(dw_fls_index) }
+    }
+
+    unsafe extern "system" fn shim_FlsGetValue(dw_fls_index: DWORD) -> *mut c_void {
+        unsafe { shim_TlsGetValue(dw_fls_index) }
     }
 
     unsafe extern "system" fn shim_FlsSetValue(
@@ -2469,13 +2960,18 @@ mod x86_retro_impl {
         lp_buffer: *mut u16,
         u_size: u32,
     ) -> u32 {
-        unsafe {
-            ansi_to_wide_buf(
-                b"C:\\WINDOWS\\SYSTEM\0".as_ptr(),
-                lp_buffer,
-                u_size as usize,
-            ) as u32
+        let mut ansi = [0u8; 520];
+        let len = unsafe { GetSystemDirectoryA(ansi.as_mut_ptr(), ansi.len() as u32) } as usize;
+        let src = if len > 0 && len < ansi.len() {
+            ansi.as_ptr()
+        } else {
+            b"C:\\WINDOWS\\SYSTEM\0".as_ptr()
+        };
+        let wlen = unsafe { ansi_cstr_wide_len(src) };
+        if lp_buffer.is_null() || (u_size as usize) <= wlen {
+            return (wlen + 1) as u32;
         }
+        unsafe { ansi_to_wide_buf(src, lp_buffer, u_size as usize) as u32 }
     }
 
     unsafe extern "system" fn shim_GetCurrentThread() -> HANDLE {
@@ -3028,6 +3524,7 @@ mod x86_retro_impl {
     export_imp!("_imp__TlsFree@4", IMP_TlsFree, shim_TlsFree);
     export_imp!("_imp__FlsAlloc@4", IMP_FlsAlloc, shim_FlsAlloc);
     export_imp!("_imp__FlsFree@4", IMP_FlsFree, shim_FlsFree);
+    export_imp!("_imp__FlsGetValue@4", IMP_FlsGetValue, shim_FlsGetValue);
     export_imp!("_imp__FlsSetValue@8", IMP_FlsSetValue, shim_FlsSetValue);
     export_imp!("_imp__IsThreadAFiber@0", IMP_IsThreadAFiber, shim_IsThreadAFiber);
     export_imp!(
@@ -3081,5 +3578,18 @@ mod x86_retro_impl {
 }
 
 #[cfg(target_arch = "x86")]
-pub use x86_retro_impl::show_retro_panic_and_exit;
+pub use x86_retro_impl::{ansi_bytes_to_string, show_retro_panic_and_exit, utf8_to_ansi_z};
+
+#[cfg(not(target_arch = "x86"))]
+pub fn ansi_bytes_to_string(bytes: &[u8]) -> String {
+    let nul_pos = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+    String::from_utf8_lossy(&bytes[..nul_pos]).into_owned()
+}
+
+#[cfg(not(target_arch = "x86"))]
+pub fn utf8_to_ansi_z(s: &str) -> Vec<u8> {
+    let mut v: Vec<u8> = s.bytes().filter(|&b| b != 0).collect();
+    v.push(0);
+    v
+}
 

@@ -13,10 +13,14 @@ pub struct BmpImage {
 impl BmpImage {
     /// Erzeugt ein leeres Bild mit gegebener Auflösung.
     pub fn new(width: u32, height: u32) -> Self {
+        let len = (width as usize)
+            .checked_mul(height as usize)
+            .and_then(|px| px.checked_mul(4))
+            .expect("BMP dimensions overflow");
         Self {
             width,
             height,
-            data: vec![0; (width * height * 4) as usize],
+            data: vec![0; len],
         }
     }
 
@@ -65,6 +69,16 @@ impl BmpImage {
         let img_width = width as u32;
         let is_top_down = height < 0;
         let img_height = height.unsigned_abs();
+        if img_width > 8192 || img_height == 0 || img_height > 8192 {
+            return Err(format!(
+                "Ungültige Bildauflösung: {}x{}",
+                img_width, img_height
+            ));
+        }
+        let rgba_len = (img_width as usize)
+            .checked_mul(img_height as usize)
+            .and_then(|px| px.checked_mul(4))
+            .ok_or_else(|| "BMP-Puffergröße läuft über".to_string())?;
 
         // Farbpalette einlesen (falls bpp <= 8)
         let palette_entries = if bpp <= 8 {
@@ -92,7 +106,7 @@ impl BmpImage {
             }
         }
 
-        let mut rgba_data = vec![0u8; (img_width * img_height * 4) as usize];
+        let mut rgba_data = vec![0u8; rgba_len];
         let row_stride = (img_width as usize * bpp as usize).div_ceil(32) * 4;
 
         if bytes.len() < pixel_offset {

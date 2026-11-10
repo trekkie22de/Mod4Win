@@ -1,4 +1,8 @@
-﻿$ErrorActionPreference = "Stop"
+param(
+    [switch]$SkipBuild
+)
+
+$ErrorActionPreference = "Stop"
 
 # Repo-Root und Crate-Verzeichnis ermitteln
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -13,7 +17,8 @@ if (Test-Path (Join-Path $ScriptDir "mod4win-rs/Cargo.toml")) {
 }
 
 if ($IsLinux) {
-    $env:PATH = "/usr/local/bin:$HOME/.cargo/bin:$([System.IO.Path]::PathSeparator)$env:PATH"
+    $PathSep = [System.IO.Path]::PathSeparator
+    $env:PATH = "/usr/local/bin$PathSep$HOME/.cargo/bin$PathSep$env:PATH"
     $env:XWIN_ARCH = "x86,x86_64"
 }
 
@@ -33,20 +38,20 @@ $WinBin = if ($IsWindows) {
 $LinX64   = Join-Path $TargetDir "x86_64-unknown-linux-gnu/release/mod4win-rs"
 $LinArm64 = Join-Path $TargetDir "aarch64-unknown-linux-gnu/release/mod4win-rs"
 
-# 1. Prüfen, ob alle drei Release-Binaries existieren (ggf. automatisch bauen)
-if (-not (Test-Path $WinBin)) {
+# 1. Release-Binaries aktualisieren (Cargo inkrementell schnell; via -SkipBuild nur neu verpacken)
+if (-not $SkipBuild -or (-not (Test-Path $WinBin))) {
     if ($IsWindows) {
-        Write-Host "[Build] Windows x64 Release-Binary fehlt – starte cargo build --release..." -ForegroundColor Yellow
+        Write-Host "[Build] Baue Windows x64 Release-Binary (cargo build --release)..." -ForegroundColor Yellow
         cargo build --release --manifest-path (Join-Path $CrateDir "Cargo.toml")
     } else {
-        Write-Host "[Build] Windows x64 Release-Binary fehlt – starte cargo xwin build --release --target x86_64-pc-windows-msvc..." -ForegroundColor Yellow
+        Write-Host "[Build] Baue Windows x64 Release-Binary (cargo xwin build --release --target x86_64-pc-windows-msvc)..." -ForegroundColor Yellow
         cargo xwin build --release --target x86_64-pc-windows-msvc --manifest-path (Join-Path $CrateDir "Cargo.toml")
     }
     if ($LASTEXITCODE -ne 0) { throw "Windows Release-Build fehlgeschlagen!" }
 }
 
-if ((-not (Test-Path $LinX64)) -or (-not (Test-Path $LinArm64))) {
-    Write-Host "[Build] Linux Release-Binaries fehlen – starte build-linux.ps1..." -ForegroundColor Yellow
+if (-not $SkipBuild -or (-not (Test-Path $LinX64)) -or (-not (Test-Path $LinArm64))) {
+    Write-Host "[Build] Baue Linux Release-Binaries (x86_64 & arm64 via build-linux.ps1)..." -ForegroundColor Yellow
     $BuildLinuxScript = Join-Path $CrateDir "build-linux.ps1"
     if (-not (Test-Path $BuildLinuxScript)) {
         $BuildLinuxScript = Join-Path $RootDir "build-linux.ps1"
@@ -116,9 +121,12 @@ case "`$ARCH" in
 esac
 CACHE_BIN="`$CACHE_DIR/mod4win-`$ARCH-`$BUILD_ID"
 if [ ! -x "`$CACHE_BIN" ] || [ "`$(wc -c < "`$CACHE_BIN" 2>/dev/null || echo 0)" -ne "`$LEN" ]; then
-    tail -c +`$OFFSET "`$0" | head -c `$LEN > "`$CACHE_BIN.tmp"
-    chmod +x "`$CACHE_BIN.tmp"
-    mv "`$CACHE_BIN.tmp" "`$CACHE_BIN"
+    TMP_BIN="`$CACHE_BIN.`$`$.tmp"
+    trap 'rm -f "`$TMP_BIN"' EXIT INT TERM
+    tail -c +`$OFFSET "`$0" | head -c `$LEN > "`$TMP_BIN"
+    chmod +x "`$TMP_BIN"
+    mv -f "`$TMP_BIN" "`$CACHE_BIN"
+    trap - EXIT INT TERM
 fi
 exec "`$CACHE_BIN" "`$@"
 "@
@@ -140,8 +148,8 @@ $Arm64Offset1 = $X64Offset1 + $ElfX64.Length
 
 # DOS-Header-Trampolin in Offset 0x00..0x3B (60 Bytes vor e_lfanew an 0x3C) einbetten:
 # Zeile 1: "MZ=0\n" (5 Bytes: 0x00..0x04) -> erhält 'MZ'-Signatur für Windows und ist in /bin/sh eine gültige Zuweisung!
-# Zeile 2: eval "$(tail -c +<SH_OFFSET> "$0"|head -c <SH_LEN>)"\n# (gepaddet mit Leerzeichen bis 0x3B)
-$Trampoline = "MZ=0`neval `"`$(tail -c +$ShOffset1 `"`$0`"|head -c $ShLen)`"`n#"
+# Zeile 2: eval "$(tail -c +<SH_OFFSET> "$0"|head -c <SH_LEN>)";exit\n# (gepaddet mit Leerzeichen bis 0x3B)
+$Trampoline = "MZ=0`neval `"`$(tail -c +$ShOffset1 `"`$0`"|head -c $ShLen)`";exit`n#"
 [byte[]]$TrampBytes = [System.Text.Encoding]::ASCII.GetBytes($Trampoline)
 if ($TrampBytes.Length -gt 60) {
     throw "Trampolin zu lang ($($TrampBytes.Length) > 60 Bytes): $Trampoline"

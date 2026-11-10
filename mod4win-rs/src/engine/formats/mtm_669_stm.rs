@@ -710,6 +710,11 @@ pub fn load_stm(data: &[u8]) -> Result<LoadedModule, u16> {
                 inst.loop_start = loop_start;
                 inst.loop_end = loop_end;
                 inst.volume = volume;
+            } else {
+                inst.offset = 0;
+                inst.iend = 0;
+                inst.loop_start = 0;
+                inst.loop_end = 0;
             }
         }
     }

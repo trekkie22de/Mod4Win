@@ -483,7 +483,7 @@ pub fn resolve_work_dir(user_dir: Option<&Path>) -> Result<PathBuf, String> {
         }
         let tmp = PathBuf::from("/tmp/m4w_work");
         fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
-        return Ok(tmp);
+        Ok(tmp)
     }
     #[cfg(target_os = "windows")]
     {

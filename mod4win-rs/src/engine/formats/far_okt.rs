@@ -595,11 +595,14 @@ pub fn load_okt(data: &[u8]) -> Result<LoadedModule, u16> {
     // 3. Sample-Bodies ("SBOD") einlesen (loaders.pas Zeilen 1918–1936)
     for i in 0..num_inst_slots {
         if state.mi.instruments[i].iend > 0 {
-            if cursor + 8 > data.len() {
-                break;
-            }
-            let b4sign = &data[cursor..cursor + 4];
-            if b4sign != b"SBOD" {
+            if cursor + 8 > data.len() || &data[cursor..cursor + 4] != b"SBOD" {
+                for rem in i..num_inst_slots {
+                    let rem_inst = &mut state.mi.instruments[rem];
+                    rem_inst.offset = 0;
+                    rem_inst.iend = 0;
+                    rem_inst.loop_start = 0;
+                    rem_inst.loop_end = 0;
+                }
                 break;
             }
             let struct_size = read_be_u32(data, cursor + 4).unwrap_or(0) as usize;

@@ -2312,13 +2312,14 @@ impl Mod4WinApp {
         draw_modern_lcd_box(frame, dw, dh, 6, 63, 568, 215);
         let max_rows = 16usize; // 2 Spalten x 16 Zeilen = 32 Samples pro Seite
         let base = self.info_inst_offset;
+        let sel_1based = self.selected_instrument.max(1);
         for idx in 0..32usize {
             let inst_idx = base + idx;
             let col = (idx / max_rows) as i32;
             let row = (idx % max_rows) as i32;
             let rx = 12 + col * 280;
             let ry = 68 + row * 13;
-            let is_sel = inst_idx == self.selected_instrument;
+            let is_sel = (inst_idx + 1) == sel_1based;
             let name = state
                 .instruments
                 .get(inst_idx)
@@ -2378,7 +2379,7 @@ impl Mod4WinApp {
 
         let det = state
             .instruments
-            .get(self.selected_instrument)
+            .get(sel_1based.saturating_sub(1))
             .cloned()
             .unwrap_or_default();
         let inst_name = det.name.as_str();
@@ -2392,7 +2393,7 @@ impl Mod4WinApp {
         let cells = [
             (
                 "Instrument:",
-                format!("{:02} {}", self.selected_instrument + 1, inst_name),
+                format!("{:02} {}", sel_1based, inst_name),
                 COL_LCD_BRIGHT,
             ),
             (
@@ -2513,7 +2514,7 @@ impl Mod4WinApp {
             let idx = self.info_inst_offset + col * 16 + row;
             let total = self.shared_state.lock().unwrap().instruments.len().max(31);
             if idx < total {
-                self.selected_instrument = idx;
+                self.selected_instrument = idx + 1;
             }
             return;
         }
@@ -3890,20 +3891,26 @@ impl Mod4WinApp {
             let col = ((vx - 14) / 169).clamp(0, 2);
             match col {
                 0 => self.setup_cfg.enable_panning = !self.setup_cfg.enable_panning,
-                1 => match (self.setup_cfg.clipping, self.setup_cfg.declick) {
-                    (false, _) => {
-                        self.setup_cfg.clipping = true;
-                        self.setup_cfg.declick = false;
+                1 => {
+                    match (self.setup_cfg.clipping, self.setup_cfg.declick) {
+                        (false, _) => {
+                            self.setup_cfg.clipping = true;
+                            self.setup_cfg.declick = false;
+                        }
+                        (true, false) => {
+                            self.setup_cfg.clipping = true;
+                            self.setup_cfg.declick = true;
+                        }
+                        (true, true) => {
+                            self.setup_cfg.clipping = false;
+                            self.setup_cfg.declick = false;
+                        }
                     }
-                    (true, false) => {
-                        self.setup_cfg.clipping = true;
-                        self.setup_cfg.declick = true;
+                    if let Ok(mut st) = self.shared_state.lock() {
+                        st.sound_settings.set_declick(self.setup_cfg.declick);
+                        st.ini_config.declick = self.setup_cfg.declick;
                     }
-                    (true, true) => {
-                        self.setup_cfg.clipping = false;
-                        self.setup_cfg.declick = false;
-                    }
-                },
+                }
                 _ => self.setup_cfg.state_saver = !self.setup_cfg.state_saver,
             }
             self.sync_live_setup_to_state();
@@ -4225,9 +4232,7 @@ unsafe extern "system" {
 
 #[cfg(all(target_os = "windows", feature = "retro-win32"))]
 fn to_ansi_null(s: &str) -> Vec<u8> {
-    let mut v: Vec<u8> = s.bytes().filter(|&b| b != 0).collect();
-    v.push(0);
-    v
+    crate::win32s_shim::utf8_to_ansi_z(s)
 }
 
 /// Öffnet den nativen Dateidialog (`IFileOpenDialog` unter Windows / XDG-Portal unter Linux via `rfd`)
@@ -4304,9 +4309,9 @@ fn native_open_files_dialog(initial_dir: &str) -> Option<Vec<PathBuf>> {
     if ok != 0 {
         let len = file_buf.iter().position(|&b| b == 0).unwrap_or(0);
         if len > 0 {
-            return Some(vec![PathBuf::from(
-                String::from_utf8_lossy(&file_buf[..len]).into_owned(),
-            )]);
+            return Some(vec![PathBuf::from(crate::win32s_shim::ansi_bytes_to_string(
+                &file_buf[..len],
+            ))]);
         }
     }
     Some(Vec::new())
@@ -4421,9 +4426,9 @@ fn native_open_mol_dialog(initial_dir: &str) -> Option<PathBuf> {
     if ok != 0 {
         let len = file_buf.iter().position(|&b| b == 0).unwrap_or(0);
         if len > 0 {
-            return Some(PathBuf::from(
-                String::from_utf8_lossy(&file_buf[..len]).into_owned(),
-            ));
+            return Some(PathBuf::from(crate::win32s_shim::ansi_bytes_to_string(
+                &file_buf[..len],
+            )));
         }
     }
     None
@@ -4559,9 +4564,9 @@ fn native_save_mol_dialog(initial_dir: &str) -> Option<PathBuf> {
     if ok != 0 {
         let len = file_buf.iter().position(|&b| b == 0).unwrap_or(0);
         if len > 0 {
-            return Some(PathBuf::from(
-                String::from_utf8_lossy(&file_buf[..len]).into_owned(),
-            ));
+            return Some(PathBuf::from(crate::win32s_shim::ansi_bytes_to_string(
+                &file_buf[..len],
+            )));
         }
     }
     None

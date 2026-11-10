@@ -1099,12 +1099,15 @@ impl Sequencer {
                 chn.lln = 0;
             }
 
-            if chn.lend != 0 {
+            if chn.lend != 0 && chn.lend > chn.lln {
                 chn.iend = chn.lend;
-            }
-            if chn.lln != 0 {
-                chn.lln = chn.iend.wrapping_sub(chn.lln);
+                if chn.lln != 0 {
+                    chn.lln = chn.iend.wrapping_sub(chn.lln);
+                } else {
+                    chn.lln = chn.iend.wrapping_add(65536);
+                }
             } else {
+                chn.lend = 0;
                 chn.lln = chn.iend.wrapping_add(65536);
             }
             chn.iend = chn.iend.wrapping_sub(1);
@@ -4483,7 +4486,8 @@ impl Sequencer {
                 {
                     self.module.state.sound_settings.pre_amp =
                         self.module.state.sound_settings.pre_amp.wrapping_sub(1);
-                    self.module.state.max_level = (self.module.state.max_level * 891) >> 10; // ~ -1 dB
+                    self.module.state.max_level =
+                        (((self.module.state.max_level as i64) * 913) >> 10) as i32; // ~ -1.00 dB
                 }
                 ticks_run += 1;
             }
@@ -4618,7 +4622,8 @@ impl Sequencer {
                 {
                     self.module.state.sound_settings.pre_amp =
                         self.module.state.sound_settings.pre_amp.wrapping_sub(1);
-                    self.module.state.max_level = (self.module.state.max_level * 891) >> 10;
+                    self.module.state.max_level =
+                        (((self.module.state.max_level as i64) * 913) >> 10) as i32;
                 }
                 *ticks_run += 1;
                 step += 1;

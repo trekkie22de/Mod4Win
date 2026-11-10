@@ -15,7 +15,9 @@ MOD4WIN.PKS
 
 # Lose Binärdateien, Backups, Logs & Test-Exporte im Projekt- & Crate-Root
 /*.exe
+/*.EXE
 /*.dll
+/*.DLL
 /*.bak
 /*.log
 /*.sta
@@ -26,7 +28,9 @@ MOD4WIN.PKS
 /*.it
 /*.umx
 /mod4win-rs/*.exe
+/mod4win-rs/*.EXE
 /mod4win-rs/*.dll
+/mod4win-rs/*.DLL
 /mod4win-rs/*.bak
 /mod4win-rs/*.log
 /mod4win-rs/*.wav

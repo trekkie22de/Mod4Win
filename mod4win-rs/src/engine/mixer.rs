@@ -67,6 +67,10 @@ pub struct ChannelDeClickState {
     pub was_active: bool,
     /// Erwarteter Sample-Zeiger (`chn.note`) zu Beginn des nächsten Subblocks bei nahtloser Wiedergabe.
     pub expected_next_esi: i32,
+    /// Noch auszuschwingender Restpegel im gegenüberliegenden Puffer nach einem Surround-Routing-Wechsel.
+    pub old_surr_tail_l: i32,
+    pub old_surr_tail_r: i32,
+    pub old_surr_tail_is_sur: bool,
 }
 
 /// Laufzeit-Speicher der `dacmix.pas`-Mixing-Engine (`PlayMemSel`, `SurrPtr`, `SamplesPtr`).
@@ -203,7 +207,11 @@ pub fn get_new_smp_val(
 
     // @@0: cmp esi, chn.IEnd / jbe @@1 / sub esi, chn.Lln / jns @@0 / xor eax, eax / jmp @Exit
     let iend = chn.iend;
-    let lln = chn.lln;
+    let lln = if chn.lln > 0 {
+        chn.lln
+    } else {
+        iend.saturating_add(65536).max(1)
+    };
     while (esi as u32) > (iend as u32) {
         esi = esi.wrapping_sub(lln);
         if esi < 0 {
@@ -546,7 +554,11 @@ pub fn mix_channel_08_nointerp_lo(
 ) {
     let mut esi = chn.note;
     let iend = chn.iend;
-    let lln = chn.lln;
+    let lln = if chn.lln > 0 {
+        chn.lln
+    } else {
+        iend.saturating_add(65536).max(1)
+    };
     let mut dx_rest = chn.rest as u16;
     let bp_plo = chn.plo;
     let pan_mode = chn.jmp_flags & mixer_flags::F_PAN_MASK;
@@ -654,7 +666,11 @@ pub fn mix_channel_08_nointerp_hi(
 ) {
     let mut esi = chn.note;
     let iend = chn.iend;
-    let lln = chn.lln;
+    let lln = if chn.lln > 0 {
+        chn.lln
+    } else {
+        iend.saturating_add(65536).max(1)
+    };
     let mut dx_rest = chn.rest as u16;
     let plo = chn.plo;
     let ebp_phi = chn.phi;
@@ -750,7 +766,11 @@ pub fn mix_channel_16_nointerp_lo(
 ) {
     let mut esi = chn.note;
     let iend = chn.iend;
-    let lln = chn.lln;
+    let lln = if chn.lln > 0 {
+        chn.lln
+    } else {
+        iend.saturating_add(65536).max(1)
+    };
     let mut dx_rest = chn.rest as u16;
     let bp_plo = chn.plo;
     let pan_mode = chn.jmp_flags & mixer_flags::F_PAN_MASK;
@@ -858,7 +878,11 @@ pub fn mix_channel_16_nointerp_hi(
 ) {
     let mut esi = chn.note;
     let iend = chn.iend;
-    let lln = chn.lln;
+    let lln = if chn.lln > 0 {
+        chn.lln
+    } else {
+        iend.saturating_add(65536).max(1)
+    };
     let mut dx_rest = chn.rest as u16;
     let plo = chn.plo;
     let ebp_phi = chn.phi;
@@ -976,7 +1000,11 @@ pub fn mix_channel_08_oversamp_lo(
 ) {
     let mut esi = chn.note;
     let iend = chn.iend;
-    let lln = chn.lln;
+    let lln = if chn.lln > 0 {
+        chn.lln
+    } else {
+        iend.saturating_add(65536).max(1)
+    };
     let mut dx_rest = chn.rest as u16;
     let bp_plo = chn.plo;
     let ebp_plo = bp_plo as i32;
@@ -1156,7 +1184,11 @@ pub fn mix_channel_08_oversamp_hi(
 ) {
     let mut esi = chn.note;
     let iend = chn.iend;
-    let lln = chn.lln;
+    let lln = if chn.lln > 0 {
+        chn.lln
+    } else {
+        iend.saturating_add(65536).max(1)
+    };
     let mut dx_rest = chn.rest as u16;
     let plo = chn.plo;
     let ebp_phi = chn.phi;
@@ -1292,7 +1324,11 @@ pub fn mix_channel_16_oversamp_hi(
 ) {
     let mut esi = chn.note;
     let iend = chn.iend;
-    let lln = chn.lln;
+    let lln = if chn.lln > 0 {
+        chn.lln
+    } else {
+        iend.saturating_add(65536).max(1)
+    };
     let mut dx_rest = chn.rest as u16;
     let plo = chn.plo;
     let ebp_phi = chn.phi;
@@ -1390,7 +1426,11 @@ pub fn mix_channel_16_oversamp_lo(
 ) {
     let mut esi = chn.note;
     let iend = chn.iend;
-    let lln = chn.lln;
+    let lln = if chn.lln > 0 {
+        chn.lln
+    } else {
+        iend.saturating_add(65536).max(1)
+    };
     let mut dx_rest = chn.rest as u16;
     let bp_plo = chn.plo;
     let ebp_plo = bp_plo as i32;
@@ -1556,7 +1596,11 @@ pub fn mix_channel_08_cpu_cubic(
 ) {
     let mut esi = chn.note;
     let iend = chn.iend;
-    let lln = chn.lln;
+    let lln = if chn.lln > 0 {
+        chn.lln
+    } else {
+        iend.saturating_add(65536).max(1)
+    };
     let mut dx_rest = chn.rest as u16;
     let plo = chn.plo;
     let phi = chn.phi;
@@ -1659,7 +1703,11 @@ pub fn mix_channel_16_cpu_cubic(
 ) {
     let mut esi = chn.note;
     let iend = chn.iend;
-    let lln = chn.lln;
+    let lln = if chn.lln > 0 {
+        chn.lln
+    } else {
+        iend.saturating_add(65536).max(1)
+    };
     let mut dx_rest = chn.rest as u16;
     let plo = chn.plo;
     let phi = chn.phi;
@@ -1763,7 +1811,11 @@ pub fn mix_channel_fpu_cubic(
 
     let mut esi = chn.note;
     let iend = chn.iend;
-    let lln = chn.lln;
+    let lln = if chn.lln > 0 {
+        chn.lln
+    } else {
+        iend.saturating_add(65536).max(1)
+    };
     let mut dx_rest = chn.rest as u16;
     let plo = chn.plo;
     let phi = chn.phi;
@@ -2447,18 +2499,26 @@ fn analyze_sample_tail(
         }
     }
 
-    // 3. Rückwärts über End-Stille (Zero-Padding / gecleartes Sample-Ende) bis zum echten Signalende scannen
+    // 3. Rückwärts über End-Stille (Zero-Padding / konstantes DC-Padding) bis zum echten Signalende scannen
     let max_back = (sample_len / 2).min(4096);
     let min_pos = raw_end.saturating_sub(max_back).max(sample_start + 8);
     let mut p = true_end;
-    while p > min_pos && read_sample_norm_i32(sample_mem, p, is_16bit).abs() <= 512 {
-        p -= 1;
-    }
-    if p == min_pos && read_sample_norm_i32(sample_mem, p, is_16bit).abs() <= 512 {
-        // Falls das gesamte Sample extrem leise ist, nur exakte Nullbytes überspringen
-        p = true_end;
-        while p > min_pos && read_sample_norm_i32(sample_mem, p, is_16bit) == 0 {
+    let tail_ref = read_sample_norm_i32(sample_mem, true_end, is_16bit);
+    let dc_tol = if is_16bit { 16 } else { 256 };
+    if tail_ref.abs() <= 512 {
+        while p > min_pos {
+            let v = read_sample_norm_i32(sample_mem, p, is_16bit);
+            if v.abs() > 512 || (v - tail_ref).abs() > dc_tol {
+                break;
+            }
             p -= 1;
+        }
+        if p == min_pos && read_sample_norm_i32(sample_mem, p, is_16bit).abs() <= 512 {
+            // Falls das gesamte Sample extrem leise ist, nur exakte Nullbytes überspringen
+            p = true_end;
+            while p > min_pos && read_sample_norm_i32(sample_mem, p, is_16bit) == 0 {
+                p -= 1;
+            }
         }
     }
     true_end = p;
@@ -2504,11 +2564,13 @@ fn process_sample_subblock(
     let use_declick = state.sound_settings.declick() && !mem.peak_search;
 
     if !am_repeating {
+        let mut just_enabled_dc = false;
         if !use_declick && mem.declick_active {
             mem.declick_active = false;
         } else if use_declick && !mem.declick_active {
             mem.chn_declick = [ChannelDeClickState::default(); MAX_M4W_CHANNELS];
             mem.declick_active = true;
+            just_enabled_dc = true;
         }
 
         // 1. MixBuffer (und ggf. SurBuffer) mit 0 initialisieren (dacmix.pas Zeilen 281–287)
@@ -2564,8 +2626,13 @@ fn process_sample_subblock(
                 continue;
             }
             // @@0: cmp esi, IEnd / jbe @@1 / sub esi, LLn / jns @@0 / xor esi, esi / jmp @WriteChnEnd
+            let safe_lln = if chn.lln > 0 {
+                chn.lln
+            } else {
+                chn.iend.saturating_add(65536).max(1)
+            };
             while (esi as u32) > (chn.iend as u32) {
-                esi = esi.wrapping_sub(chn.lln);
+                esi = esi.wrapping_sub(safe_lln);
                 if esi < 0 {
                     chn.note = 0;
                     esi = 0;
@@ -2616,7 +2683,7 @@ fn process_sample_subblock(
                 let step: i32 = (prod >> 16) as i32;
                 esi = esi.wrapping_add(step);
                 while (esi as u32) > (chn.iend as u32) {
-                    esi = esi.wrapping_sub(chn.lln);
+                    esi = esi.wrapping_sub(safe_lln);
                     if esi < 0 {
                         esi = 0;
                         break;
@@ -2706,6 +2773,40 @@ fn process_sample_subblock(
                 write_back_mix_channel(chn, &asm_chn);
 
                 let dc = &mut mem.chn_declick[ch_idx];
+                if just_enabled_dc {
+                    dc.prev_l = mem.chn_scratch[0].left;
+                    dc.prev_r = mem.chn_scratch[0].right;
+                    dc.was_active = true;
+                    dc.expected_next_esi = pre_wrap_esi;
+                    dc.was_surround = target_is_surround;
+                }
+                // Noch offene Rest-Ausblendrampe im gegenüberliegenden Puffer fortführen
+                if dc.old_surr_tail_l != 0 || dc.old_surr_tail_r != 0 {
+                    let n = ramp_frames.max(1);
+                    let old_buf = if dc.old_surr_tail_is_sur && state.use_surround {
+                        &mut mem.sur_buffer[..total_frames]
+                    } else {
+                        &mut mem.mix_buffer[..total_frames]
+                    };
+                    let limit = n.min(total_frames);
+                    for k in 0..limit {
+                        let w = (n - k) as i64;
+                        let dl = ((dc.old_surr_tail_l as i64 * w) / (n as i64)) as i32;
+                        let dr = ((dc.old_surr_tail_r as i64 * w) / (n as i64)) as i32;
+                        old_buf[k].left = old_buf[k].left.wrapping_add(dl);
+                        old_buf[k].right = old_buf[k].right.wrapping_add(dr);
+                    }
+                    if buf_samples < n {
+                        let w_end = (n - buf_samples) as i64;
+                        dc.old_surr_tail_l =
+                            ((dc.old_surr_tail_l as i64 * w_end) / (n as i64)) as i32;
+                        dc.old_surr_tail_r =
+                            ((dc.old_surr_tail_r as i64 * w_end) / (n as i64)) as i32;
+                    } else {
+                        dc.old_surr_tail_l = 0;
+                        dc.old_surr_tail_r = 0;
+                    }
+                }
                 // Falls der Kanal zwischen `mix_buffer` und `sur_buffer` (ProLogic-Surround) wechselt,
                 // muss der alte Pegel (`dc.prev_l`, `dc.prev_r`) im BISHERIGEN Zielpuffer sanft gegen 0
                 // ausgerampt werden und der Kanal im NEUEN Zielpuffer von 0 aus einblenden (verhindert
@@ -2727,6 +2828,14 @@ fn process_sample_subblock(
                             old_buf[k].left = old_buf[k].left.wrapping_add(dl);
                             old_buf[k].right = old_buf[k].right.wrapping_add(dr);
                         }
+                        if buf_samples < n {
+                            let w_end = (n - buf_samples) as i64;
+                            dc.old_surr_tail_l =
+                                ((dc.prev_l as i64 * w_end) / (n as i64)) as i32;
+                            dc.old_surr_tail_r =
+                                ((dc.prev_r as i64 * w_end) / (n as i64)) as i32;
+                            dc.old_surr_tail_is_sur = dc.was_surround;
+                        }
                     }
                     dc.prev_l = 0;
                     dc.prev_r = 0;
@@ -2740,7 +2849,7 @@ fn process_sample_subblock(
 
                 let pitch_fp = (((phi as u16 as u64) << 16) | (plo as u64)).max(1);
                 let pitch_fp_i64 = pitch_fp as i64;
-                let is_real_oneshot = lend == 0 || lln > iend || lln <= 0;
+                let is_real_oneshot = lend == 0 || lln > iend + 1 || lln <= 0;
                 let (is_oneshot, effective_iend) = analyze_sample_tail(
                     sample_mem,
                     i_offset,
@@ -2755,6 +2864,25 @@ fn process_sample_subblock(
                 // 1a. One-Shot & Pseudo-One-Shot End-De-Clicking:
                 //     Blendet das tatsächliche Signal bereits vor `effective_iend` sanft ab und
                 //     schneidet End-Garbage, Zero-Padding-Klippen sowie Guard-Byte-Drops ab.
+                let needs_seam_guard = if is_looping && lln >= 8 {
+                    let ls_idx = iend.wrapping_add(1).wrapping_sub(lln).max(0);
+                    let s_end = read_sample_norm_i32(sample_mem, iend, is_16bit);
+                    let s_m1 = read_sample_norm_i32(sample_mem, iend.saturating_sub(1), is_16bit);
+                    let s_ls = read_sample_norm_i32(sample_mem, ls_idx, is_16bit);
+                    let seam_jump = (s_end - s_ls).abs().max((s_m1 - s_ls).abs());
+                    let end_spike = if lln >= 48 {
+                        let s_m4 = read_sample_norm_i32(sample_mem, iend - 4, is_16bit);
+                        let s_m3 = read_sample_norm_i32(sample_mem, iend - 3, is_16bit);
+                        let s_m2 = read_sample_norm_i32(sample_mem, iend - 2, is_16bit);
+                        (s_m2 - s_m3).abs() > 8192 || (s_m3 - s_m4).abs() > 8192
+                    } else {
+                        false
+                    };
+                    seam_jump > 2048 || end_spike
+                } else {
+                    false
+                };
+
                 if is_oneshot {
                     let end_fp = ((effective_iend as i64) << 16) | 0xFFFF;
                     let pre_n = ramp_frames.max(8) as i64;
@@ -2811,8 +2939,8 @@ fn process_sample_subblock(
                             chn.note = 0;
                         }
                     }
-                } else if is_looping && lln >= 8 {
-                    // 1b. Loop-Seam Guard-Byte Hold:
+                } else if needs_seam_guard {
+                    // 1b. Loop-Seam Guard-Byte Hold (nur bei echter Naht-Diskontinuität!):
                     //     Verhindert, dass Linear-IDO und Cubic-Spline auf den letzten 1–2 Samples
                     //     vor `iend` bereits innerhalb eines einzigen Quell-Samples in die Guard-Bytes
                     //     (`sample[loop_start]`) abtauchen, bevor die Loop-Rampe in Schritt 3 greift.
@@ -2866,7 +2994,7 @@ fn process_sample_subblock(
                 };
 
                 // 3. Mid-Tick Loop-Seam De-Clicking + Rampen-Anwendung:
-                let loop_out_frames = if is_looping {
+                let loop_out_frames = if needs_seam_guard {
                     (((lln as u64) << 16) / pitch_fp) as usize
                 } else {
                     0

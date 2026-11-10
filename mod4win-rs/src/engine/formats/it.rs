@@ -30,7 +30,7 @@ pub fn read_ue1_compact_index(data: &[u8], pos: &mut usize) -> Option<i32> {
 
     let neg = (b0 & 0x80) != 0;
     let mut more = (b0 & 0x40) != 0;
-    let mut val: i32 = (b0 & 0x3F) as i32;
+    let mut val: u32 = (b0 & 0x3F) as u32;
 
     let shifts = [6u32, 13, 20, 27];
     for (idx, &shift) in shifts.iter().enumerate() {
@@ -40,15 +40,16 @@ pub fn read_ue1_compact_index(data: &[u8], pos: &mut usize) -> Option<i32> {
         let b = *data.get(*pos)?;
         *pos += 1;
         if idx < 3 {
-            val |= ((b & 0x7F) as i32) << shift;
+            val |= ((b & 0x7F) as u32) << shift;
             more = (b & 0x80) != 0;
         } else {
-            val |= (b as i32) << shift;
+            val |= ((b & 0x1F) as u32) << shift;
             more = false;
         }
     }
 
-    Some(if neg { -val } else { val })
+    let clamped = (val.min(i32::MAX as u32)) as i32;
+    Some(if neg { -clamped } else { clamped })
 }
 
 /// Prüft, ob bei `slice` ein bekannter Tracker-Header (`.it`, `.xm`, `.s3m`, `.mod`, `.mtm`, `.far`, `.okt`, `.stm`, `.669`) beginnt.
@@ -1259,20 +1260,6 @@ pub fn load_it(data: &[u8]) -> Result<LoadedModule, u16> {
         smp.vir = data[sofs + 0x4E];
         smp.vit = data[sofs + 0x4F].min(3);
 
-        // Loop-Grenzen absichern
-        if smp.loop_end > smp.length {
-            smp.loop_end = smp.length;
-        }
-        if smp.loop_begin >= smp.loop_end {
-            smp.flags &= !it_smp_flags::LOOP;
-        }
-        if smp.sus_loop_end > smp.length {
-            smp.sus_loop_end = smp.length;
-        }
-        if smp.sus_loop_begin >= smp.sus_loop_end {
-            smp.flags &= !it_smp_flags::SUS_LOOP;
-        }
-
         let has_data = (smp.flags & it_smp_flags::HAS_DATA) != 0
             && smp.length > 0
             && sample_ptr > 0
@@ -1290,6 +1277,18 @@ pub fn load_it(data: &[u8]) -> Result<LoadedModule, u16> {
             cumulative_alloc_bytes =
                 cumulative_alloc_bytes.saturating_add(len.saturating_mul(bytes_per_frame));
             smp.length = len as u32;
+            if smp.loop_end > smp.length {
+                smp.loop_end = smp.length;
+            }
+            if smp.loop_begin >= smp.loop_end {
+                smp.flags &= !it_smp_flags::LOOP;
+            }
+            if smp.sus_loop_end > smp.length {
+                smp.sus_loop_end = smp.length;
+            }
+            if smp.sus_loop_begin >= smp.sus_loop_end {
+                smp.flags &= !it_smp_flags::SUS_LOOP;
+            }
             let is_16bit = (smp.flags & it_smp_flags::IS_16BIT) != 0;
             let is_stereo = (smp.flags & it_smp_flags::STEREO) != 0;
             let is_compressed = (smp.flags & it_smp_flags::COMPRESSED) != 0;
@@ -1424,13 +1423,20 @@ pub fn load_it(data: &[u8]) -> Result<LoadedModule, u16> {
 
             total_sample_bytes = total_sample_bytes
                 .saturating_add((len as i32) * if is_16bit { 2 } else { 1 });
+        } else {
+            smp.length = 0;
+            smp.loop_begin = 0;
+            smp.loop_end = 0;
+            smp.sus_loop_begin = 0;
+            smp.sus_loop_end = 0;
+            smp.flags &= !(it_smp_flags::LOOP | it_smp_flags::SUS_LOOP);
         }
 
         it_samples.push(smp);
     }
 
     // 3. Gepackte IT-Patterns (`pat_offsets`) entpacken
-    let mut it_patterns = Vec::with_capacity((pat_num.min(256).max(1)) as usize);
+    let mut it_patterns = Vec::with_capacity(pat_num.clamp(1, 256) as usize);
     let mut max_used_chn: usize = 4;
 
     for &pofs in pat_offsets.iter().take(256) {

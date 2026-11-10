@@ -478,6 +478,11 @@ pub fn load_xm(data: &[u8]) -> Result<LoadedModule, u16> {
                 ft2_smp.hdr.loopstart = loopstart;
                 ft2_smp.hdr.loopend = loopend;
                 ft2_smp.hdr.volume = volume;
+            } else {
+                ft2_smp.samp_offset = 0;
+                ft2_smp.hdr.samplelen = 0;
+                ft2_smp.hdr.loopstart = 0;
+                ft2_smp.hdr.loopend = 0;
             }
         }
         cursor = data_cursor;
