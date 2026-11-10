@@ -17,8 +17,8 @@ use crate::engine::formats::it::{
     map_it_vol_cmd_to_m4w_effect, ItEnvelope, ItModuleData, ItNoteCell, ItSample,
 };
 use crate::engine::mixer::{
-    apply_click_removal_slide, apply_post_filters, mix_out_and_clip, process_surround_buffer,
-    DacMixMemory, MixOutputBuffer, StereoSample32,
+    apply_click_removal_slide, apply_post_filters_with_hint, mix_out_and_clip,
+    process_surround_buffer, DacMixMemory, MixOutputBuffer, StereoSample32,
 };
 use crate::engine::types::{EngineState, MAX_M4W_CHANNELS, MAX_MIX_BUF_SAMPLES, MAX_PATTERNS};
 
@@ -242,7 +242,15 @@ impl ItVoiceFilter {
             return x;
         }
         let y = self.fg * x + self.fb0 * self.y1_l + self.fb1 * self.y2_l;
-        let y_clamped = y.clamp(-2_000_000_000.0, 2_000_000_000.0);
+        if !y.is_finite() {
+            self.y1_l = 0.0;
+            self.y2_l = 0.0;
+            return x;
+        }
+        let mut y_clamped = y.clamp(-2_000_000_000.0, 2_000_000_000.0);
+        if y_clamped.abs() < 1.0e-15 {
+            y_clamped = 0.0;
+        }
         self.y2_l = self.y1_l;
         self.y1_l = y_clamped;
         if self.highpass {
@@ -258,7 +266,15 @@ impl ItVoiceFilter {
             return x;
         }
         let y = self.fg * x + self.fb0 * self.y1_r + self.fb1 * self.y2_r;
-        let y_clamped = y.clamp(-2_000_000_000.0, 2_000_000_000.0);
+        if !y.is_finite() {
+            self.y1_r = 0.0;
+            self.y2_r = 0.0;
+            return x;
+        }
+        let mut y_clamped = y.clamp(-2_000_000_000.0, 2_000_000_000.0);
+        if y_clamped.abs() < 1.0e-15 {
+            y_clamped = 0.0;
+        }
         self.y2_r = self.y1_r;
         self.y1_r = y_clamped;
         if self.highpass {
@@ -2667,6 +2683,7 @@ impl ItEngine {
         // einer linearen Stimmen-Skalierung von mix_vol / 128.0.
         let mix_vol_scale = ((it.mix_vol.max(1) as f64) / 128.0) * preamp_factor;
         let master_scale = (mix_vol_scale * 256.0).round() as i64;
+        let mut it_has_8bit_active = false;
 
         for v_idx in 0..MAX_IT_VIRTUAL_VOICES {
             if !self.voices[v_idx].active {
@@ -2684,6 +2701,9 @@ impl ItEngine {
 
             let step_16_16 = (((self.voices[v_idx].freq as u64) << 16) / sr) as u32;
             let silent = self.voices[v_idx].fvol <= 0;
+            if !silent && (smp.flags & it_smp_flags::IS_16BIT) == 0 {
+                it_has_8bit_active = true;
+            }
 
             if silent && (it.flags & it_flags::VOL0_OPTIMIZATIONS) != 0 {
                 self.advance_voice_silent(v_idx, smp, step_16_16, buf_samples);
@@ -2728,15 +2748,19 @@ impl ItEngine {
                 };
 
                 if !silent {
-                    let out_l = filt_l.wrapping_mul(l_gain);
+                    const ACC_MAX: i64 = (i32::MAX - 1) as i64;
+                    let out_l =
+                        ((filt_l as i64) * (l_gain as i64)).clamp(-ACC_MAX, ACC_MAX) as i32;
+                    let prod_r =
+                        ((filt_r as i64) * (r_gain as i64)).clamp(-ACC_MAX, ACC_MAX) as i32;
                     let out_r = if is_surr && !route_m4w_surr {
                         // In IT Native Surround (S91) ist der rechte Kanal um 180° phasengedreht (`M32BITI.ASM`)
-                        -filt_r.wrapping_mul(r_gain)
+                        -prod_r
                     } else {
-                        filt_r.wrapping_mul(r_gain)
+                        prod_r
                     };
-                    frame.left = frame.left.wrapping_add(out_l);
-                    frame.right = frame.right.wrapping_add(out_r);
+                    frame.left = frame.left.saturating_add(out_l);
+                    frame.right = frame.right.saturating_add(out_r);
                 }
 
                 // Beim Zusatz-Frame `buf_samples` (für @SlideOut) die Phase nicht ein weiteres Mal vorrücken
@@ -2772,8 +2796,8 @@ impl ItEngine {
                     &mut state.buf_end,
                 );
             }
-            apply_post_filters(state, mem, buf_samples);
         }
+        apply_post_filters_with_hint(state, mem, buf_samples, it_has_8bit_active);
 
         mix_out_and_clip(
             &mem.mix_buffer,
@@ -2931,17 +2955,22 @@ impl ItEngine {
             && smp.sus_loop_end > smp.sus_loop_begin;
         let use_loop = (smp.flags & it_smp_flags::LOOP) != 0 && smp.loop_end > smp.loop_begin;
 
+        let max_len = (smp.data_16.len() as i32).min(smp.length as i32).max(0);
+        if max_len == 0 {
+            v.active = false;
+            return;
+        }
         if use_sus {
-            let lb = smp.sus_loop_begin as i32;
-            let le = smp.sus_loop_end as i32;
+            let lb = (smp.sus_loop_begin as i32).clamp(0, max_len);
+            let le = (smp.sus_loop_end as i32).clamp(0, max_len);
             let bidi = (smp.flags & it_smp_flags::PINGPONG_SUS_LOOP) != 0;
             Self::wrap_loop_bounds(v, lb, le, bidi);
         } else if use_loop {
-            let lb = smp.loop_begin as i32;
-            let le = smp.loop_end as i32;
+            let lb = (smp.loop_begin as i32).clamp(0, max_len);
+            let le = (smp.loop_end as i32).clamp(0, max_len);
             let bidi = (smp.flags & it_smp_flags::PINGPONG_LOOP) != 0;
             Self::wrap_loop_bounds(v, lb, le, bidi);
-        } else if v.sample_pos >= (smp.length as i32) || v.sample_pos < 0 {
+        } else if v.sample_pos >= max_len || v.sample_pos < 0 {
             v.active = false;
             let hc_idx = (v.host_chn as usize).min(MAX_IT_HOST_CHANNELS - 1);
             if self.host_channels[hc_idx].fg_voice == Some(v_idx) {
@@ -2952,16 +2981,37 @@ impl ItEngine {
 
     #[inline]
     fn wrap_loop_bounds(v: &mut ItVirtualVoice, lb: i32, le: i32, bidi: bool) {
-        let span = (le - lb).max(1);
+        if le <= lb {
+            v.active = false;
+            return;
+        }
+        let span = le - lb;
         if bidi {
-            if !v.reverse && v.sample_pos >= le {
+            if span == 1 {
+                v.sample_pos = lb;
+                v.reverse = false;
+            } else if !v.reverse && v.sample_pos >= le {
                 let over = v.sample_pos - le;
-                v.sample_pos = (le - 1 - (over % span)).clamp(lb, le - 1);
-                v.reverse = true;
+                let period = 2 * span;
+                let phase = over % period;
+                if phase < span {
+                    v.sample_pos = (le - 1 - phase).clamp(lb, le - 1);
+                    v.reverse = true;
+                } else {
+                    v.sample_pos = (lb + (phase - span)).clamp(lb, le - 1);
+                    v.reverse = false;
+                }
             } else if v.reverse && v.sample_pos < lb {
                 let under = lb - 1 - v.sample_pos;
-                v.sample_pos = (lb + (under % span)).clamp(lb, le - 1);
-                v.reverse = false;
+                let period = 2 * span;
+                let phase = under % period;
+                if phase < span {
+                    v.sample_pos = (lb + phase).clamp(lb, le - 1);
+                    v.reverse = false;
+                } else {
+                    v.sample_pos = (le - 1 - (phase - span)).clamp(lb, le - 1);
+                    v.reverse = true;
+                }
             }
         } else if !v.reverse && v.sample_pos >= le {
             v.sample_pos = lb + ((v.sample_pos - lb) % span);

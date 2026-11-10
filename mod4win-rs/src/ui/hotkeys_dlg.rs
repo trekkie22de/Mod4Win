@@ -152,7 +152,7 @@ impl Mod4WinApp {
         } else {
             cur_binding.key_name.clone()
         };
-        draw_oem_text_centered(frame, dw, dh, 34, 266, 169, &key_disp, col_black);
+        draw_oem_text_centered(frame, dw, dh, 34, 169, 266, &key_disp, col_black);
 
         // Grüne LEDs (`HKONOFF.bmp`, `10x5`) + schwarze Beschriftungen `Control` (64, 185), `Shift` (164, 185), `Alt` (264, 185)
         let has_ctrl = (cur_binding.state & 1) != 0;

@@ -51,8 +51,8 @@ pub fn apply_live_sound_settings(seq: &mut Sequencer, new_settings: SoundSetting
     // keine 32-KB-HDD-Block-Teilung ausführt.
     seq.module.state.sound_settings.device_id = DEV_DAC;
 
-    let new_sr = new_settings.samplerate.clamp(4000, 96000);
-    let old_sr = old_settings.samplerate.clamp(4000, 96000);
+    let new_sr = new_settings.samplerate.clamp(4000, 48000);
+    let old_sr = old_settings.samplerate.clamp(4000, 48000);
     let new_bits = if new_settings.bits == 8 { 8 } else { 16 };
     let new_stereo = new_settings.stereo.clamp(1, 2);
     let new_surround = new_settings.surround && new_stereo == 2;
@@ -507,7 +507,7 @@ impl LiveAudioProcessor {
                 continue;
             }
 
-            let seq_rate = (seq.module.state.sound_settings.samplerate.clamp(4000, 96000)) as u64;
+            let seq_rate = (seq.module.state.sound_settings.samplerate.clamp(4000, 48000)) as u64;
             let (l0, r0) = self.frame_queue[0];
             let (l1, r1) = if self.frame_queue.len() >= 2 {
                 self.frame_queue[1]

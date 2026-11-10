@@ -104,9 +104,11 @@ pub fn load_mol_file(mol_path: &Path) -> Vec<PathBuf> {
     let Ok(bytes) = fs::read(&resolved_mol) else {
         return Vec::new();
     };
-    let content = String::from_utf8_lossy(&bytes);
-    let mut lines: Vec<&str> = content.lines().map(|l| l.trim_end_matches('\r')).collect();
-    if lines.is_empty() {
+    let raw_byte_lines: Vec<&[u8]> = bytes
+        .split(|&b| b == b'\n')
+        .map(|l| l.strip_suffix(b"\r").unwrap_or(l))
+        .collect();
+    if raw_byte_lines.is_empty() {
         return Vec::new();
     }
 
@@ -117,7 +119,7 @@ pub fn load_mol_file(mol_path: &Path) -> Vec<PathBuf> {
         .unwrap_or_else(|| PathBuf::from("."));
 
     // Prüfen, ob es eine originale MOD4WIN `[DIRECTORIES]`-Datei ist
-    if lines[0].trim() == "[DIRECTORIES]" {
+    if raw_byte_lines[0].trim_ascii() == b"[DIRECTORIES]" {
         let mut dirs: Vec<(usize, PathBuf)> = Vec::new();
         let mut arcs: Vec<(usize, u8, String)> = Vec::new();
         let mut arc_dirs: Vec<String> = vec![String::new(), String::new()]; // 1-basiert, Index 1 = Root
@@ -132,27 +134,27 @@ pub fn load_mol_file(mol_path: &Path) -> Vec<PathBuf> {
         }
         let mut sec = Section::Directories;
 
-        for &raw_line in &lines[1..] {
-            let trimmed = raw_line.trim();
-            if trimmed == "[ARCHIVES]" {
+        for &lb in &raw_byte_lines[1..] {
+            let trimmed = lb.trim_ascii();
+            if trimmed == b"[ARCHIVES]" {
                 sec = Section::Archives;
                 continue;
-            } else if trimmed == "[ARCHIVDIRECTORIES]" {
+            } else if trimmed == b"[ARCHIVDIRECTORIES]" {
                 sec = Section::ArchivDirectories;
                 continue;
-            } else if trimmed == "[FILES]" {
+            } else if trimmed == b"[FILES]" {
                 sec = Section::Files;
                 continue;
             }
-            if raw_line.is_empty() {
+            if lb.is_empty() {
                 continue;
             }
-            let lb = raw_line.as_bytes();
             match sec {
                 Section::Directories => {
                     if lb.len() >= 2 {
                         let idx = lb[0].wrapping_sub(INDEX_OFFSET) as usize;
-                        let dir_str = normalize_mol_path_separators(raw_line[1..].trim());
+                        let rest = String::from_utf8_lossy(&lb[1..]);
+                        let dir_str = normalize_mol_path_separators(rest.trim());
                         if !dir_str.is_empty() {
                             dirs.push((idx, PathBuf::from(dir_str)));
                         }
@@ -162,13 +164,15 @@ pub fn load_mol_file(mol_path: &Path) -> Vec<PathBuf> {
                     if lb.len() >= 3 {
                         let dir_idx = lb[0].wrapping_sub(INDEX_OFFSET) as usize;
                         let arc_type = lb[1].wrapping_sub(INDEX_OFFSET);
-                        let arc_name = normalize_mol_path_separators(raw_line[2..].trim());
+                        let rest = String::from_utf8_lossy(&lb[2..]);
+                        let arc_name = normalize_mol_path_separators(rest.trim());
                         arcs.push((dir_idx, arc_type, arc_name));
                     }
                 }
                 Section::ArchivDirectories => {
                     if lb.len() >= 2 {
-                        let sub = normalize_mol_path_separators(raw_line[1..].trim());
+                        let rest = String::from_utf8_lossy(&lb[1..]);
+                        let sub = normalize_mol_path_separators(rest.trim());
                         arc_dirs.push(sub);
                     }
                 }
@@ -184,7 +188,8 @@ pub fn load_mol_file(mol_path: &Path) -> Vec<PathBuf> {
                         let dir_idx = lb[1].wrapping_sub(INDEX_OFFSET) as usize;
                         let arc_idx = lb[2].wrapping_sub(INDEX_OFFSET);
                         let _arcdir_idx = lb[3].wrapping_sub(INDEX_OFFSET) as usize;
-                        let stem = raw_line[4..].trim();
+                        let stem_cow = String::from_utf8_lossy(&lb[4..]);
+                        let stem = stem_cow.trim();
                         if ft >= 1 && ft <= FILETYPES_AS_STRING.len() && !stem.is_empty() {
                             let ext = FILETYPES_AS_STRING[ft - 1];
                             let file_name = format!("{}.{}", stem, ext);
@@ -228,8 +233,9 @@ pub fn load_mol_file(mol_path: &Path) -> Vec<PathBuf> {
     }
 
     // Fallback: Einfache Textzeilen-Playlist (.MOL / .M3U)
+    let content = String::from_utf8_lossy(&bytes);
     let mut result = Vec::new();
-    for line in lines.drain(..) {
+    for line in content.lines() {
         let raw_trimmed = line.trim();
         if raw_trimmed.is_empty() || raw_trimmed.starts_with('#') || raw_trimmed.starts_with(';') {
             continue;
@@ -921,6 +927,8 @@ pub fn extract_all_tracker_files_from_zip(zip_path: &Path) -> Vec<PathBuf> {
         .join(zip_stem);
     let _ = fs::create_dir_all(&cache_dir);
 
+    const MAX_ARCHIVE_TOTAL_EXTRACT_BYTES: usize = 256 * 1024 * 1024;
+    let mut total_extracted_bytes = 0usize;
     let mut out = Vec::new();
     for entry in &entries {
         let (_, _, clean_name) = split_archive_path(&entry.file_name);
@@ -935,10 +943,14 @@ pub fn extract_all_tracker_files_from_zip(zip_path: &Path) -> Vec<PathBuf> {
             out.push(out_path);
             continue;
         }
-        if let Some(decoded) = extract_zip_entry_bytes(&data, entry)
-            && fs::write(&out_path, &decoded).is_ok()
-        {
-            out.push(out_path);
+        if let Some(decoded) = extract_zip_entry_bytes(&data, entry) {
+            total_extracted_bytes = total_extracted_bytes.saturating_add(decoded.len());
+            if total_extracted_bytes > MAX_ARCHIVE_TOTAL_EXTRACT_BYTES {
+                break;
+            }
+            if fs::write(&out_path, &decoded).is_ok() {
+                out.push(out_path);
+            }
         }
     }
     out
@@ -1491,6 +1503,7 @@ struct BitReader<'a> {
     byte_pos: usize,
     bit_buf: u32,
     bit_cnt: u8,
+    eof_overrun_bytes: usize,
 }
 
 impl<'a> BitReader<'a> {
@@ -1500,7 +1513,13 @@ impl<'a> BitReader<'a> {
             byte_pos: 0,
             bit_buf: 0,
             bit_cnt: 0,
+            eof_overrun_bytes: 0,
         }
+    }
+
+    #[inline]
+    fn is_corrupted_eof(&self) -> bool {
+        self.eof_overrun_bytes > 4
     }
 
     #[inline]
@@ -1511,6 +1530,7 @@ impl<'a> BitReader<'a> {
                 self.byte_pos += 1;
                 v as u32
             } else {
+                self.eof_overrun_bytes = self.eof_overrun_bytes.saturating_add(1);
                 0
             };
             self.bit_buf |= b << self.bit_cnt;
@@ -1574,6 +1594,9 @@ impl HuffmanTable {
 
     #[inline]
     fn decode(&self, br: &mut BitReader) -> Option<u16> {
+        if br.is_corrupted_eof() {
+            return None;
+        }
         let mut code = 0i32;
         let mut first = 0i32;
         let mut index = 0i32;
@@ -1629,6 +1652,9 @@ pub fn inflate_raw_deflate(input: &[u8], expected_size: usize) -> Option<Vec<u8>
     );
 
     loop {
+        if br.is_corrupted_eof() {
+            return None;
+        }
         let bfinal = br.read_bits(1);
         let btype = br.read_bits(2);
 
@@ -2132,6 +2158,25 @@ mod tests {
             extract_zip_entry_bytes(&lha, &entries[1]).as_deref(),
             Some(&orig_lh5[..])
         );
+    }
+
+    #[test]
+    fn test_mol_roundtrip_over_100_directories_no_utf8_panic() {
+        let tmp_mol = std::env::temp_dir().join(format!(
+            "mod4win_test_mol_120dirs_{}.mol",
+            std::process::id()
+        ));
+        let playlist: Vec<PathBuf> = (0..120)
+            .map(|i| PathBuf::from(format!("/tmp/m4w_virtual_dir_{:03}/SONG{:03}.mod", i, i)))
+            .collect();
+        save_mol_file(&tmp_mol, &playlist).expect("save_mol_file should succeed");
+        let loaded = load_mol_file(&tmp_mol);
+        let _ = fs::remove_file(&tmp_mol);
+        assert_eq!(loaded.len(), 120);
+        assert_eq!(loaded[0], playlist[0]);
+        // Index >= 97 erzeugt Statusbyte >= 0x80 (kein gültiges UTF-8!) -> muss exakt roundtrippen!
+        assert_eq!(loaded[99], playlist[99]);
+        assert_eq!(loaded[119], playlist[119]);
     }
 }
 

@@ -67,6 +67,10 @@ pub struct ChannelDeClickState {
     pub was_active: bool,
     /// Erwarteter Sample-Zeiger (`chn.note`) zu Beginn des nächsten Subblocks bei nahtloser Wiedergabe.
     pub expected_next_esi: i32,
+    /// Noch auszuschwingender Restpegel im gegenüberliegenden Puffer nach einem Surround-Routing-Wechsel.
+    pub old_surr_tail_l: i32,
+    pub old_surr_tail_r: i32,
+    pub old_surr_tail_is_sur: bool,
 }
 
 /// Laufzeit-Speicher der `dacmix.pas`-Mixing-Engine (`PlayMemSel`, `SurrPtr`, `SamplesPtr`).
@@ -150,6 +154,8 @@ pub struct AdaptiveDeHissState {
     pub smooth_gain: [f64; 4],
     /// Transienten-Schutzfaktor $T \in [0.0, 1.0]$ für knackige Drums & Hi-Hats.
     pub transient_hold: f64,
+    /// Zuletzt verwendete Samplerate (für sanften Reset bei Live-Sampleraten-Wechsel).
+    pub last_sr: i32,
     /// Ob der Denoiser im vorangegangenen Block aktiv war.
     pub active: bool,
 }
@@ -165,6 +171,7 @@ impl Default for AdaptiveDeHissState {
             noise_floor: [600.0, 550.0, 500.0, 450.0],
             smooth_gain: [0.85, 0.70, 0.60, 0.50],
             transient_hold: 0.0,
+            last_sr: 0,
             active: false,
         }
     }
@@ -305,7 +312,11 @@ pub fn get_new_smp_val(
 
     // @@0: cmp esi, chn.IEnd / jbe @@1 / sub esi, chn.Lln / jns @@0 / xor eax, eax / jmp @Exit
     let iend = chn.iend;
-    let lln = chn.lln;
+    let lln = if chn.lln > 0 {
+        chn.lln
+    } else {
+        iend.saturating_add(65536).max(1)
+    };
     while (esi as u32) > (iend as u32) {
         esi = esi.wrapping_sub(lln);
         if esi < 0 {
@@ -648,7 +659,11 @@ pub fn mix_channel_08_nointerp_lo(
 ) {
     let mut esi = chn.note;
     let iend = chn.iend;
-    let lln = chn.lln;
+    let lln = if chn.lln > 0 {
+        chn.lln
+    } else {
+        iend.saturating_add(65536).max(1)
+    };
     let mut dx_rest = chn.rest as u16;
     let bp_plo = chn.plo;
     let pan_mode = chn.jmp_flags & mixer_flags::F_PAN_MASK;
@@ -756,7 +771,11 @@ pub fn mix_channel_08_nointerp_hi(
 ) {
     let mut esi = chn.note;
     let iend = chn.iend;
-    let lln = chn.lln;
+    let lln = if chn.lln > 0 {
+        chn.lln
+    } else {
+        iend.saturating_add(65536).max(1)
+    };
     let mut dx_rest = chn.rest as u16;
     let plo = chn.plo;
     let ebp_phi = chn.phi;
@@ -852,7 +871,11 @@ pub fn mix_channel_16_nointerp_lo(
 ) {
     let mut esi = chn.note;
     let iend = chn.iend;
-    let lln = chn.lln;
+    let lln = if chn.lln > 0 {
+        chn.lln
+    } else {
+        iend.saturating_add(65536).max(1)
+    };
     let mut dx_rest = chn.rest as u16;
     let bp_plo = chn.plo;
     let pan_mode = chn.jmp_flags & mixer_flags::F_PAN_MASK;
@@ -960,7 +983,11 @@ pub fn mix_channel_16_nointerp_hi(
 ) {
     let mut esi = chn.note;
     let iend = chn.iend;
-    let lln = chn.lln;
+    let lln = if chn.lln > 0 {
+        chn.lln
+    } else {
+        iend.saturating_add(65536).max(1)
+    };
     let mut dx_rest = chn.rest as u16;
     let plo = chn.plo;
     let ebp_phi = chn.phi;
@@ -1078,7 +1105,11 @@ pub fn mix_channel_08_oversamp_lo(
 ) {
     let mut esi = chn.note;
     let iend = chn.iend;
-    let lln = chn.lln;
+    let lln = if chn.lln > 0 {
+        chn.lln
+    } else {
+        iend.saturating_add(65536).max(1)
+    };
     let mut dx_rest = chn.rest as u16;
     let bp_plo = chn.plo;
     let ebp_plo = bp_plo as i32;
@@ -1258,7 +1289,11 @@ pub fn mix_channel_08_oversamp_hi(
 ) {
     let mut esi = chn.note;
     let iend = chn.iend;
-    let lln = chn.lln;
+    let lln = if chn.lln > 0 {
+        chn.lln
+    } else {
+        iend.saturating_add(65536).max(1)
+    };
     let mut dx_rest = chn.rest as u16;
     let plo = chn.plo;
     let ebp_phi = chn.phi;
@@ -1394,7 +1429,11 @@ pub fn mix_channel_16_oversamp_hi(
 ) {
     let mut esi = chn.note;
     let iend = chn.iend;
-    let lln = chn.lln;
+    let lln = if chn.lln > 0 {
+        chn.lln
+    } else {
+        iend.saturating_add(65536).max(1)
+    };
     let mut dx_rest = chn.rest as u16;
     let plo = chn.plo;
     let ebp_phi = chn.phi;
@@ -1492,7 +1531,11 @@ pub fn mix_channel_16_oversamp_lo(
 ) {
     let mut esi = chn.note;
     let iend = chn.iend;
-    let lln = chn.lln;
+    let lln = if chn.lln > 0 {
+        chn.lln
+    } else {
+        iend.saturating_add(65536).max(1)
+    };
     let mut dx_rest = chn.rest as u16;
     let bp_plo = chn.plo;
     let ebp_plo = bp_plo as i32;
@@ -1658,7 +1701,11 @@ pub fn mix_channel_08_cpu_cubic(
 ) {
     let mut esi = chn.note;
     let iend = chn.iend;
-    let lln = chn.lln;
+    let lln = if chn.lln > 0 {
+        chn.lln
+    } else {
+        iend.saturating_add(65536).max(1)
+    };
     let mut dx_rest = chn.rest as u16;
     let plo = chn.plo;
     let phi = chn.phi;
@@ -1761,7 +1808,11 @@ pub fn mix_channel_16_cpu_cubic(
 ) {
     let mut esi = chn.note;
     let iend = chn.iend;
-    let lln = chn.lln;
+    let lln = if chn.lln > 0 {
+        chn.lln
+    } else {
+        iend.saturating_add(65536).max(1)
+    };
     let mut dx_rest = chn.rest as u16;
     let plo = chn.plo;
     let phi = chn.phi;
@@ -1865,7 +1916,11 @@ pub fn mix_channel_fpu_cubic(
 
     let mut esi = chn.note;
     let iend = chn.iend;
-    let lln = chn.lln;
+    let lln = if chn.lln > 0 {
+        chn.lln
+    } else {
+        iend.saturating_add(65536).max(1)
+    };
     let mut dx_rest = chn.rest as u16;
     let plo = chn.plo;
     let phi = chn.phi;
@@ -2549,18 +2604,26 @@ fn analyze_sample_tail(
         }
     }
 
-    // 3. Rückwärts über End-Stille (Zero-Padding / gecleartes Sample-Ende) bis zum echten Signalende scannen
+    // 3. Rückwärts über End-Stille (Zero-Padding / konstantes DC-Padding) bis zum echten Signalende scannen
     let max_back = (sample_len / 2).min(4096);
     let min_pos = raw_end.saturating_sub(max_back).max(sample_start + 8);
     let mut p = true_end;
-    while p > min_pos && read_sample_norm_i32(sample_mem, p, is_16bit).abs() <= 512 {
-        p -= 1;
-    }
-    if p == min_pos && read_sample_norm_i32(sample_mem, p, is_16bit).abs() <= 512 {
-        // Falls das gesamte Sample extrem leise ist, nur exakte Nullbytes überspringen
-        p = true_end;
-        while p > min_pos && read_sample_norm_i32(sample_mem, p, is_16bit) == 0 {
+    let tail_ref = read_sample_norm_i32(sample_mem, true_end, is_16bit);
+    let dc_tol = if is_16bit { 16 } else { 256 };
+    if tail_ref.abs() <= 512 {
+        while p > min_pos {
+            let v = read_sample_norm_i32(sample_mem, p, is_16bit);
+            if v.abs() > 512 || (v - tail_ref).abs() > dc_tol {
+                break;
+            }
             p -= 1;
+        }
+        if p == min_pos && read_sample_norm_i32(sample_mem, p, is_16bit).abs() <= 512 {
+            // Falls das gesamte Sample extrem leise ist, nur exakte Nullbytes überspringen
+            p = true_end;
+            while p > min_pos && read_sample_norm_i32(sample_mem, p, is_16bit) == 0 {
+                p -= 1;
+            }
         }
     }
     true_end = p;
@@ -2606,11 +2669,13 @@ fn process_sample_subblock(
     let use_declick = state.sound_settings.declick() && !mem.peak_search;
 
     if !am_repeating {
+        let mut just_enabled_dc = false;
         if !use_declick && mem.declick_active {
             mem.declick_active = false;
         } else if use_declick && !mem.declick_active {
             mem.chn_declick = [ChannelDeClickState::default(); MAX_M4W_CHANNELS];
             mem.declick_active = true;
+            just_enabled_dc = true;
         }
 
         // 1. MixBuffer (und ggf. SurBuffer) mit 0 initialisieren (dacmix.pas Zeilen 281–287)
@@ -2666,8 +2731,13 @@ fn process_sample_subblock(
                 continue;
             }
             // @@0: cmp esi, IEnd / jbe @@1 / sub esi, LLn / jns @@0 / xor esi, esi / jmp @WriteChnEnd
+            let safe_lln = if chn.lln > 0 {
+                chn.lln
+            } else {
+                chn.iend.saturating_add(65536).max(1)
+            };
             while (esi as u32) > (chn.iend as u32) {
-                esi = esi.wrapping_sub(chn.lln);
+                esi = esi.wrapping_sub(safe_lln);
                 if esi < 0 {
                     chn.note = 0;
                     esi = 0;
@@ -2718,7 +2788,7 @@ fn process_sample_subblock(
                 let step: i32 = (prod >> 16) as i32;
                 esi = esi.wrapping_add(step);
                 while (esi as u32) > (chn.iend as u32) {
-                    esi = esi.wrapping_sub(chn.lln);
+                    esi = esi.wrapping_sub(safe_lln);
                     if esi < 0 {
                         esi = 0;
                         break;
@@ -2808,6 +2878,40 @@ fn process_sample_subblock(
                 write_back_mix_channel(chn, &asm_chn);
 
                 let dc = &mut mem.chn_declick[ch_idx];
+                if just_enabled_dc {
+                    dc.prev_l = mem.chn_scratch[0].left;
+                    dc.prev_r = mem.chn_scratch[0].right;
+                    dc.was_active = true;
+                    dc.expected_next_esi = pre_wrap_esi;
+                    dc.was_surround = target_is_surround;
+                }
+                // Noch offene Rest-Ausblendrampe im gegenüberliegenden Puffer fortführen
+                if dc.old_surr_tail_l != 0 || dc.old_surr_tail_r != 0 {
+                    let n = ramp_frames.max(1);
+                    let old_buf = if dc.old_surr_tail_is_sur && state.use_surround {
+                        &mut mem.sur_buffer[..total_frames]
+                    } else {
+                        &mut mem.mix_buffer[..total_frames]
+                    };
+                    let limit = n.min(total_frames);
+                    for k in 0..limit {
+                        let w = (n - k) as i64;
+                        let dl = ((dc.old_surr_tail_l as i64 * w) / (n as i64)) as i32;
+                        let dr = ((dc.old_surr_tail_r as i64 * w) / (n as i64)) as i32;
+                        old_buf[k].left = old_buf[k].left.wrapping_add(dl);
+                        old_buf[k].right = old_buf[k].right.wrapping_add(dr);
+                    }
+                    if buf_samples < n {
+                        let w_end = (n - buf_samples) as i64;
+                        dc.old_surr_tail_l =
+                            ((dc.old_surr_tail_l as i64 * w_end) / (n as i64)) as i32;
+                        dc.old_surr_tail_r =
+                            ((dc.old_surr_tail_r as i64 * w_end) / (n as i64)) as i32;
+                    } else {
+                        dc.old_surr_tail_l = 0;
+                        dc.old_surr_tail_r = 0;
+                    }
+                }
                 // Falls der Kanal zwischen `mix_buffer` und `sur_buffer` (ProLogic-Surround) wechselt,
                 // muss der alte Pegel (`dc.prev_l`, `dc.prev_r`) im BISHERIGEN Zielpuffer sanft gegen 0
                 // ausgerampt werden und der Kanal im NEUEN Zielpuffer von 0 aus einblenden (verhindert
@@ -2829,6 +2933,14 @@ fn process_sample_subblock(
                             old_buf[k].left = old_buf[k].left.wrapping_add(dl);
                             old_buf[k].right = old_buf[k].right.wrapping_add(dr);
                         }
+                        if buf_samples < n {
+                            let w_end = (n - buf_samples) as i64;
+                            dc.old_surr_tail_l =
+                                ((dc.prev_l as i64 * w_end) / (n as i64)) as i32;
+                            dc.old_surr_tail_r =
+                                ((dc.prev_r as i64 * w_end) / (n as i64)) as i32;
+                            dc.old_surr_tail_is_sur = dc.was_surround;
+                        }
                     }
                     dc.prev_l = 0;
                     dc.prev_r = 0;
@@ -2842,7 +2954,7 @@ fn process_sample_subblock(
 
                 let pitch_fp = (((phi as u16 as u64) << 16) | (plo as u64)).max(1);
                 let pitch_fp_i64 = pitch_fp as i64;
-                let is_real_oneshot = lend == 0 || lln > iend || lln <= 0;
+                let is_real_oneshot = lend == 0 || lln > iend + 1 || lln <= 0;
                 let (is_oneshot, effective_iend) = analyze_sample_tail(
                     sample_mem,
                     i_offset,
@@ -2857,6 +2969,25 @@ fn process_sample_subblock(
                 // 1a. One-Shot & Pseudo-One-Shot End-De-Clicking:
                 //     Blendet das tatsächliche Signal bereits vor `effective_iend` sanft ab und
                 //     schneidet End-Garbage, Zero-Padding-Klippen sowie Guard-Byte-Drops ab.
+                let needs_seam_guard = if is_looping && lln >= 8 {
+                    let ls_idx = iend.wrapping_add(1).wrapping_sub(lln).max(0);
+                    let s_end = read_sample_norm_i32(sample_mem, iend, is_16bit);
+                    let s_m1 = read_sample_norm_i32(sample_mem, iend.saturating_sub(1), is_16bit);
+                    let s_ls = read_sample_norm_i32(sample_mem, ls_idx, is_16bit);
+                    let seam_jump = (s_end - s_ls).abs().max((s_m1 - s_ls).abs());
+                    let end_spike = if lln >= 48 {
+                        let s_m4 = read_sample_norm_i32(sample_mem, iend - 4, is_16bit);
+                        let s_m3 = read_sample_norm_i32(sample_mem, iend - 3, is_16bit);
+                        let s_m2 = read_sample_norm_i32(sample_mem, iend - 2, is_16bit);
+                        (s_m2 - s_m3).abs() > 8192 || (s_m3 - s_m4).abs() > 8192
+                    } else {
+                        false
+                    };
+                    seam_jump > 2048 || end_spike
+                } else {
+                    false
+                };
+
                 if is_oneshot {
                     let end_fp = ((effective_iend as i64) << 16) | 0xFFFF;
                     let pre_n = ramp_frames.max(8) as i64;
@@ -2913,8 +3044,8 @@ fn process_sample_subblock(
                             chn.note = 0;
                         }
                     }
-                } else if is_looping && lln >= 8 {
-                    // 1b. Loop-Seam Guard-Byte Hold:
+                } else if needs_seam_guard {
+                    // 1b. Loop-Seam Guard-Byte Hold (nur bei echter Naht-Diskontinuität!):
                     //     Verhindert, dass Linear-IDO und Cubic-Spline auf den letzten 1–2 Samples
                     //     vor `iend` bereits innerhalb eines einzigen Quell-Samples in die Guard-Bytes
                     //     (`sample[loop_start]`) abtauchen, bevor die Loop-Rampe in Schritt 3 greift.
@@ -2968,7 +3099,7 @@ fn process_sample_subblock(
                 };
 
                 // 3. Mid-Tick Loop-Seam De-Clicking + Rampen-Anwendung:
-                let loop_out_frames = if is_looping {
+                let loop_out_frames = if needs_seam_guard {
                     (((lln as u64) << 16) / pitch_fp) as usize
                 } else {
                     0
@@ -3107,6 +3238,17 @@ pub fn apply_post_filters(
     mem: &mut DacMixMemory,
     buf_samples: usize,
 ) {
+    apply_post_filters_with_hint(state, mem, buf_samples, false);
+}
+
+/// Wie [`apply_post_filters`], erlaubt jedoch zusätzlich einen externen Hinweis `extra_8bit_active`
+/// (z. B. aus aktiven 8-Bit-Voices der [`ItEngine`](crate::engine::it_engine::ItEngine)).
+pub fn apply_post_filters_with_hint(
+    state: &EngineState,
+    mem: &mut DacMixMemory,
+    buf_samples: usize,
+    extra_8bit_active: bool,
+) {
     if mem.peak_search || buf_samples == 0 {
         return;
     }
@@ -3123,22 +3265,29 @@ pub fn apply_post_filters(
         return;
     }
 
-    let sr = (state.sound_settings.samplerate.max(8000)) as f64;
+    let sr_i32 = state.sound_settings.samplerate.max(8000);
+    let sr = sr_i32 as f64;
     let nyq_limit = sr * 0.45;
     let limit = buf_samples.min(mem.mix_buffer.len());
 
     // 1. Moderner adaptiver 5-Band-Wiener-/Spektral-Denoiser (`DeHiss`)
     if use_dehiss {
+        if mem.dehiss_filter.last_sr != 0 && mem.dehiss_filter.last_sr != sr_i32 {
+            mem.dehiss_filter = AdaptiveDeHissState::default();
+        }
         let dh = &mut mem.dehiss_filter;
         dh.active = true;
+        dh.last_sr = sr_i32;
 
         // Prüfe, ob aktuell 8-Bit-Kanäle aktiv sind (höheres Quantisierungs-Grundrauschen)
         let num_tracks = (state.mi.num_tracks as usize).min(state.channels.len());
-        let mut has_8bit_active = false;
-        for ch in &state.channels[..num_tracks] {
-            if ch.note != 0 && ch.avg_vol > 0 && (ch.jmp_flags & mixer_flags::F_16BIT) == 0 {
-                has_8bit_active = true;
-                break;
+        let mut has_8bit_active = extra_8bit_active;
+        if !has_8bit_active {
+            for ch in &state.channels[..num_tracks] {
+                if ch.note != 0 && ch.avg_vol > 0 && (ch.jmp_flags & mixer_flags::F_16BIT) == 0 {
+                    has_8bit_active = true;
+                    break;
+                }
             }
         }
 
@@ -3148,7 +3297,9 @@ pub fn apply_post_filters(
         // gilt nach Dreiecksungleichung exakt `|H(jw)| <= 1.0000` (0.00 dB Peaking) für alle Frequenzen!
         const XOVER_HZ: [f64; 4] = [2800.0, 4400.0, 7000.0, 10800.0];
         let mut g_rc = [0.0f64; 4];
+        let mut band_active = [false; 4];
         for i in 0..4 {
+            band_active[i] = XOVER_HZ[i] < nyq_limit;
             let f_clamped = XOVER_HZ[i].min(nyq_limit);
             let wd = (std::f64::consts::PI * f_clamped / sr).tan();
             g_rc[i] = wd / (1.0 + wd);
@@ -3282,6 +3433,9 @@ pub fn apply_post_filters(
                 dh.transient_hold = 1.0;
             } else {
                 dh.transient_hold *= trans_decay;
+                if dh.transient_hold < 1.0e-12 {
+                    dh.transient_hold = 0.0;
+                }
             }
 
             // Signal-abhängiges 8-Bit-Quantisierungsrauschen + sanfte Wiener-Filterung pro Hochtonband
@@ -3290,21 +3444,27 @@ pub fn apply_post_filters(
             let mut prev_g = 1.0f64;
 
             for b in 0..4 {
-                let n_quant = dh.env_low * QUANT_RATIOS[b] * quant_scale;
-                let n_est = dh.noise_floor[b].max(n_quant).max(ABS_FLOORS[b]);
-                let snr = dh.env_fast[b] / (n_est + 1.0);
-                let xi = (snr - OVER_SUB[b]).max(0.0);
-                let wiener = (xi * xi) / (xi * xi + 1.0);
-                let g_min = g_min_table[b];
-                let target_g = g_min + (1.0 - g_min) * wiener.max(dh.transient_hold);
-                let cg = if target_g > dh.smooth_gain[b] {
-                    gain_att
+                let eff_g = if band_active[b] {
+                    let n_quant = dh.env_low * QUANT_RATIOS[b] * quant_scale;
+                    let n_est = dh.noise_floor[b].max(n_quant).max(ABS_FLOORS[b]);
+                    let snr = dh.env_fast[b] / (n_est + 1.0);
+                    let xi = (snr - OVER_SUB[b]).max(0.0);
+                    let wiener = (xi * xi) / (xi * xi + 1.0);
+                    let g_min = g_min_table[b];
+                    let target_g = g_min + (1.0 - g_min) * wiener.max(dh.transient_hold);
+                    let cg = if target_g > dh.smooth_gain[b] {
+                        gain_att
+                    } else {
+                        gain_rel
+                    };
+                    dh.smooth_gain[b] += cg * (target_g - dh.smooth_gain[b]);
+                    // Monotone Abel-Summations-Bedingung (`1.0 >= g0 >= g1 >= g2 >= g3`) garantiert `|H(jw)| <= 1.0`
+                    dh.smooth_gain[b].min(prev_g)
                 } else {
-                    gain_rel
+                    // Oberhalb von `nyq_limit` kollabierte Bänder neutral auf `prev_g` halten
+                    dh.smooth_gain[b] = prev_g;
+                    prev_g
                 };
-                dh.smooth_gain[b] += cg * (target_g - dh.smooth_gain[b]);
-                // Monotone Abel-Summations-Bedingung (`1.0 >= g0 >= g1 >= g2 >= g3`) garantiert `|H(jw)| <= 1.0`
-                let eff_g = dh.smooth_gain[b].min(prev_g);
                 prev_g = eff_g;
 
                 out_l += bands_l[b] * eff_g;
@@ -3335,10 +3495,17 @@ pub fn apply_post_filters(
             (0.48f64, 0.52f64)
         };
 
-        // Stufe 2: Sanfter 1-Pol Top-End-Filter bei 11.5 kHz nur gegen harte Ultraschall-Treppenstufen
-        let fc_top = 11500.0f64.min(nyq_limit);
-        let g_top_tan = (std::f64::consts::PI * fc_top / sr).tan();
-        let g_top = g_top_tan / (1.0 + g_top_tan);
+        // Stufe 2: Sanfter 1-Pol Top-End-Filter bei 11.5 kHz nur aktivieren, wenn `11.5 kHz` unter `nyq_limit` liegt
+        // (verhindert zusätzlichen 4.96/9.92-kHz-Tiefpass bei niedrigen Sampleraten wie 11025 oder 22050 Hz!).
+        let use_top_lpf = 11500.0 < nyq_limit;
+        let g_top = if use_top_lpf {
+            let g_top_tan = (std::f64::consts::PI * 11500.0 / sr).tan();
+            g_top_tan / (1.0 + g_top_tan)
+        } else {
+            af.svf_ic1_l = 0.0;
+            af.svf_ic1_r = 0.0;
+            0.0
+        };
 
         for frame in &mut mem.mix_buffer[..limit] {
             let xl = frame.left as f64;
@@ -3348,21 +3515,38 @@ pub fn apply_post_filters(
             let vl_rc = (xl - af.rc_l) * g_sh;
             let yl_rc = vl_rc + af.rc_l;
             af.rc_l = yl_rc + vl_rc;
+            if af.rc_l.abs() < 1.0e-15 {
+                af.rc_l = 0.0;
+            }
             let sh_l = dry_mix * xl + wet_mix * yl_rc;
 
             let vr_rc = (xr - af.rc_r) * g_sh;
             let yr_rc = vr_rc + af.rc_r;
             af.rc_r = yr_rc + vr_rc;
+            if af.rc_r.abs() < 1.0e-15 {
+                af.rc_r = 0.0;
+            }
             let sh_r = dry_mix * xr + wet_mix * yr_rc;
 
-            // Sanfte Abrundung der allerhöchsten Treppenstufen-Spitzen (> 11.5 kHz)
-            let vl_top = (sh_l - af.svf_ic1_l) * g_top;
-            let out_l = vl_top + af.svf_ic1_l;
-            af.svf_ic1_l = out_l + vl_top;
+            let (out_l, out_r) = if use_top_lpf {
+                // Sanfte Abrundung der allerhöchsten Treppenstufen-Spitzen (> 11.5 kHz)
+                let vl_top = (sh_l - af.svf_ic1_l) * g_top;
+                let ol = vl_top + af.svf_ic1_l;
+                af.svf_ic1_l = ol + vl_top;
+                if af.svf_ic1_l.abs() < 1.0e-15 {
+                    af.svf_ic1_l = 0.0;
+                }
 
-            let vr_top = (sh_r - af.svf_ic1_r) * g_top;
-            let out_r = vr_top + af.svf_ic1_r;
-            af.svf_ic1_r = out_r + vr_top;
+                let vr_top = (sh_r - af.svf_ic1_r) * g_top;
+                let or = vr_top + af.svf_ic1_r;
+                af.svf_ic1_r = or + vr_top;
+                if af.svf_ic1_r.abs() < 1.0e-15 {
+                    af.svf_ic1_r = 0.0;
+                }
+                (ol, or)
+            } else {
+                (sh_l, sh_r)
+            };
 
             frame.left = out_l.round().clamp(i32::MIN as f64, i32::MAX as f64) as i32;
             frame.right = out_r.round().clamp(i32::MIN as f64, i32::MAX as f64) as i32;
@@ -4457,6 +4641,42 @@ mod tests {
         assert_eq!(
             anomaly_count, 0,
             "ECHOMIX.S3M darf mit DC=ON keine Klick-Sprünge gegenüber DC=OFF erzeugen"
+        );
+    }
+
+    #[test]
+    fn test_post_filters_ami_and_dh_at_11025hz_preserve_midrange() {
+        let mut state = EngineState::default();
+        state.sound_settings.samplerate = 11025;
+        state.sound_settings.set_amiga_filter(true);
+        state.sound_settings.set_dehiss(true);
+
+        let mut mem = DacMixMemory::default();
+        // Erzeuge einen ~2.75 kHz Testton (Periode 4 Samples bei 11025 Hz):
+        // Vor dem Fix klemmte `fc_top` bei 11025 Hz fälschlich auf `0.45 * 11025 = 4961 Hz`
+        // und dämpfte selbst die obere Mitte unnötig ab; außerdem kollabierte das DH-Band über Nyquist.
+        let n = 512usize;
+        for i in 0..n {
+            let v: i32 = match i & 3 {
+                0 => 0,
+                1 => 16000 << 8,
+                2 => 0,
+                _ => -(16000 << 8),
+            };
+            mem.mix_buffer[i] = StereoSample32 { left: v, right: v };
+        }
+        apply_post_filters_with_hint(&state, &mut mem, n, true);
+
+        let mut peak_after_settling = 0i32;
+        for i in 128..n {
+            assert!(mem.mix_buffer[i].left.abs() < (32000 << 8));
+            peak_after_settling = peak_after_settling.max(mem.mix_buffer[i].left.abs());
+        }
+        // Bei 2.75 kHz darf die 4.9 kHz RC-Stufe 1 nur moderat bedämpfen (Peak deutlich > 50% erhalten)
+        assert!(
+            peak_after_settling > (9000 << 8),
+            "2.75 kHz Ton bei 11025 Hz zu stark bedämpft: peak={}",
+            peak_after_settling >> 8
         );
     }
 }

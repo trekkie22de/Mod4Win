@@ -274,10 +274,20 @@ pub fn load_instrument_into_sample_mem_with_top(
     play_mem_top: &mut usize,
     effective_limit: &mut usize,
 ) {
+    const MAX_CLASSIC_SAMPLE_MEM: usize = 256 * 1024 * 1024;
     let actual_len = (raw_bytes.len() as i32).min(*iend);
     *iend = actual_len;
-    if *iend <= 0 {
+    if *iend <= 0
+        || sample_mem
+            .len()
+            .saturating_add((*iend as usize).saturating_mul(2))
+            .saturating_add(2048)
+            > MAX_CLASSIC_SAMPLE_MEM
+    {
         *offset = 0;
+        *iend = 0;
+        *loop_start = 0;
+        *loop_end = 0;
         return;
     }
 

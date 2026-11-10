@@ -1259,8 +1259,15 @@ impl Mod4WinApp {
             st.ini_config.saved_shuffle = st.shuffle;
             st.ini_config.saved_intro_scan = st.intro_scan;
             st.ini_config.saved_minus_mode = st.minus_mode;
+            let manual_dh_override = st.is_16bit_xm_or_it_module()
+                && !st.dehiss_auto_disabled
+                && st.sound_settings.dehiss();
             st.set_skin_mode(new_skin);
             st.apply_ini_to_sound_settings();
+            if manual_dh_override {
+                st.dehiss_auto_disabled = false;
+                st.sound_settings.set_dehiss(true);
+            }
         };
         self.refresh_all_windows_for_skin();
     }
