@@ -725,6 +725,31 @@ mod linux_wine {
         name == "wine" || name.starts_with("wine32") || name.starts_with("wine64")
     }
 
+    fn is_readonly_wine_system_asset(path: &Path) -> bool {
+        let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+            return false;
+        };
+        matches!(
+            ext.to_ascii_lowercase().as_str(),
+            "dll"
+                | "exe"
+                | "exe16"
+                | "dll16"
+                | "drv"
+                | "drv16"
+                | "sys"
+                | "ocx"
+                | "cpl"
+                | "acm"
+                | "ax"
+                | "tlb"
+                | "nls"
+                | "ttf"
+                | "fon"
+                | "icm"
+        )
+    }
+
     fn copy_tree_preserving_symlinks(src: &Path, dst: &Path) -> std::io::Result<()> {
         fs::create_dir_all(dst)?;
         for entry in fs::read_dir(src)? {
@@ -740,7 +765,16 @@ mod linux_wine {
             } else if ft.is_dir() {
                 copy_tree_preserving_symlinks(&src_path, &dst_path)?;
             } else if ft.is_file() {
-                fs::copy(&src_path, &dst_path)?;
+                // Ein 32-Bit Wine-Prefix belegt ~587 MB an unveränderlichen System-DLLs/-EXEs.
+                // Per Hardlink auf /dev/shm teilen sich alle 16 Worker dieselben Inodes & Page-Cache-Seiten
+                // (~590 MB gesamt statt ~10 GB), während .reg- und .ini-Dateien pro Worker echt kopiert werden.
+                if is_readonly_wine_system_asset(&src_path) {
+                    if fs::hard_link(&src_path, &dst_path).is_err() {
+                        fs::copy(&src_path, &dst_path)?;
+                    }
+                } else {
+                    fs::copy(&src_path, &dst_path)?;
+                }
             }
         }
         Ok(())
@@ -1508,16 +1542,18 @@ pub fn run_batch_m4w_diff(opts: &BatchM4wDiffOptions) -> Result<(), Box<dyn std:
                         let mut idle_seconds: u64 = 0;
                         let mut abort_reason: Option<String> = None;
 
-                        loop {
-                            match child.try_wait() {
-                                Ok(Some(_status)) => break,
-                                Ok(None) => {}
-                                Err(_) => break,
+                        'watch: loop {
+                            if !matches!(child.try_wait(), Ok(None)) {
+                                break 'watch;
                             }
 
-                            std::thread::sleep(Duration::from_secs(1));
-                            if let Ok(Some(_)) = child.try_wait() {
-                                break;
+                            // 50-ms Fast-Exit-Polling (spart bis zu ~950 ms Leerlauf pro IDO-Lauf),
+                            // während der CPU-/WAV-Watchdog weiterhin exakt im 1,0-s-Takt prüft.
+                            for _ in 0..20 {
+                                std::thread::sleep(Duration::from_millis(50));
+                                if !matches!(child.try_wait(), Ok(None)) {
+                                    break 'watch;
+                                }
                             }
 
                             let elapsed_sec = timer.elapsed().as_secs_f64();
