@@ -441,7 +441,10 @@ pub fn parse_zip_entries(data: &[u8]) -> Vec<ZipEntryInfo> {
 
         let mut pos = cd_offset;
         for _ in 0..total_entries {
-            if pos + 46 > data.len() || &data[pos..pos + 4] != b"PK\x01\x02" {
+            let Some(hdr_end) = pos.checked_add(46) else {
+                break;
+            };
+            if hdr_end > data.len() || &data[pos..pos + 4] != b"PK\x01\x02" {
                 break;
             }
             let method = u16::from_le_bytes([data[pos + 10], data[pos + 11]]);
@@ -467,8 +470,8 @@ pub fn parse_zip_entries(data: &[u8]) -> Vec<ZipEntryInfo> {
                 data[pos + 45],
             ]) as usize;
 
-            let name_start = pos + 46;
-            let name_end = (name_start + name_len).min(data.len());
+            let name_start = hdr_end;
+            let name_end = name_start.saturating_add(name_len).min(data.len());
             let raw_name = String::from_utf8_lossy(&data[name_start..name_end])
                 .replace('/', "\\");
 
@@ -488,7 +491,14 @@ pub fn parse_zip_entries(data: &[u8]) -> Vec<ZipEntryInfo> {
                 }
             }
 
-            pos = name_start + name_len + extra_len + comment_len;
+            let Some(next_pos) = name_start
+                .checked_add(name_len)
+                .and_then(|v| v.checked_add(extra_len))
+                .and_then(|v| v.checked_add(comment_len))
+            else {
+                break;
+            };
+            pos = next_pos;
         }
     }
     entries
@@ -569,7 +579,11 @@ pub fn parse_arj_entries(data: &[u8]) -> Vec<ZipEntryInfo> {
             // Flag 0x01 = GARBLED (verschlüsselt) ignorieren wir, unverschlüsselte Dateien übernehmen wir
             if (arj_flags & 0x01) == 0 && !raw_name.is_empty() {
                 let (full_name, dir_part, file_name) = split_archive_path(&raw_name);
-                if !file_name.is_empty() && payload_offset + comp_size <= data.len() {
+                if !file_name.is_empty()
+                    && payload_offset
+                        .checked_add(comp_size)
+                        .is_some_and(|end| end <= data.len())
+                {
                     entries.push(ZipEntryInfo {
                         format: ArchiveFormat::Arj,
                         full_name,
@@ -653,12 +667,18 @@ pub fn parse_lha_entries(data: &[u8]) -> Vec<ZipEntryInfo> {
         let (raw_path, payload_offset, comp_size, next_pos) = match header_level {
             0 => {
                 let hdr_size = data[pos] as usize;
-                let payload_off = pos + hdr_size + 2;
-                if pos + 22 > data.len() || payload_off > data.len() {
+                let Some(payload_off) = pos.checked_add(hdr_size).and_then(|v| v.checked_add(2))
+                else {
+                    break;
+                };
+                if payload_off < pos.saturating_add(24) || payload_off > data.len() {
                     break;
                 }
                 let name_len = data[pos + 21] as usize;
-                let name_end = (pos + 22 + name_len).min(payload_off);
+                let name_end = pos
+                    .saturating_add(22)
+                    .saturating_add(name_len)
+                    .min(payload_off);
                 let mapped: Vec<u8> = data[pos + 22..name_end]
                     .iter()
                     .take_while(|&&b| b != 0)
@@ -672,12 +692,18 @@ pub fn parse_lha_entries(data: &[u8]) -> Vec<ZipEntryInfo> {
             }
             1 => {
                 let hdr_size = data[pos] as usize;
-                let base_end = pos + hdr_size + 2;
-                if pos + 22 > data.len() || base_end > data.len() {
+                let Some(base_end) = pos.checked_add(hdr_size).and_then(|v| v.checked_add(2))
+                else {
+                    break;
+                };
+                if base_end < pos.saturating_add(27) || base_end > data.len() {
                     break;
                 }
                 let name_len = data[pos + 21] as usize;
-                let name_end = (pos + 22 + name_len).min(base_end.saturating_sub(2));
+                let name_end = pos
+                    .saturating_add(22)
+                    .saturating_add(name_len)
+                    .min(base_end.saturating_sub(2));
                 let mapped: Vec<u8> = data[pos + 22..name_end]
                     .iter()
                     .take_while(|&&b| b != 0)
@@ -788,7 +814,12 @@ pub fn parse_lha_entries(data: &[u8]) -> Vec<ZipEntryInfo> {
             _ => break,
         };
 
-        if method_code != 0xFF && !raw_path.is_empty() && payload_offset + comp_size <= data.len() {
+        if method_code != 0xFF
+            && !raw_path.is_empty()
+            && payload_offset
+                .checked_add(comp_size)
+                .is_some_and(|end| end <= data.len())
+        {
             let (full_name, dir_part, file_name) = split_archive_path(&raw_path);
             if !file_name.is_empty() {
                 entries.push(ZipEntryInfo {
@@ -823,12 +854,13 @@ pub fn extract_zip_entry_bytes(data: &[u8], entry: &ZipEntryInfo) -> Option<Vec<
     match entry.format {
         ArchiveFormat::Zip => {
             let lho = entry.local_header_offset;
-            if lho + 30 > data.len() || &data[lho..lho + 4] != b"PK\x03\x04" {
+            let lho_end = lho.checked_add(30)?;
+            if lho_end > data.len() || &data[lho..lho + 4] != b"PK\x03\x04" {
                 return None;
             }
             let name_len = u16::from_le_bytes([data[lho + 26], data[lho + 27]]) as usize;
             let extra_len = u16::from_le_bytes([data[lho + 28], data[lho + 29]]) as usize;
-            let payload_start = lho + 30 + name_len + extra_len;
+            let payload_start = lho_end.checked_add(name_len)?.checked_add(extra_len)?;
             let payload_end = payload_start.checked_add(entry.compressed_size)?;
             if payload_end > data.len() {
                 return None;
@@ -1850,6 +1882,7 @@ pub fn list_available_drives() -> Vec<char> {
 }
 
 /// Prüft case-insensitiv, ob ein Dateiname `name` auf eine DOS-Wildcard-Maske `mask` (z.B. `*.*`, `*.XM`, `MOD*.*`) passt.
+/// Iterative Zwei-Zeiger-Implementierung (O(N * M) Worst-Case statt exponentiellem Backtracking bei mehreren `*`).
 pub fn matches_wildcard(name: &str, mask: &str) -> bool {
     let m = mask.trim();
     if m.is_empty() || m == "*" || m == "*.*" {
@@ -1858,25 +1891,31 @@ pub fn matches_wildcard(name: &str, mask: &str) -> bool {
     let s_chars: Vec<char> = name.to_ascii_uppercase().chars().collect();
     let p_chars: Vec<char> = m.to_ascii_uppercase().chars().collect();
 
-    fn match_slice(s: &[char], p: &[char]) -> bool {
-        if p.is_empty() {
-            return s.is_empty();
-        }
-        if p[0] == '*' {
-            for i in 0..=s.len() {
-                if match_slice(&s[i..], &p[1..]) {
-                    return true;
-                }
-            }
-            false
-        } else if p[0] == '?' {
-            !s.is_empty() && match_slice(&s[1..], &p[1..])
+    let mut si = 0usize;
+    let mut pi = 0usize;
+    let mut star_pi: Option<usize> = None;
+    let mut star_si = 0usize;
+
+    while si < s_chars.len() {
+        if pi < p_chars.len() && (p_chars[pi] == '?' || p_chars[pi] == s_chars[si]) {
+            si += 1;
+            pi += 1;
+        } else if pi < p_chars.len() && p_chars[pi] == '*' {
+            star_pi = Some(pi);
+            pi += 1;
+            star_si = si;
+        } else if let Some(sp) = star_pi {
+            pi = sp + 1;
+            star_si += 1;
+            si = star_si;
         } else {
-            !s.is_empty() && s[0] == p[0] && match_slice(&s[1..], &p[1..])
+            return false;
         }
     }
-
-    match_slice(&s_chars, &p_chars)
+    while pi < p_chars.len() && p_chars[pi] == '*' {
+        pi += 1;
+    }
+    pi == p_chars.len()
 }
 
 #[cfg(test)]

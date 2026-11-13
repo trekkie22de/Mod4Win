@@ -242,7 +242,12 @@ pub fn compute_raw_cpu_load_ratio(
     let bits_mult = if settings.bits == 16 { 1.15 } else { 1.0 };
     let pan_mult = if settings.panning { 1.8 } else { 1.0 };
 
-    let oversamp = settings.oversamp.min(3);
+    let oversamp = match settings.oversamp {
+        4 => 0, // IT Native Non-Interpolated
+        5 => 1, // IT Native Linear
+        6 => 2, // IT Native Cubic
+        v => v.min(3),
+    };
     let (ido_mult, uses_fpu) = match oversamp {
         0 => (1.0, false),
         1 => (2.2, false),

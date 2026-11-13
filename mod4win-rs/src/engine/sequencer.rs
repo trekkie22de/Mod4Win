@@ -80,6 +80,8 @@ impl Sequencer {
             only_one_pattern: false,
             it_engine,
         };
+        seq.module.state.mi.num_patterns =
+            seq.module.state.mi.num_patterns.min(MAX_PATTERNS as u16);
         seq.module.state.sound_settings = settings;
         seq.get_total_time();
         seq.kanal_init(false);
@@ -100,6 +102,8 @@ impl Sequencer {
             crate::engine::it_engine::ItEngine::calc_total_time(it_mod, &mut self.module.state);
             return;
         }
+        self.module.state.mi.num_patterns =
+            self.module.state.mi.num_patterns.min(MAX_PATTERNS as u16);
         let num_patterns = self.module.state.mi.num_patterns;
         let num_tracks = (self.module.state.mi.num_tracks as usize).min(MAX_M4W_CHANNELS);
         if num_patterns == 0 || num_tracks == 0 {
@@ -218,10 +222,17 @@ impl Sequencer {
                             }
                         }
 
-                        let cx_ticks = ((self.module.state.patterndelay as u16) + 1)
-                            * (self.module.state.speed as u16);
-                        for _ in 0..cx_ticks {
-                            self.inc_time();
+                        let cx_ticks = ((self.module.state.patterndelay as u64) + 1)
+                            * (self.module.state.speed as u64);
+                        if cx_ticks > 0 {
+                            let state = &mut self.module.state;
+                            let ts_lo = ((state.time_step as u32) & 0xFFFF) as u64;
+                            let ts_hi = ((state.time_step as u32) >> 16) as u64;
+                            let total_lo = (state.time_step_rest as u64) + cx_ticks * ts_lo;
+                            state.time_step_rest = (total_lo & 0xFFFF) as u16;
+                            let delta = cx_ticks.wrapping_mul(ts_hi).wrapping_add(total_lo >> 16);
+                            state.play_time = state.play_time.wrapping_add(delta as i32);
+                            state.mi.curr_time = state.play_time;
                         }
                         self.module.state.patterndelay = 0;
 
@@ -305,8 +316,10 @@ impl Sequencer {
                             && bitset_contains(&self.module.state.row_played[jt_idx], breakto)
                             && self.module.state.mi.loop_from == -1
                         {
-                            self.module.state.mi.loop_from = (i as i16) + 1;
-                            self.module.state.mi.loop_to = (jumpto as i16) + 1;
+                            self.module.state.mi.loop_from =
+                                (i.min(i16::MAX as usize) as i16).saturating_add(1);
+                            self.module.state.mi.loop_to =
+                                (jumpto.min(i16::MAX as usize) as i16).saturating_add(1);
                             loop_from_time = self.module.state.play_time;
                         }
                         i = jumpto;
@@ -444,6 +457,11 @@ impl Sequencer {
         }
 
         // Surround-Ringpuffer leeren und Start/End-Zeiger setzen (play.inc Zeilen 2183–2189)
+        // BIT-EXACTNESS INVARIANT (99.97% PLAYER32.DLL Parity — DO NOT "FIX"):
+        // `play.inc` line 2189 sets `BufStart := 8 * Samplerate DIV 1000 * SurrLen` WITHOUT
+        // masking `& !7` (`AND $FFF8`), whereas `dacmix.pas` later advances `BufStart` in steps
+        // of 8 bytes. Preserving the unaligned initial byte offset is required for exact
+        // ProLogic surround ring-buffer delay phase parity!
         self.mix_mem.surr_ring.fill(Default::default());
         self.mix_mem.reset_declick();
         state.buf_end = 0;
@@ -611,9 +629,12 @@ impl Sequencer {
         state.time_step = ((hi_div << 16) | (lo_div & 0xFFFF)) as i32;
 
         // NumSamples := (samplerate * 2 + (samplerate >> 1)) DIV BPMSpeed
-        // Wichtig: In effects.inc (Zeile 767) wird NumSamples NICHT auf MaxMixBufSamples (2000)
-        // geclampt! Das Clamping für die Mischschleife erfolgt erst in ProcessSampleBlock
-        // (dacmix.pas Zeile 371), während @SlideOut (Zeile 2461) durch das ungeclampte NumSamples teilt.
+        // BIT-EXACTNESS INVARIANT (99.97% PLAYER32.DLL Parity — DO NOT "FIX"):
+        // In `effects.inc` (line 767) `NumSamples` is NOT clamped to `MaxMixBufSamples` (2000)!
+        // The 2000-sample cap only happens inside `ProcessSampleBlock` (`dacmix.pas` line 371),
+        // while `@SlideOut` (`dacmix.pas` line 2461) divides volume ramps by the UNCLAMPED
+        // `NumSamples`, and `PLAYER32.DLL` caps engine sample rates at 48000 Hz (rates > 48 kHz
+        // are handled via the outer linear output resampler in `live_audio.rs`).
         let sr = (state.sound_settings.samplerate.max(1)) as u32;
         let eax = (sr << 1) + (sr >> 1);
         let num_samples = (eax / (cx as u32)) as u16;
@@ -933,7 +954,12 @@ impl Sequencer {
     /// (`InitEnvelope` in `legacy_src/PLAYER/play.inc` Zeilen 342–379).
     pub fn init_envelope(&mut self, ch_idx: usize, inst_num: u8) {
         let inst_idx = (inst_num as usize).min(self.module.ft2_instruments.len().saturating_sub(1));
-        let ft2_inst = self.module.ft2_instruments[inst_idx];
+        let ft2_inst = self
+            .module
+            .ft2_instruments
+            .get(inst_idx)
+            .copied()
+            .unwrap_or_default();
         let chn = &mut self.module.state.channels[ch_idx];
 
         // Volume Envelope
@@ -1020,7 +1046,12 @@ impl Sequencer {
         if is_ft2 {
             let inst_idx =
                 (nxt_inst as usize).min(self.module.ft2_instruments.len().saturating_sub(1));
-            let ft2_inst = self.module.ft2_instruments[inst_idx];
+            let ft2_inst = self
+                .module
+                .ft2_instruments
+                .get(inst_idx)
+                .copied()
+                .unwrap_or_default();
             if ft2_inst.num_samples > 0 {
                 // In Pascal: SampleNos: ARRAY[1..96] OF Byte -> SampleNos[NewTon] ist 1-basiert!
                 let note_idx = (new_ton.saturating_sub(1) as usize).min(95);
@@ -1036,7 +1067,12 @@ impl Sequencer {
             if nxt_inst != 0 {
                 let smp_idx = (self.module.state.channels[ch_idx].smp_num as usize)
                     .min(self.module.ft2_samples.len().saturating_sub(1));
-                let smp_hdr = self.module.ft2_samples[smp_idx].hdr;
+                let smp_hdr = self
+                    .module
+                    .ft2_samples
+                    .get(smp_idx)
+                    .map(|s| s.hdr)
+                    .unwrap_or_default();
                 if pat_inst != 0 {
                     let chn = &mut self.module.state.channels[ch_idx];
                     chn.pan_val = smp_hdr.panning;
@@ -1064,7 +1100,12 @@ impl Sequencer {
             if is_ft2 {
                 let smp_idx =
                     (smp_num as usize).min(self.module.ft2_samples.len().saturating_sub(1));
-                let ft2_smp = self.module.ft2_samples[smp_idx];
+                let ft2_smp = self
+                    .module
+                    .ft2_samples
+                    .get(smp_idx)
+                    .copied()
+                    .unwrap_or_default();
                 chn.note = ft2_smp.samp_offset;
                 chn.iend = ft2_smp.hdr.samplelen;
                 chn.lend = ft2_smp.hdr.loopend;
@@ -1877,6 +1918,10 @@ impl Sequencer {
             let t1 = env_pts[n_idx].tick as i32;
             let v0 = env_pts[p_idx].value as i32;
             let v1 = env_pts[n_idx].value as i32;
+            // BIT-EXACTNESS INVARIANT (99.97% PLAYER32.DLL Parity — DO NOT "FIX"):
+            // `play.inc` lines 115–132 (`SetEnvPos` for XM `Lxx`) interpolate linearly between
+            // `env_pts[pos - 1]` and `env_pts[pos]` when `t1 > t0`, and use `v0` otherwise,
+            // with `0..64` FT2 envelope point range. Keep `SetEnvPos` exact to `play.inc`.
             if t1 > t0 {
                 let val = (((tck as i32) - t0) * (v1 - v0)) / (t1 - t0) + v0;
                 *new_val = val.clamp(0, 64) as u8;
@@ -2523,7 +2568,12 @@ impl Sequencer {
             effect_ids::SET_ENVELOPE_POS => {
                 let inst_idx = (self.module.state.channels[ch_idx].inst as usize)
                     .min(self.module.ft2_instruments.len().saturating_sub(1));
-                let ft2_inst = self.module.ft2_instruments[inst_idx];
+                let ft2_inst = self
+                    .module
+                    .ft2_instruments
+                    .get(inst_idx)
+                    .copied()
+                    .unwrap_or_default();
                 let chn = &mut self.module.state.channels[ch_idx];
                 let mut env_vol = chn.env_vol;
                 let mut env_vol_pos = chn.env_vol_pos;
@@ -3429,7 +3479,12 @@ impl Sequencer {
             } else {
                 let smp_num = (self.module.state.channels[ch_idx].smp_num as usize)
                     .min(self.module.ft2_samples.len().saturating_sub(1));
-                let smp_hdr = self.module.ft2_samples[smp_num].hdr;
+                let smp_hdr = self
+                    .module
+                    .ft2_samples
+                    .get(smp_num)
+                    .map(|s| s.hdr)
+                    .unwrap_or_default();
                 self.module.state.channels[ch_idx].pan_val = smp_hdr.panning;
                 self.module.state.channels[ch_idx].vol = smp_hdr.volume;
                 self.init_envelope(ch_idx, note.instrument);
@@ -4029,10 +4084,11 @@ impl Sequencer {
         if self.module.state.mi.file_type != ModType::S3M {
             return;
         }
-        let num_patterns = self.module.state.mi.num_patterns.max(1);
+        let num_patterns = self.module.state.mi.num_patterns.min(MAX_PATTERNS as u16).max(1);
         let mut guard = 0usize;
         while self.module.state.curr_pattern < num_patterns && guard < MAX_PATTERNS {
-            let ord = self.module.state.p_arrangement[self.module.state.curr_pattern as usize];
+            let ord = self.module.state.p_arrangement
+                [(self.module.state.curr_pattern as usize).min(MAX_PATTERNS - 1)];
             match ord {
                 0xFE => {
                     self.module.state.curr_pattern =
@@ -4040,6 +4096,11 @@ impl Sequencer {
                     guard += 1;
                 }
                 0xFF => {
+                    // BIT-EXACTNESS INVARIANT (99.97% PLAYER32.DLL Parity — DO NOT "FIX"):
+                    // `play.inc` lines 1370–1373 set `CurrPattern := MI.NumPatterns` on S3M `0xFF`
+                    // WITHOUT immediately re-wrapping inside `finish_pattern_transition` when
+                    // reached via `Bxx` PositionJump (only `advance_to_next_pattern` calls
+                    // `reset_song_on_end_wrap` right after `skip_s3m_order_markers`).
                     self.module.state.curr_pattern = num_patterns;
                     break;
                 }
@@ -4306,9 +4367,17 @@ impl Sequencer {
     /// (`search_time` mit `SearchPattern = True`, `SearchP`, `SearchL` in `PLAYER32.PAS` Zeilen 719–1025,
     /// u. a. beim Umschalten von `NoBPM` während der Wiedergabe).
     pub fn seek_to_order_and_row(&mut self, target_order: u16, target_row: u16) {
-        let max_order = self.module.state.mi.num_patterns.saturating_sub(1);
+        let max_order = self
+            .module
+            .state
+            .mi
+            .num_patterns
+            .min(MAX_PATTERNS as u16)
+            .saturating_sub(1);
         let clamped_order = target_order.min(max_order);
         let repeat_song = self.module.state.repeat_song;
+        let saved_only_one_pattern = self.only_one_pattern;
+        self.only_one_pattern = false;
 
         self.kanal_init(false);
         self.module.state.repeat_song = repeat_song;
@@ -4331,6 +4400,7 @@ impl Sequencer {
             self.pending_pcm.clear();
             self.pending_read_idx = 0;
             self.tick_prepared = false;
+            self.only_one_pattern = saved_only_one_pattern;
             return;
         }
 
@@ -4368,12 +4438,14 @@ impl Sequencer {
                     self.module.state.curr_vblanc = 0;
                     self.module.state.break_to = 0;
                     self.finish_pattern_transition();
+                    let co_idx = (clamped_order as usize).min(MAX_PATTERNS - 1);
                     self.module.state.curr_note =
-                        target_row.min(self.module.state.ptrn_breaks[clamped_order as usize] as u16);
+                        target_row.min(self.module.state.ptrn_breaks[co_idx] as u16);
                     break;
                 }
             }
         }
+        self.only_one_pattern = saved_only_one_pattern;
 
         // Gespielte Zeilen-Historie für alle Orders VOR `clamped_order` beibehalten
         // (wie in `search_time` in `PLAYER32.PAS` Zeilen 752–807), damit ein späterer
@@ -4440,7 +4512,10 @@ impl Sequencer {
                     target -= 1;
                 }
             } else if self.module.state.mi.file_type == ModType::S3M {
-                while target > 0 && self.module.state.p_arrangement[target as usize] >= 0xFE {
+                while target > 0
+                    && self.module.state.p_arrangement[(target as usize).min(MAX_PATTERNS - 1)]
+                        >= 0xFE
+                {
                     target -= 1;
                 }
             }
@@ -4502,6 +4577,7 @@ impl Sequencer {
 
         let orig_settings = self.module.state.sound_settings;
         let orig_repeat_song = self.module.state.repeat_song;
+        let orig_only_one_pattern = self.only_one_pattern;
 
         // PLAYER32.PAS Zeilen 586–599:
         // SoundSettings.PreAmp := $80 + 40; PeakSearch := True;
@@ -4510,6 +4586,7 @@ impl Sequencer {
         self.module.state.sound_settings.bits = 16;
         self.module.state.sound_settings.pre_amp = 0x80 + 40;
         self.module.state.repeat_song = false;
+        self.only_one_pattern = false;
         self.kanal_init(false);
         self.mix_mem.peak_search = true;
 
@@ -4575,6 +4652,7 @@ impl Sequencer {
         self.module.state.sound_settings.pre_amp = found_pre_amp;
         self.kanal_init(false);
         self.module.state.repeat_song = orig_repeat_song;
+        self.only_one_pattern = orig_only_one_pattern;
 
         found_pre_amp
     }
@@ -4589,6 +4667,7 @@ impl Sequencer {
             0x80 + 40
         };
         self.module.state.repeat_song = false;
+        self.only_one_pattern = false;
         self.kanal_init(false);
         self.mix_mem.peak_search = true;
     }

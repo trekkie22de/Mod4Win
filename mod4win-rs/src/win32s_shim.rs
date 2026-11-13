@@ -67,6 +67,8 @@ mod x86_retro_impl {
         fn GetLastError() -> DWORD;
         fn SetLastError(dw_err_code: DWORD);
         fn GetTickCount() -> DWORD;
+        fn GetSystemTime(lp_system_time: *mut SystemTime);
+        fn SystemTimeToFileTime(lp_system_time: *const SystemTime, lp_file_time: *mut FileTime) -> BOOL;
         fn Sleep(dw_milliseconds: DWORD);
         fn GetCurrentProcessId() -> DWORD;
         fn GetCurrentThreadId() -> DWORD;
@@ -165,6 +167,11 @@ mod x86_retro_impl {
             lp_caption: *const u8,
             u_type: u32,
         ) -> i32;
+    }
+
+    #[link(name = "winmm")]
+    unsafe extern "system" {
+        fn timeGetTime() -> DWORD;
     }
 
     pub fn show_retro_panic_and_exit(msg: &str) -> ! {
@@ -1097,7 +1104,6 @@ mod x86_retro_impl {
         dst: *mut u64,
         expected: *mut u64,
         desired: u64,
-        _weak: bool,
         _success_order: i32,
         _failure_order: i32,
     ) -> bool {
@@ -1185,6 +1191,19 @@ mod x86_retro_impl {
     pub struct FileTime {
         pub dw_low_date_time: DWORD,
         pub dw_high_date_time: DWORD,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy, Default)]
+    struct SystemTime {
+        w_year: WORD,
+        w_month: WORD,
+        w_day_of_week: WORD,
+        w_day: WORD,
+        w_hour: WORD,
+        w_minute: WORD,
+        w_second: WORD,
+        w_milliseconds: WORD,
     }
 
     #[repr(C)]
@@ -1407,14 +1426,18 @@ mod x86_retro_impl {
                 && *wptr.add(3) == b'\\' as u16
             {
                 let u0 = *wptr.add(4);
-                let u1 = *wptr.add(5);
-                let u2 = *wptr.add(6);
-                let u3 = *wptr.add(7);
-                if (u0 == b'U' as u16 || u0 == b'u' as u16)
-                    && (u1 == b'N' as u16 || u1 == b'n' as u16)
-                    && (u2 == b'C' as u16 || u2 == b'c' as u16)
-                    && u3 == b'\\' as u16
-                {
+                let is_unc = if u0 == b'U' as u16 || u0 == b'u' as u16 {
+                    let u1 = *wptr.add(5);
+                    if u1 == b'N' as u16 || u1 == b'n' as u16 {
+                        let u2 = *wptr.add(6);
+                        (u2 == b'C' as u16 || u2 == b'c' as u16) && *wptr.add(7) == b'\\' as u16
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+                if is_unc {
                     // "\\?\UNC\server\share" -> "\\server\share" (`wptr.add(7)` beginnt mit `\server\share`)
                     prepend_backslash = true;
                     wptr = wptr.add(7);
@@ -1737,19 +1760,37 @@ mod x86_retro_impl {
         lp_file_information: *const c_void,
         _dw_buffer_size: DWORD,
     ) -> BOOL {
-        // FileAllocationInfo (5) ist ein reiner Pre-Allocation-Hint -> ohne Dateizeiger-Änderung bestätigen
-        if file_information_class == 5 {
-            return 1;
+        if lp_file_information.is_null() {
+            unsafe { SetLastError(ERROR_CALL_NOT_IMPLEMENTED) };
+            return 0;
         }
-        // FileEndOfFileInfo (6) -> Dateilänge via SetFilePointer + SetEndOfFile anpassen und
-        // ursprünglichen Dateizeiger wiederherstellen (`File::set_len`-Vertrag!).
-        if file_information_class == 6 && !lp_file_information.is_null() {
+        // FileAllocationInfo (5) wird von Rust `OpenOptions::truncate(true)` mit `pos = 0` aufgerufen,
+        // um eine bestehende Datei beim Öffnen (`OPEN_ALWAYS`) auf 0 Bytes zu kürzen!
+        // Nur wenn `pos` größer als die aktuelle Dateigröße ist (reiner Pre-Allocation-Hint), nichts kürzen.
+        if file_information_class == 5 || file_information_class == 6 {
             unsafe {
+                let pos = *(lp_file_information as *const i64);
+                if pos < 0 {
+                    return 0;
+                }
+                if file_information_class == 5 && pos > 0 {
+                    let mut cur_hi: DWORD = 0;
+                    let cur_lo = GetFileSize(h_file, &mut cur_hi);
+                    if !(cur_lo == 0xFFFF_FFFF && GetLastError() != 0) {
+                        let cur_sz = ((cur_hi as i64) << 32) | (cur_lo as u64 as i64);
+                        if pos >= cur_sz {
+                            return 1;
+                        }
+                    } else {
+                        return 1;
+                    }
+                }
+
                 let mut orig_high: LONG = 0;
                 let orig_low = SetFilePointer(h_file, 0, &mut orig_high, 1); // FILE_CURRENT
                 let has_orig = !(orig_low == 0xFFFF_FFFF && GetLastError() != 0);
+                let orig_pos = ((orig_high as i64) << 32) | (orig_low as u64 as i64);
 
-                let pos = *(lp_file_information as *const i64);
                 let low = (pos & 0xFFFF_FFFF) as i32;
                 let mut high = (pos >> 32) as i32;
                 let seek_res = SetFilePointer(h_file, low, &mut high, 0); // FILE_BEGIN
@@ -1758,12 +1799,16 @@ mod x86_retro_impl {
                 }
                 let ok = SetEndOfFile(h_file);
                 if has_orig {
-                    let _ = SetFilePointer(h_file, orig_low as LONG, &mut orig_high, 0);
+                    let restore_pos = orig_pos.min(pos);
+                    let r_low = (restore_pos & 0xFFFF_FFFF) as LONG;
+                    let mut r_high = (restore_pos >> 32) as LONG;
+                    let _ = SetFilePointer(h_file, r_low, &mut r_high, 0);
                 }
                 return ok;
             }
         }
-        1
+        unsafe { SetLastError(ERROR_CALL_NOT_IMPLEMENTED) };
+        0
     }
 
     unsafe extern "system" fn shim_GetFileSizeEx(h_file: HANDLE, lp_file_size: *mut i64) -> BOOL {
@@ -1880,10 +1925,10 @@ mod x86_retro_impl {
             // oder ein geerbtes DOS-Handle (z.B. `1` oder `7`), auf dem `WriteFile` mit `FALSE` fehlschlägt!
             // Damit `println!` / `eprintln!` niemals mit `"failed printing to stdout"` (`stdio.rs:1168`)
             // in einen Panic läuft, behandeln wir fehlgeschlagene Writes auf Stdout/Stderr als Null-Sink.
-            if file_handle == 0
-                || file_handle == INVALID_HANDLE_VALUE
-                || (file_handle as usize) <= 0x20
-            {
+            // Da `shim_GetStdHandle` immer `0` liefert, nur für `0` und `INVALID_HANDLE_VALUE` als
+            // Null-Sink quittieren — echte Win32s/Win95 Datei-Handles (die kleine Werte `<= 0x20`
+            // haben können!) melden Disk-Full / Schreibfehler regulär an den Aufrufer!
+            if file_handle == 0 || file_handle == INVALID_HANDLE_VALUE {
                 if !io_status_block.is_null() {
                     (*io_status_block).status_or_ptr = 0;
                     (*io_status_block).information = length as usize;
@@ -2055,13 +2100,26 @@ mod x86_retro_impl {
         let mut a_old = [0u8; 520];
         let mut a_new = [0u8; 520];
         unsafe {
-            wide_path_to_ansi_buf(lp_existing, &mut a_old);
-            wide_path_to_ansi_buf(lp_new, &mut a_new);
-            if (dw_flags & 0x01) != 0 {
-                // MOVEFILE_REPLACE_EXISTING
-                let _ = DeleteFileA(a_new.as_ptr());
+            let len_old = wide_path_to_ansi_buf(lp_existing, &mut a_old);
+            let len_new = wide_path_to_ansi_buf(lp_new, &mut a_new);
+            if MoveFileA(a_old.as_ptr(), a_new.as_ptr()) != 0 {
+                return 1;
             }
-            MoveFileA(a_old.as_ptr(), a_new.as_ptr())
+            if (dw_flags & 0x01) != 0 {
+                // MOVEFILE_REPLACE_EXISTING: Bei identischem Pfad (Case-Insensitive) niemals löschen!
+                let same_path = len_old == len_new
+                    && a_old[..len_old].eq_ignore_ascii_case(&a_new[..len_new]);
+                if same_path {
+                    return 1;
+                }
+                // Zuerst `CopyFileA(..., bFailIfExists = FALSE)` überschreiben lassen, damit die Zieldatei
+                // niemals verloren geht, falls `a_old` fehlt oder gesperrt ist!
+                if CopyFileA(a_old.as_ptr(), a_new.as_ptr(), 0) != 0 {
+                    let _ = DeleteFileA(a_old.as_ptr());
+                    return 1;
+                }
+            }
+            0
         }
     }
 
@@ -2379,7 +2437,9 @@ mod x86_retro_impl {
     static TICK_EPOCH_HI: AtomicU32 = AtomicU32::new(0);
 
     unsafe fn monotonic_ms_u64() -> u64 {
-        let cur = unsafe { GetTickCount() };
+        // `timeGetTime()` (WINMM.DLL) liefert unter Win32s 1.30c & Win95 echte 1-ms-Auflösung
+        // statt des groben 55-ms-8254-PIT-Rasters von `GetTickCount()`.
+        let cur = unsafe { timeGetTime() };
         let prev = LAST_TICK.swap(cur, Ordering::Relaxed);
         // Nur bei echtem 49,7-Tage-Überlauf (`prev - cur > 2^31`) inkrementieren,
         // damit minimale Thread-Races nicht fälschlich +49,7 Tage addieren.
@@ -2405,8 +2465,13 @@ mod x86_retro_impl {
 
     unsafe extern "system" fn shim_GetSystemTimeAsFileTime(lp_file_time: *mut FileTime) {
         if !lp_file_time.is_null() {
-            let t = unsafe { monotonic_ms_u64() } * 10_000 + 116_444_736_000_000_000u64;
             unsafe {
+                let mut st = SystemTime::default();
+                GetSystemTime(&mut st);
+                if SystemTimeToFileTime(&st, lp_file_time) != 0 {
+                    return;
+                }
+                let t = monotonic_ms_u64() * 10_000 + 116_444_736_000_000_000u64;
                 (*lp_file_time).dw_low_date_time = (t & 0xFFFF_FFFF) as DWORD;
                 (*lp_file_time).dw_high_date_time = (t >> 32) as DWORD;
             }

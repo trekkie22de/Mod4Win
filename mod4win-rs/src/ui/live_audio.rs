@@ -81,12 +81,19 @@ pub fn apply_live_sound_settings(seq: &mut Sequencer, new_settings: SoundSetting
     //    damit laufende Noten ihre exakte Tonhöhe beibehalten!
     if new_sr != old_sr {
         seq.module.state.sound_settings.samplerate = new_sr;
-        let sr_u32 = new_sr as u32;
-        let cx_bpm = (seq.module.state.bpm_speed.max(0x20)) as u32;
-        let eax = (sr_u32 << 1) + (sr_u32 >> 1);
-        let num_samples = (eax / cx_bpm).min(MAX_MIX_BUF_SAMPLES as u32) as u16;
-        seq.module.state.num_samples = num_samples.max(1);
-        seq.module.state.buf_samples = seq.module.state.num_samples;
+        if let Some(ref it_eng) = seq.it_engine {
+            crate::engine::it_engine::ItEngine::update_tempo_samples(
+                it_eng.tempo,
+                &mut seq.module.state,
+            );
+        } else {
+            let sr_u32 = new_sr as u32;
+            let cx_bpm = (seq.module.state.bpm_speed.max(0x20)) as u32;
+            let eax = (sr_u32 << 1) + (sr_u32 >> 1);
+            let num_samples = (eax / cx_bpm).min(MAX_MIX_BUF_SAMPLES as u32) as u16;
+            seq.module.state.num_samples = num_samples.max(1);
+            seq.module.state.buf_samples = seq.module.state.num_samples;
+        }
 
         for chn in seq.module.state.channels.iter_mut() {
             let old_step = (((chn.phi as u32) << 16) | (chn.plo as u32)) as u64;
@@ -515,14 +522,15 @@ impl LiveAudioProcessor {
                 (l0, r0)
             };
 
-            let (raw_l, raw_r) = if seq_rate == out_rate && self.resample_frac_fp == 0 {
+            let (raw_l, raw_r) = if seq_rate == out_rate {
+                self.resample_frac_fp = 0;
                 self.frame_queue.pop_front();
                 (l0, r0)
             } else {
-                let alpha = (self.resample_frac_fp >> 16) as i32; // 0..=65535
-                let l = (l0 as i32 + (((l1 as i32 - l0 as i32) * alpha) >> 16))
+                let alpha = (self.resample_frac_fp >> 16) as i64; // 0..=65535
+                let l = (l0 as i64 + (((l1 as i64 - l0 as i64) * alpha) >> 16))
                     .clamp(-32768, 32767) as i16;
-                let r = (r0 as i32 + (((r1 as i32 - r0 as i32) * alpha) >> 16))
+                let r = (r0 as i64 + (((r1 as i64 - r0 as i64) * alpha) >> 16))
                     .clamp(-32768, 32767) as i16;
 
                 let step_fp = (seq_rate << 32) / out_rate;
@@ -726,9 +734,13 @@ pub fn load_and_prepare_module_isolated(
 
     // Vorab `get_total_time()` und `kanal_init(false)` auf dem Loader-Thread ausführen,
     // damit der Echtzeit-Audio-Thread nur noch das fertige `LoadedModule` einswappen muss.
-    let mut temp_seq = Sequencer::new(new_mod, base_settings);
-    let total_time_ms = compute_module_total_time_ms_on_seq(&mut temp_seq);
-    let prepared_mod = temp_seq.module;
+    let (prepared_mod, total_time_ms) =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut temp_seq = Sequencer::new(new_mod, base_settings);
+            let ms = compute_module_total_time_ms_on_seq(&mut temp_seq);
+            (temp_seq.module, ms)
+        }))
+        .map_err(|_| "CORRUPTED MODULE".to_string())?;
 
     Ok(ReadyLoadedModule {
         path: path.to_path_buf(),

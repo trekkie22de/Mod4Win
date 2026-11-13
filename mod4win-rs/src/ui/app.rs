@@ -2,7 +2,7 @@
 //! der MOD4WIN 2.40 Beta Multi-Window-Oberflaeche.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -13,7 +13,9 @@ use super::winit::event::{ElementState, Modifiers, MouseButton, TouchPhase, Wind
 use super::winit::event_loop::ActiveEventLoop;
 use super::winit::window::{CursorIcon, ResizeDirection, Window, WindowId};
 
-use super::archive_mol::{extract_all_tracker_files_from_zip, load_mol_file};
+use super::archive_mol::{
+    extract_all_tracker_files_from_zip, load_mol_file, read_module_bytes_universal,
+};
 use super::assets::EmbeddedAssets;
 use super::cpu_sim::{CpuProfile, CpuTelemetryState};
 use super::i18n::LocaleCatalog;
@@ -235,6 +237,7 @@ impl std::fmt::Debug for CoopPeakState {
 #[derive(Clone, Debug)]
 pub struct PeakSearchProgress {
     pub active: bool,
+    pub generation: u64,
     pub percent: u8,
     pub scanned_order: usize,
     pub total_orders: usize,
@@ -343,6 +346,8 @@ pub struct UiSharedState {
     pub status_banner: Option<(String, Instant)>,
     /// Laufender asynchroner PeakSearch-Zustand für die Dot-Matrix-Anzeige (`PEAK SEARCH ... XX%`) und das Pattern-LCD.
     pub peak_search: Option<PeakSearchProgress>,
+    /// Monoton steigender Generationszähler für Hintergrund-PeakSearch-Jobs (verwirft veraltete Ergebnisse nach schnellem Trackwechsel).
+    pub peak_search_gen: u64,
     /// Ausstehender PeakSearch, der nach dem ersten Zeichnen des Hauptfensters (bzw. nach dem Laden eines neuen Moduls) im Hintergrund startet.
     pub pending_initial_peak_search: Option<PendingPeakSearch>,
     /// Zeitpunkt unmittelbar vor dem Öffnen der GUI (`run_ui`).
@@ -452,6 +457,7 @@ impl UiSharedState {
             last_telemetry_instant: Instant::now(),
             status_banner: None,
             peak_search: None,
+            peak_search_gen: 0,
             pending_initial_peak_search: None,
             gui_launch_instant: Instant::now(),
             title_scroll_epoch: Instant::now(),
@@ -566,8 +572,11 @@ impl UiSharedState {
         force_rescan: bool,
     ) {
         let pks_path = Mod4WinIniConfig::default_pks_path();
-        {
+        #[cfg_attr(feature = "retro-win32", allow(unused_variables))]
+        let my_gen = {
             let mut st = shared_state.lock().unwrap();
+            st.peak_search_gen = st.peak_search_gen.wrapping_add(1);
+            let cur_gen = st.peak_search_gen;
             if !force_rescan && st.ini_config.state_saver
                 && let Some(cached_pa) = st.ini_config.find_peak(file_size_bytes, &mod_title, &pks_path) {
                     let pa = cached_pa.min(40);
@@ -608,6 +617,7 @@ impl UiSharedState {
             };
             st.peak_search = Some(PeakSearchProgress {
                 active: true,
+                generation: cur_gen,
                 percent: 0,
                 scanned_order: 1,
                 total_orders,
@@ -618,7 +628,8 @@ impl UiSharedState {
                 #[cfg(feature = "retro-win32")]
                 coop_state,
             });
-        }
+            cur_gen
+        };
 
         #[cfg(not(feature = "retro-win32"))]
         {
@@ -635,6 +646,10 @@ impl UiSharedState {
                     if let Ok(mut st) = state_arc.lock() {
                         st.ini_config
                             .store_peak(file_size_bytes, &mod_title, found, &pks_path);
+                        // Verwerfe PreAmp-Übernahme, falls der Nutzer inzwischen bereits einen anderen Song geladen hat:
+                        if st.peak_search_gen != my_gen {
+                            return;
+                        }
                         let is_native =
                             CpuProfile::from_u8(st.ini_config.cpu_sim_profile) == CpuProfile::Native;
                         if is_native {
@@ -642,7 +657,9 @@ impl UiSharedState {
                             st.ini_config.pre_amplification = found;
                             st.settings_dirty = true;
                         }
-                        if let Some(ref mut ps) = st.peak_search {
+                        if let Some(ref mut ps) = st.peak_search
+                            && ps.generation == my_gen
+                        {
                             ps.computed_preamp = Some(found);
                         }
                     }
@@ -1224,8 +1241,14 @@ impl UiSharedState {
         } else if next >= len as i32 {
             if wrap {
                 if self.shuffle && len > 1 {
-                    // Neue Runde mischen, wenn alle Songs einmal durchgelaufen sind
+                    // Neue Runde mischen, wenn alle Songs einmal durchgelaufen sind.
+                    // Sicherstellen, dass `number_list[0]` nicht identisch mit dem soeben beendeten Song ist,
+                    // damit kein Track am Rundenübergang zweimal direkt hintereinander gespielt wird.
+                    let prev_idx = self.playlist_idx;
                     self.rebuild_number_list();
+                    if self.number_list[0] == prev_idx {
+                        self.number_list.swap(0, len - 1);
+                    }
                 }
                 0
             } else {
@@ -1318,6 +1341,47 @@ impl UiSharedState {
             self.is_playing = true;
             self.is_paused = false;
         }
+        self.sync_runtime_to_ini();
+    }
+
+    /// Verarbeitet ein einzelnes `WindowEvent::DroppedFile`-Element innerhalb eines Explorer-Drop-Batches.
+    /// Das erste gültige Element (`first_of_batch = true`) ersetzt die Playlist und startet Track 0;
+    /// alle weiteren Elemente desselben Batches hängen ihre Dateien lediglich hinten an, ohne `playlist_idx`
+    /// oder `pending_load_file` auf den letzten gedroppten Track umzusetzen.
+    pub fn handle_dropped_batch_item(&mut self, path: &Path, first_of_batch: bool) -> bool {
+        let mut found = Vec::new();
+        Self::collect_tracker_files(path, &mut found);
+        if found.is_empty() {
+            return false;
+        }
+        if first_of_batch || self.playlist.is_empty() {
+            self.playlist = found;
+            self.playlist_idx = 0;
+            self.playing_track_detached = false;
+            self.rebuild_number_list();
+            if let Some(pos) = self.number_list.iter().position(|&i| i == self.playlist_idx) {
+                self.playlist_pos = pos;
+            }
+            if let Some(first_file) = self.playlist.first().cloned() {
+                self.pending_load_file = Some(first_file);
+                self.is_playing = true;
+                self.is_paused = false;
+            }
+        } else {
+            let old_len = self.playlist.len();
+            self.playlist.extend(found);
+            let new_len = self.playlist.len();
+            if self.shuffle {
+                self.rebuild_number_list();
+                if let Some(pos) = self.number_list.iter().position(|&i| i == self.playlist_idx) {
+                    self.playlist_pos = pos;
+                }
+            } else {
+                self.number_list.extend(old_len..new_len);
+            }
+        }
+        self.sync_runtime_to_ini();
+        true
     }
 
     /// Aktualisiert den Zustand aus der laufenden Sequencer-Engine.
@@ -2155,10 +2219,7 @@ impl Mod4WinApp {
             WindowKind::About => (MAIN_WINDOW_WIDTH, MAIN_WINDOW_HEIGHT),
             WindowKind::HelpViewer => (HELP_WINDOW_WIDTH, HELP_WINDOW_HEIGHT),
             WindowKind::FileMenu => (212, 68),
-            WindowKind::ConfirmDialog => match self.confirm_action.unwrap_or(ConfirmAction::DeleteFromDisk) {
-                ConfirmAction::DeleteFromDisk => (284, 124),
-                ConfirmAction::RemoveFromPlaylist => (398, 124),
-            },
+            WindowKind::ConfirmDialog => (398, 124),
         }
     }
 
@@ -2393,7 +2454,25 @@ impl Mod4WinApp {
         }
     }
 
+    pub(crate) fn canonical_window_kind(&self, kind: WindowKind) -> WindowKind {
+        let is_modern = self
+            .shared_state
+            .lock()
+            .map(|st| self.is_modern_skin(&st))
+            .unwrap_or(false);
+        if is_modern {
+            match kind {
+                WindowKind::InstrumentInfo => WindowKind::ModuleInfo,
+                WindowKind::OpenDialog => WindowKind::QuickSelect,
+                other => other,
+            }
+        } else {
+            kind
+        }
+    }
+
     pub(crate) fn open_window(&mut self, event_loop: &ActiveEventLoop, kind: WindowKind) {
+        let kind = self.canonical_window_kind(kind);
         if let Some(&existing_id) = self.kind_to_id.get(&kind)
             && let Some(surf) = self.windows.get(&existing_id) {
                 surf.window.focus_window();
@@ -2753,17 +2832,33 @@ impl Mod4WinApp {
     }
 
     pub(crate) fn toggle_window(&mut self, event_loop: &ActiveEventLoop, kind: WindowKind) {
-        if self.kind_to_id.contains_key(&kind) {
-            self.close_window(kind);
+        let canonical = self.canonical_window_kind(kind);
+        let alias_open = match canonical {
+            WindowKind::ModuleInfo if canonical != kind => {
+                self.kind_to_id.contains_key(&WindowKind::InstrumentInfo)
+            }
+            WindowKind::QuickSelect if canonical != kind => {
+                self.kind_to_id.contains_key(&WindowKind::OpenDialog)
+            }
+            _ => false,
+        };
+        if self.kind_to_id.contains_key(&canonical) || alias_open {
+            self.close_window(canonical);
+            if canonical == WindowKind::ModuleInfo && self.kind_to_id.contains_key(&WindowKind::InstrumentInfo) {
+                self.close_window(WindowKind::InstrumentInfo);
+            }
+            if canonical == WindowKind::QuickSelect && self.kind_to_id.contains_key(&WindowKind::OpenDialog) {
+                self.close_window(WindowKind::OpenDialog);
+            }
         } else {
             if let Ok(mut state) = self.shared_state.lock() {
-                match kind {
+                match canonical {
                     WindowKind::ModuleInfo => state.show_info = true,
                     WindowKind::Effects => state.show_effects = true,
                     _ => {}
                 }
             }
-            self.open_window(event_loop, kind);
+            self.open_window(event_loop, canonical);
         }
     }
 
@@ -2877,49 +2972,72 @@ impl Mod4WinApp {
             (st.current_file_path.clone(), st.ini_config.clone())
         };
 
-        if let Some(mod_path) = mod_path_opt
-            && let Ok(file_data) = std::fs::read(&mod_path) {
-                let ext = mod_path.extension().and_then(|e| e.to_str());
-                if let Ok(export_mod) = load_module_with_ext(&file_data, ext) {
-                    match export_module_to_wav_file(
-                        export_mod,
-                        file_data.len() as u32,
-                        &mut cfg_copy,
-                        &wav_out_path,
-                    ) {
-                        Ok(frames) => {
-                            let fname = wav_out_path
-                                .file_name()
-                                .and_then(|n| n.to_str())
-                                .unwrap_or("OUT.WAV");
-                            println!(
-                                "[DEV_HDD] Direct-to-Disk WAV-Export abgeschlossen: {} ({} Frames, OverSamp={}, SR={}, Bits={}, Ch={}, Surr={}, Pan={})",
-                                wav_out_path.display(),
-                                frames,
-                                cfg_copy.over_sampling,
-                                cfg_copy.sample_rate,
-                                cfg_copy.bits_per_sample,
-                                cfg_copy.channels,
-                                cfg_copy.surround,
-                                cfg_copy.enable_panning
-                            );
-                            let mut st = self.shared_state.lock().unwrap();
-                            st.ini_config.peaks = cfg_copy.peaks.clone();
-                            st.title = format!("SAVED {}", fname);
-                            st.export_status_msg = Some(format!("WAV Saved: {}", fname));
-                            st.is_exporting_wav = false;
-                            return;
+        if let Some(mod_path) = mod_path_opt {
+            match read_module_bytes_universal(&mod_path) {
+                Ok((file_data, ext_hint)) => {
+                    let fallback_ext = mod_path.extension().and_then(|e| e.to_str());
+                    let ext = ext_hint.as_deref().or(fallback_ext);
+                    match load_module_with_ext(&file_data, ext) {
+                        Ok(export_mod) => {
+                            match export_module_to_wav_file(
+                                export_mod,
+                                file_data.len().min(u32::MAX as usize) as u32,
+                                &mut cfg_copy,
+                                &wav_out_path,
+                            ) {
+                                Ok(frames) => {
+                                    let fname = wav_out_path
+                                        .file_name()
+                                        .and_then(|n| n.to_str())
+                                        .unwrap_or("OUT.WAV");
+                                    println!(
+                                        "[DEV_HDD] Direct-to-Disk WAV-Export abgeschlossen: {} ({} Frames, OverSamp={}, SR={}, Bits={}, Ch={}, Surr={}, Pan={})",
+                                        wav_out_path.display(),
+                                        frames,
+                                        cfg_copy.over_sampling,
+                                        cfg_copy.sample_rate,
+                                        cfg_copy.bits_per_sample,
+                                        cfg_copy.channels,
+                                        cfg_copy.surround,
+                                        cfg_copy.enable_panning
+                                    );
+                                    let mut st = self.shared_state.lock().unwrap();
+                                    st.ini_config.peaks = cfg_copy.peaks.clone();
+                                    st.set_status_banner(format!("SAVED {}", fname));
+                                    st.export_status_msg = Some(format!("WAV Saved: {}", fname));
+                                    st.is_exporting_wav = false;
+                                    return;
+                                }
+                                Err(e) => {
+                                    eprintln!("[DEV_HDD] Fehler beim WAV-Export: {}", e);
+                                    let mut st = self.shared_state.lock().unwrap();
+                                    st.set_status_banner("WAV EXPORT ERROR");
+                                    st.export_status_msg = Some(format!("WAV Error: {}", e));
+                                    st.is_exporting_wav = false;
+                                    return;
+                                }
+                            }
                         }
                         Err(e) => {
-                            eprintln!("[DEV_HDD] Fehler beim WAV-Export: {}", e);
+                            eprintln!("[DEV_HDD] Modul konnte für WAV-Export nicht geladen werden: {}", e);
                             let mut st = self.shared_state.lock().unwrap();
-                            st.title = "WAV EXPORT ERROR".to_string();
+                            st.set_status_banner("WAV EXPORT ERROR");
+                            st.export_status_msg = Some(format!("WAV Load Error: {}", e));
                             st.is_exporting_wav = false;
                             return;
                         }
                     }
                 }
+                Err(e) => {
+                    eprintln!("[DEV_HDD] Quelldatei für WAV-Export nicht lesbar: {}", e);
+                    let mut st = self.shared_state.lock().unwrap();
+                    st.set_status_banner("WAV EXPORT ERROR");
+                    st.export_status_msg = Some(format!("WAV Read Error: {}", e));
+                    st.is_exporting_wav = false;
+                    return;
+                }
             }
+        }
         let mut st = self.shared_state.lock().unwrap();
         st.is_exporting_wav = false;
     }
@@ -3479,31 +3597,25 @@ impl ApplicationHandler for Mod4WinApp {
                     state.is_paused = false;
                     state.is_finished = true;
                     event_loop.exit();
-                } else if kind == WindowKind::OpenDialog {
-                    let is_modern = {
-                        let st = self.shared_state.lock().unwrap();
-                        self.is_modern_skin(&st)
-                    };
-                    if is_modern {
-                        self.close_window(kind);
-                    } else {
-                        self.commit_open_dialog_ok();
-                    }
                 } else {
                     self.close_window(kind);
                 }
             }
             WindowEvent::DroppedFile(dropped_path) => {
                 // Drag & Drop aus dem Windows-Explorer (`wmDropFiles` in `mod4win.pas`):
-                // Erster Drop eines Batches ersetzt die Playlist, weitere Drops desselben Batches (< 250ms) hängen an.
+                // Erster gültiger Drop eines Batches ersetzt die Playlist, weitere Drops desselben Batches (< 250ms) hängen an.
                 let now = Instant::now();
-                let replace = self
+                let first_of_batch = self
                     .last_drop_time
                     .map(|t| now.duration_since(t).as_millis() > 250)
                     .unwrap_or(true);
-                self.last_drop_time = Some(now);
-                let mut state = self.shared_state.lock().unwrap();
-                state.handle_dropped_paths(&[dropped_path], replace);
+                let accepted = {
+                    let mut state = self.shared_state.lock().unwrap();
+                    state.handle_dropped_batch_item(&dropped_path, first_of_batch)
+                };
+                if accepted {
+                    self.last_drop_time = Some(now);
+                }
             }
             WindowEvent::Focused(true) => {
                 if !matches!(kind, WindowKind::HelpViewer | WindowKind::FileMenu | WindowKind::ConfirmDialog) {
@@ -4085,6 +4197,13 @@ impl ApplicationHandler for Mod4WinApp {
         // geändert hat; falls ja, sofort alle offenen Fenster aktualisieren.
         let needs_size_update = {
             let st_snapshot = self.shared_state.lock().unwrap();
+            let max_inst = st_snapshot.instruments.len().max(1);
+            if self.selected_instrument > max_inst {
+                self.selected_instrument = max_inst;
+            }
+            if self.info_inst_offset >= max_inst {
+                self.info_inst_offset = 0;
+            }
             self.windows.values().any(|surf| {
                 let (ew, eh, _) = self.window_dimensions(surf.kind, &st_snapshot);
                 surf.width != ew || surf.height != eh

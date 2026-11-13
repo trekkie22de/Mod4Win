@@ -214,11 +214,11 @@ impl OpenDialogState {
 
     pub fn format_allowed(&self, ext: &str) -> bool {
         let idx = match ext.to_ascii_uppercase().as_str() {
-            "MOD" | "WOW" => 0,
+            "MOD" | "WOW" | "NST" => 0,
             "XM" => 1,
             "S3M" | "IT" | "UMX" => 2,
             "MTM" => 3,
-            "669" | "STM" | "FAR" | "OKT" | "ULT" => 4,
+            "669" | "STM" | "FAR" | "OKT" | "ULT" | "DMF" => 4,
             _ => return false,
         };
         self.format_toggles[idx]
@@ -293,14 +293,11 @@ impl OpenDialogState {
 
                 if let Ok(entries) = std::fs::read_dir(dir) {
                     for entry in entries.flatten() {
-                        let Ok(ft) = entry.file_type() else {
-                            continue;
-                        };
                         let path = entry.path();
                         let fname = entry.file_name().to_string_lossy().to_string();
-                        if ft.is_dir() {
+                        if path.is_dir() {
                             subdirs.push((fname.to_lowercase(), fname, path));
-                        } else if ft.is_file() {
+                        } else if path.is_file() {
                             let ext = path
                                 .extension()
                                 .and_then(|e| e.to_str())
@@ -1102,10 +1099,10 @@ impl Mod4WinApp {
         window: &Arc<Window>,
         is_double_click: bool,
     ) {
-        // 1. Titelleiste (y <= 18)
+        // 1. Titelleiste (y <= 18): Systemmenü / [X] schließt ohne Übernahme (wie Cancel/Escape)
         if vy <= 18 {
             if vx <= 20 || vx >= (OPEN_WINDOW_WIDTH as i32 - 20) {
-                self.commit_open_dialog_ok();
+                self.close_window(WindowKind::OpenDialog);
             } else {
                 let _ = window.drag_window();
             }

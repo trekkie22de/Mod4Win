@@ -114,8 +114,11 @@ pub fn unwrap_umx(data: &[u8]) -> Option<&[u8]> {
             break;
         }
         let name_str = if pkg_version >= 64 {
-            let slen = read_ue1_compact_index(data, &mut npos)?.max(0) as usize;
-            if npos + slen > data.len() {
+            let Some(slen_raw) = read_ue1_compact_index(data, &mut npos) else {
+                break;
+            };
+            let slen = slen_raw.max(0) as usize;
+            if npos.checked_add(slen).is_none_or(|e| e > data.len()) {
                 break;
             }
             let raw = &data[npos..npos + slen];
@@ -133,7 +136,7 @@ pub fn unwrap_umx(data: &[u8]) -> Option<&[u8]> {
             }
             s
         };
-        if npos + 4 > data.len() {
+        if npos.checked_add(4).is_none_or(|e| e > data.len()) {
             break;
         }
         npos += 4; // ObjectFlags (u32)
@@ -147,17 +150,24 @@ pub fn unwrap_umx(data: &[u8]) -> Option<&[u8]> {
         if ipos >= data.len() {
             break;
         }
-        let _class_pkg = read_ue1_compact_index(data, &mut ipos)?;
-        let _class_name = read_ue1_compact_index(data, &mut ipos)?;
+        let Some(_class_pkg) = read_ue1_compact_index(data, &mut ipos) else {
+            break;
+        };
+        let Some(_class_name) = read_ue1_compact_index(data, &mut ipos) else {
+            break;
+        };
         if pkg_version >= 60 {
-            if ipos + 4 > data.len() {
+            if ipos.checked_add(4).is_none_or(|e| e > data.len()) {
                 break;
             }
             ipos += 4; // Package (i32)
-        } else {
-            let _pkg = read_ue1_compact_index(data, &mut ipos)?;
+        } else if read_ue1_compact_index(data, &mut ipos).is_none() {
+            break;
         }
-        let obj_name = read_ue1_compact_index(data, &mut ipos)?.max(0) as usize;
+        let Some(obj_name_raw) = read_ue1_compact_index(data, &mut ipos) else {
+            break;
+        };
+        let obj_name = obj_name_raw.max(0) as usize;
         import_obj_names.push(obj_name);
     }
 
@@ -169,24 +179,34 @@ pub fn unwrap_umx(data: &[u8]) -> Option<&[u8]> {
         if epos >= data.len() {
             break;
         }
-        let class_index = read_ue1_compact_index(data, &mut epos)?;
-        let _super_index = read_ue1_compact_index(data, &mut epos)?;
+        let Some(class_index) = read_ue1_compact_index(data, &mut epos) else {
+            break;
+        };
+        let Some(_super_index) = read_ue1_compact_index(data, &mut epos) else {
+            break;
+        };
         if pkg_version >= 60 {
-            if epos + 4 > data.len() {
+            if epos.checked_add(4).is_none_or(|e| e > data.len()) {
                 break;
             }
             epos += 4; // Group (i32)
         }
-        let _obj_name = read_ue1_compact_index(data, &mut epos)?;
-        if epos + 4 > data.len() {
+        let Some(_obj_name) = read_ue1_compact_index(data, &mut epos) else {
+            break;
+        };
+        if epos.checked_add(4).is_none_or(|e| e > data.len()) {
             break;
         }
         epos += 4; // ObjectFlags (u32)
-        let serial_size = read_ue1_compact_index(data, &mut epos)?;
+        let Some(serial_size) = read_ue1_compact_index(data, &mut epos) else {
+            break;
+        };
         if serial_size <= 0 {
             continue;
         }
-        let serial_offset = read_ue1_compact_index(data, &mut epos)?;
+        let Some(serial_offset) = read_ue1_compact_index(data, &mut epos) else {
+            break;
+        };
         if serial_offset <= 0 {
             continue;
         }
@@ -761,7 +781,7 @@ pub fn decompress_it_sample_8bit(
             } else {
                 // width == 9
                 if (v & 0x100) != 0 {
-                    width = ((v & 0xFF) as u8) + 1;
+                    width = ((v & 0xFF) as u8).wrapping_add(1);
                     continue;
                 }
                 delta = (v & 0xFF) as i8;
@@ -852,7 +872,7 @@ pub fn decompress_it_sample_16bit(
             } else {
                 // width == 17
                 if (v & 0x10000) != 0 {
-                    width = ((v & 0xFF) as u8) + 1;
+                    width = ((v & 0xFF) as u8).wrapping_add(1);
                     continue;
                 }
                 delta = (v & 0xFFFF) as i16;
@@ -930,12 +950,23 @@ fn parse_it_envelope(raw: &[u8]) -> ItEnvelope {
     if raw.len() < 81 {
         return ItEnvelope::default();
     }
-    let flags = raw[0];
+    let mut flags = raw[0];
     let num_nodes = raw[1].min(25);
-    let loop_begin = raw[2].min(num_nodes.saturating_sub(1));
-    let loop_end = raw[3].min(num_nodes.saturating_sub(1));
-    let sus_loop_begin = raw[4].min(num_nodes.saturating_sub(1));
-    let sus_loop_end = raw[5].min(num_nodes.saturating_sub(1));
+    let max_idx = num_nodes.saturating_sub(1);
+    let mut loop_begin = raw[2].min(max_idx);
+    let mut loop_end = raw[3].min(max_idx);
+    if loop_begin > loop_end || num_nodes == 0 {
+        flags &= !0x02;
+        loop_begin = 0;
+        loop_end = 0;
+    }
+    let mut sus_loop_begin = raw[4].min(max_idx);
+    let mut sus_loop_end = raw[5].min(max_idx);
+    if sus_loop_begin > sus_loop_end || num_nodes == 0 {
+        flags &= !0x04;
+        sus_loop_begin = 0;
+        sus_loop_end = 0;
+    }
     let mut nodes = [ItEnvNode::default(); 25];
     for i in 0..25 {
         let base = 6 + i * 3;
@@ -1144,7 +1175,10 @@ pub fn load_it(data: &[u8]) -> Result<LoadedModule, u16> {
     let mut it_instruments = Vec::with_capacity((ins_num as usize) + 1);
     it_instruments.push(ItInstrument::default()); // Index 0 = Dummy
     for &iofs in &ins_offsets {
-        if iofs == 0 || iofs + 0x40 > data.len() || &data[iofs..iofs + 4] != b"IMPI" {
+        if iofs == 0
+            || iofs.checked_add(0x40).is_none_or(|e| e > data.len())
+            || &data[iofs..iofs + 4] != b"IMPI"
+        {
             it_instruments.push(ItInstrument::default());
             continue;
         }
@@ -1167,18 +1201,13 @@ pub fn load_it(data: &[u8]) -> Result<LoadedModule, u16> {
                 inst.dct = 1; // Note
                 inst.dca = 0; // Cut
             }
-            if iofs + 0x130 <= data.len() {
+            if iofs.checked_add(0x130).is_some_and(|e| e <= data.len()) {
                 for n in 0..120 {
                     let b = iofs + 0x40 + n * 2;
                     inst.note_sample_table[n] = (data[b].min(119), data[b + 1]);
                 }
             }
-            if iofs + 0x22A <= data.len() {
-                inst.vol_env.flags = flg;
-                inst.vol_env.loop_begin = vls;
-                inst.vol_env.loop_end = vle;
-                inst.vol_env.sus_loop_begin = sls;
-                inst.vol_env.sus_loop_end = sle;
+            if iofs.checked_add(0x22A).is_some_and(|e| e <= data.len()) {
                 let mut count = 0u8;
                 for p in 0..25 {
                     let b = iofs + 0x1F8 + p * 2;
@@ -1194,6 +1223,27 @@ pub fn load_it(data: &[u8]) -> Result<LoadedModule, u16> {
                     count += 1;
                 }
                 inst.vol_env.num_nodes = count;
+                let max_idx = count.saturating_sub(1);
+                let mut eff_flg = flg;
+                let mut lb = vls.min(max_idx);
+                let mut le = vle.min(max_idx);
+                if lb > le || count == 0 {
+                    eff_flg &= !0x02;
+                    lb = 0;
+                    le = 0;
+                }
+                let mut slb = sls.min(max_idx);
+                let mut sle_c = sle.min(max_idx);
+                if slb > sle_c || count == 0 {
+                    eff_flg &= !0x04;
+                    slb = 0;
+                    sle_c = 0;
+                }
+                inst.vol_env.flags = eff_flg;
+                inst.vol_env.loop_begin = lb;
+                inst.vol_env.loop_end = le;
+                inst.vol_env.sus_loop_begin = slb;
+                inst.vol_env.sus_loop_end = sle_c;
             }
         } else {
             // Neuer Instrument-Header (IT 2.00+, 554 Bytes)
@@ -1213,13 +1263,13 @@ pub fn load_it(data: &[u8]) -> Result<LoadedModule, u16> {
             inst.midi_prog = data[iofs + 0x3D];
             inst.midi_bank = read_le_u16(data, iofs + 0x3E).unwrap_or(0);
 
-            if iofs + 0x130 <= data.len() {
+            if iofs.checked_add(0x130).is_some_and(|e| e <= data.len()) {
                 for n in 0..120 {
                     let b = iofs + 0x40 + n * 2;
                     inst.note_sample_table[n] = (data[b].min(119), data[b + 1]);
                 }
             }
-            if iofs + 0x226 <= data.len() {
+            if iofs.checked_add(0x226).is_some_and(|e| e <= data.len()) {
                 inst.vol_env = parse_it_envelope(&data[iofs + 0x130..iofs + 0x182]);
                 inst.pan_env = parse_it_envelope(&data[iofs + 0x182..iofs + 0x1D4]);
                 inst.pitch_env = parse_it_envelope(&data[iofs + 0x1D4..iofs + 0x226]);
@@ -1236,7 +1286,10 @@ pub fn load_it(data: &[u8]) -> Result<LoadedModule, u16> {
     let mut cumulative_alloc_bytes: usize = 0;
 
     for &sofs in &smp_offsets {
-        if sofs == 0 || sofs + 80 > data.len() || &data[sofs..sofs + 4] != b"IMPS" {
+        if sofs == 0
+            || sofs.checked_add(80).is_none_or(|e| e > data.len())
+            || &data[sofs..sofs + 4] != b"IMPS"
+        {
             it_samples.push(ItSample::default());
             continue;
         }
@@ -1267,13 +1320,25 @@ pub fn load_it(data: &[u8]) -> Result<LoadedModule, u16> {
 
         if has_data {
             let is_stereo_pre = (smp.flags & it_smp_flags::STEREO) != 0;
+            let is_16bit_pre = (smp.flags & it_smp_flags::IS_16BIT) != 0;
+            let is_comp_pre = (smp.flags & it_smp_flags::COMPRESSED) != 0 || smp.cvt == 0xFF;
             let bytes_per_frame = if is_stereo_pre { 4usize } else { 2usize };
             let remaining_frames = MAX_IT_MODULE_SAMPLE_BYTES
                 .saturating_sub(cumulative_alloc_bytes)
                 / bytes_per_frame;
+            // Schutz gegen Speicherverstärkung bei winzigen/abgeschnittenen Dateien (Pkt1-N1):
+            let avail_file_bytes = data.len().saturating_sub(sample_ptr);
+            let max_frames_from_file = if is_comp_pre {
+                avail_file_bytes.saturating_mul(16).max(0x8000)
+            } else if is_16bit_pre {
+                (avail_file_bytes / 2).max(1)
+            } else {
+                avail_file_bytes.max(1)
+            };
             let len = (smp.length as usize)
                 .min(16 * 1024 * 1024)
-                .min(remaining_frames);
+                .min(remaining_frames)
+                .min(max_frames_from_file);
             cumulative_alloc_bytes =
                 cumulative_alloc_bytes.saturating_add(len.saturating_mul(bytes_per_frame));
             smp.length = len as u32;
@@ -1421,6 +1486,10 @@ pub fn load_it(data: &[u8]) -> Result<LoadedModule, u16> {
                 }
             }
 
+            if is_stereo && smp.data_16_right.is_empty() {
+                smp.flags &= !it_smp_flags::STEREO;
+            }
+
             total_sample_bytes = total_sample_bytes
                 .saturating_add((len as i32) * if is_16bit { 2 } else { 1 });
         } else {
@@ -1429,7 +1498,7 @@ pub fn load_it(data: &[u8]) -> Result<LoadedModule, u16> {
             smp.loop_end = 0;
             smp.sus_loop_begin = 0;
             smp.sus_loop_end = 0;
-            smp.flags &= !(it_smp_flags::LOOP | it_smp_flags::SUS_LOOP);
+            smp.flags &= !(it_smp_flags::LOOP | it_smp_flags::SUS_LOOP | it_smp_flags::STEREO);
         }
 
         it_samples.push(smp);
@@ -1440,7 +1509,7 @@ pub fn load_it(data: &[u8]) -> Result<LoadedModule, u16> {
     let mut max_used_chn: usize = 4;
 
     for &pofs in pat_offsets.iter().take(256) {
-        if pofs == 0 || pofs + 8 > data.len() {
+        if pofs == 0 || pofs.checked_add(8).is_none_or(|e| e > data.len()) {
             it_patterns.push(ItPattern::default());
             continue;
         }
@@ -1449,7 +1518,7 @@ pub fn load_it(data: &[u8]) -> Result<LoadedModule, u16> {
         let mut rows = vec![[ItNoteCell::default(); 64]; num_rows as usize];
 
         let stream_start = pofs + 8;
-        let stream_end = (stream_start + packed_len).min(data.len());
+        let stream_end = stream_start.saturating_add(packed_len).min(data.len());
         let stream = &data[stream_start..stream_end];
         let mut spos = 0usize;
 

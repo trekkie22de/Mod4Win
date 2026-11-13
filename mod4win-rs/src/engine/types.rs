@@ -660,10 +660,10 @@ pub struct ModEvent {
     pub r_volume: u16,
 }
 
-/// Kompakte Assembler-Mixer-Kanalstruktur (`tMixChannel` in `playdefs.pas` Zeilen 96–111, 42 Bytes).
+/// Kompakte Assembler-Mixer-Kanalstruktur (`tMixChannel` in `playdefs.pas` Zeilen 96–111, 39 Bytes).
 ///
-/// Bildet exakt die ersten 38 Bytes von [`Channel`] (`tChannel`) plus 4 Bytes `dummy` ab.
-/// Beim Seeking/Scanning werden diese ersten 38 Bytes über `SaveChannels` / `RestoreChannels`
+/// Bildet exakt die ersten 35 Bytes von [`Channel`] (`tChannel`) plus 4 Bytes `dummy` ab.
+/// Beim Seeking/Scanning werden diese ersten 35 Bytes über `SaveChannels` / `RestoreChannels`
 /// gesichert, und während `ProcessSampleBlock` in `dacmix.pas` wird `tMixChannel` nach `oAsmChn`
 /// kopiert und anschließend (`note..rest`, 5 `i32`-Werte = 20 Bytes) zurückgeschrieben.
 #[repr(C, packed)]
@@ -704,7 +704,7 @@ pub struct MixChannel {
 #[repr(C, packed)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Channel {
-    // --- Mixer-Header (identisch mit tMixChannel ohne Dummy, 38 Bytes) ---
+    // --- Mixer-Header (identisch mit tMixChannel ohne Dummy, 35 Bytes) ---
     /// Aktuelle Sample-Position (`Longint`; `0` = Kanal inaktiv).
     pub note: i32,
     /// Sample- bzw. Loop-Endposition (`Longint`).

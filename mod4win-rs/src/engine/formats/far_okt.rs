@@ -120,6 +120,9 @@ pub fn load_far(data: &[u8]) -> Result<LoadedModule, u16> {
             cursor += pat_len;
 
             if pat_len >= 2 {
+                // BIT-EXACTNESS INVARIANT (99.97% PLAYER32.DLL Parity — DO NOT "FIX"):
+                // `break_loc + 1` wird wie in `loaders.pas` bewusst nicht gegen `num_rows`
+                // geklammert (Fable-Review Pkt1-M5).
                 let break_loc = pat_slice[0];
                 for j in 0..ord_length {
                     if state.p_arrangement[j] as usize == pat_idx {
@@ -139,8 +142,8 @@ pub fn load_far(data: &[u8]) -> Result<LoadedModule, u16> {
                             let b4 = pat_slice[cell_ofs + 3];
 
                             let chn_vol = if b3 != 0 {
-                                let v = b3 - 1;
-                                (v << 2) + (v >> 2) + (v >> 3)
+                                let v = (b3 - 1) as u16;
+                                ((v << 2) + (v >> 2) + (v >> 3)) as u8
                             } else {
                                 DEF_CH_VOL
                             };
@@ -332,11 +335,11 @@ pub fn load_okt(data: &[u8]) -> Result<LoadedModule, u16> {
             break;
         }
         cursor += 8;
-        if cursor + struct_size > data.len() {
+        let Some(chunk_end) = cursor.checked_add(struct_size).filter(|&e| e <= data.len()) else {
             return Err(ID_NO_MOD_FILE);
-        }
-        let chunk = &data[cursor..cursor + struct_size];
-        cursor += struct_size;
+        };
+        let chunk = &data[cursor..chunk_end];
+        cursor = chunk_end;
 
         match b4sign {
             b"CMOD" => {
@@ -435,7 +438,7 @@ pub fn load_okt(data: &[u8]) -> Result<LoadedModule, u16> {
                 if struct_size != 2 {
                     return Err(ID_NO_MOD_FILE);
                 }
-                state.mi.num_patterns = read_be_u16(chunk, 0).unwrap_or(0);
+                state.mi.num_patterns = read_be_u16(chunk, 0).unwrap_or(0).min(MAX_PATTERNS as u16);
             }
             b"PATT" => {
                 // GetArrangeMent (loaders.pas Zeilen 576–596)
@@ -484,13 +487,16 @@ pub fn load_okt(data: &[u8]) -> Result<LoadedModule, u16> {
         }
         let struct_size = read_be_u32(data, cursor + 4).unwrap_or(0) as usize;
         cursor += 8;
-        if struct_size < 2 || cursor + struct_size > data.len() {
+        let Some(pat_end) = cursor.checked_add(struct_size).filter(|&e| e <= data.len()) else {
+            return Err(ID_NO_MOD_FILE);
+        };
+        if struct_size < 2 {
             return Err(ID_NO_MOD_FILE);
         }
 
         let patt_len = (read_be_u16(data, cursor).unwrap_or(64) as usize).clamp(1, MAX_PATT_LEN);
-        let pat_slice = &data[cursor + 2..cursor + struct_size];
-        cursor += struct_size;
+        let pat_slice = &data[cursor + 2..pat_end];
+        cursor = pat_end;
 
         let mut rows = vec![[Note::default(); MAX_M4W_CHANNELS]; patt_len];
         if pat_idx < MAX_PATTERNS && bitset_contains(&state.row_played[pat_idx], 1) {
@@ -584,7 +590,10 @@ pub fn load_okt(data: &[u8]) -> Result<LoadedModule, u16> {
         let b4sign = &data[cursor..cursor + 4];
         let struct_size = read_be_u32(data, cursor + 4).unwrap_or(0) as usize;
         if b4sign == b"PBOD" {
-            cursor = (cursor + 8 + struct_size).min(data.len());
+            cursor = cursor
+                .saturating_add(8)
+                .saturating_add(struct_size)
+                .min(data.len());
         } else if b4sign == b"SBOD" {
             break;
         } else {

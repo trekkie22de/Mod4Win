@@ -42,9 +42,12 @@ pub fn load_xm(data: &[u8]) -> Result<LoadedModule, u16> {
     state.mi.file_type = ModType::FT2;
     state.mi.file_siz = (data.len() / 1024) as u16;
     state.use_linear_tune = xm_flags != 0;
-    state.mi.num_patterns = song_len;
+    state.mi.num_patterns = song_len.min(MAX_PATTERNS as u16);
     state.mi.num_tracks = num_chans;
     state.mi.num_instruments = num_instrs as u16;
+    // BIT-EXACTNESS INVARIANT (99.97% PLAYER32.DLL Parity — DO NOT "FIX"):
+    // `def_tempo == 0` wird wie in `loaders.pas` Zeile 1388 bewusst nicht zu `6` konvertiert
+    // (Fable-Review Pkt1-M5).
     state.init_speed = def_tempo as u8;
     state.speed = state.init_speed;
     state.init_bpm_speed = def_bpm.max(32);
@@ -78,7 +81,7 @@ pub fn load_xm(data: &[u8]) -> Result<LoadedModule, u16> {
     module.patterns = Vec::with_capacity(total_pats);
 
     for pat_idx in 0..num_patts {
-        if cursor + 9 > data.len() {
+        if cursor.checked_add(9).is_none_or(|e| e > data.len()) {
             return Err(ID_NO_MOD_FILE);
         }
         let pat_hdr_len = read_le_u32(data, cursor).unwrap_or(9) as usize;
@@ -320,6 +323,11 @@ pub fn load_xm(data: &[u8]) -> Result<LoadedModule, u16> {
                 volloopst = volloopst.wrapping_add(1);
                 volloopend = volloopend.wrapping_add(1);
             }
+            // BIT-EXACTNESS INVARIANT (99.97% PLAYER32.DLL Parity — DO NOT "FIX"):
+            // Sustain- und Loop-Punkt-Indizes (`volsustain`, `volloopst`, `volloopend` sowie
+            // Pan-Pendants unten) werden wie in `loaders.pas` Zeilen 1473–1499 bewusst NICHT
+            // gegen `numvolpts` / `numpanpts` geklammert (Fable-Review Pkt1-M5); `sequencer.rs`
+            // sichert den Array-Zugriff per `.get()` ohne Panic ab.
             if numvolpts > 12 {
                 numvolpts = 12;
             }
@@ -380,10 +388,13 @@ pub fn load_xm(data: &[u8]) -> Result<LoadedModule, u16> {
         let mut hdr_cursor = next_header_ofs;
         let first_k_for_inst = k_sample_idx;
         for _ in 0..num_samples {
-            if k_sample_idx > MAX_FT2_SAMPLES || hdr_cursor + 40 > data.len() {
+            let Some(sh_end) = hdr_cursor.checked_add(40).filter(|&e| e <= data.len()) else {
+                return Err(ID_INV_MOD_FILE);
+            };
+            if k_sample_idx > MAX_FT2_SAMPLES {
                 return Err(ID_INV_MOD_FILE);
             }
-            let sh = &data[hdr_cursor..hdr_cursor + 40];
+            let sh = &data[hdr_cursor..sh_end];
             hdr_cursor = hdr_cursor
                 .checked_add(sample_header_size.max(40))
                 .ok_or(ID_INV_MOD_FILE)?;

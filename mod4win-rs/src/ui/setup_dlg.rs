@@ -1221,12 +1221,20 @@ impl Mod4WinApp {
         }
         {
             let mut st = self.shared_state.lock().unwrap();
+            let old_hotkeys = st.ini_config.hotkeys.clone();
             let old_peaks = st.ini_config.peaks.clone();
             let old_win_pos = st.ini_config.window_positions.clone();
+            let old_open_wins = st.ini_config.saved_open_windows.clone();
             let old_x_main = st.ini_config.x_main;
             let old_y_main = st.ini_config.y_main;
             let old_x_mini = st.ini_config.x_mini;
             let old_y_mini = st.ini_config.y_mini;
+            let old_mini_state = st.ini_config.mini_state;
+            let old_pl_rows = st.ini_config.modern_playlist_rows;
+            let old_last_dir = st.ini_config.last_dir.clone();
+            let old_last_fm_dir = st.ini_config.last_fm_dir.clone();
+            let old_saved_playing = st.ini_config.saved_playing;
+            let old_saved_paused = st.ini_config.saved_paused;
             let old_playlist = st.playlist.clone();
             let old_idx = st.playlist_idx;
             let old_pos = st.curr_pos;
@@ -1241,16 +1249,24 @@ impl Mod4WinApp {
             self.setup_cfg.amiga_filter = live_amiga;
             self.setup_cfg.dehiss = live_dehiss;
             st.ini_config = self.setup_cfg.clone();
-            if st.ini_config.peaks.is_empty() {
-                st.ini_config.peaks = old_peaks;
+            st.ini_config.hotkeys = old_hotkeys;
+            for (k, v) in old_peaks {
+                st.ini_config.peaks.insert(k, v);
             }
             for (k, v) in old_win_pos {
                 st.ini_config.window_positions.insert(k, v);
             }
+            st.ini_config.saved_open_windows = old_open_wins;
             st.ini_config.x_main = old_x_main;
             st.ini_config.y_main = old_y_main;
             st.ini_config.x_mini = old_x_mini;
             st.ini_config.y_mini = old_y_mini;
+            st.ini_config.mini_state = old_mini_state;
+            st.ini_config.modern_playlist_rows = old_pl_rows;
+            st.ini_config.last_dir = old_last_dir;
+            st.ini_config.last_fm_dir = old_last_fm_dir;
+            st.ini_config.saved_playing = old_saved_playing;
+            st.ini_config.saved_paused = old_saved_paused;
             st.ini_config.gui_scale = self.scale_factor.clamp(0.5, 4.0);
             st.ini_config.saved_playlist = old_playlist;
             st.ini_config.saved_playlist_idx = old_idx;

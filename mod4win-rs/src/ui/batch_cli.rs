@@ -115,12 +115,12 @@ pub fn load_input_module_bytes(
                 .map(|s| s.eq_ignore_ascii_case("zip"))
                 .unwrap_or(false)
             && let Ok(rel) = p.strip_prefix(parent_path) {
-                let entry_part = rel.to_string_lossy();
+                let entry_part = rel.to_string_lossy().replace('\\', "/");
                 let zip_bytes = fs::read(parent_path)?;
                 let entries = parse_zip_entries(&zip_bytes);
                 if let Some(target) = entries.iter().find(|e| {
-                    e.file_name.eq_ignore_ascii_case(&entry_part)
-                        || e.full_name.eq_ignore_ascii_case(&entry_part)
+                    e.file_name.replace('\\', "/").eq_ignore_ascii_case(&entry_part)
+                        || e.full_name.replace('\\', "/").eq_ignore_ascii_case(&entry_part)
                 }) {
                     let raw = extract_zip_entry_bytes(&zip_bytes, target).ok_or_else(|| {
                         format!(
@@ -205,10 +205,12 @@ pub fn run_headless_render_wav(
     let mod_title = String::from_utf8_lossy(&loaded_module.state.mi.mod_name[..mod_name_len])
         .trim()
         .to_string();
+    let file_type = loaded_module.state.mi.file_type;
+    let num_tracks = loaded_module.state.mi.num_tracks;
 
     let out_path = Path::new(&opts.output_wav);
     let rendered_frames =
-        export_module_to_wav_file(loaded_module.clone(), file_size_bytes, &mut cfg, out_path)?;
+        export_module_to_wav_file(loaded_module, file_size_bytes, &mut cfg, out_path)?;
     let elapsed_s = t0.elapsed().as_secs_f64().max(0.000_001);
     let audio_secs = rendered_frames as f64 / (cfg.sample_rate.max(1) as f64);
     let speedup = audio_secs / elapsed_s;
@@ -217,8 +219,6 @@ pub fn run_headless_render_wav(
     println!("MOD4WIN 2.40 Headless Direct-to-Disk Renderer (--render-wav)");
     println!("======================================================================");
     println!("Eingabe:     {} ({} Bytes)", display_label, file_size_bytes);
-    let file_type = loaded_module.state.mi.file_type;
-    let num_tracks = loaded_module.state.mi.num_tracks;
     println!(
         "Titel/Typ:   {} [{:?}, {} Ch]",
         if mod_title.is_empty() {
@@ -281,9 +281,16 @@ pub fn parse_wav_bytes_i16(raw: &[u8]) -> Result<ParsedWavData, String> {
         let sz =
             u32::from_le_bytes([raw[pos + 4], raw[pos + 5], raw[pos + 6], raw[pos + 7]]) as usize;
         let chunk_start = pos + 8;
-        let chunk_end = (chunk_start + sz).min(raw.len());
+        let chunk_end = chunk_start.saturating_add(sz).min(raw.len());
 
         if id == b"fmt " && chunk_end >= chunk_start + 16 {
+            let fmt_tag = u16::from_le_bytes([raw[chunk_start], raw[chunk_start + 1]]);
+            if fmt_tag != 1 {
+                return Err(format!(
+                    "Nicht unterstütztes WAV-Format-Tag {} (nur unkomprimiertes PCM = 1 erlaubt)",
+                    fmt_tag
+                ));
+            }
             channels = u16::from_le_bytes([raw[chunk_start + 2], raw[chunk_start + 3]]);
             sample_rate = u32::from_le_bytes([
                 raw[chunk_start + 4],
@@ -292,6 +299,12 @@ pub fn parse_wav_bytes_i16(raw: &[u8]) -> Result<ParsedWavData, String> {
                 raw[chunk_start + 7],
             ]);
             bits_per_sample = u16::from_le_bytes([raw[chunk_start + 14], raw[chunk_start + 15]]);
+            if !matches!(bits_per_sample, 8 | 16) {
+                return Err(format!(
+                    "Nicht unterstützte WAV-Bittiefe {} (nur 8- oder 16-Bit PCM erlaubt)",
+                    bits_per_sample
+                ));
+            }
         } else if id == b"LIST" {
             let slice = &raw[chunk_start..chunk_end];
             if slice.windows(4).any(|w| w == b"Lavf" || w == b"Lavc") {

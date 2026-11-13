@@ -1,4 +1,4 @@
-﻿param(
+param(
     [switch]$SkipBuild
 )
 
@@ -22,6 +22,8 @@ if ($IsLinux) {
     $env:XWIN_ARCH = "x86,x86_64"
 }
 
+$HadOrigTargetDir = Test-Path Env:\CARGO_TARGET_DIR
+$OrigTargetDir = $env:CARGO_TARGET_DIR
 $TargetDir = if ($env:CARGO_TARGET_DIR) {
     $env:CARGO_TARGET_DIR
 } elseif ($IsLinux -and (Test-Path "/var/tmp/mod4win-target")) {
@@ -29,6 +31,7 @@ $TargetDir = if ($env:CARGO_TARGET_DIR) {
 } else {
     Join-Path $CrateDir "target"
 }
+$env:CARGO_TARGET_DIR = $TargetDir
 
 $WinBin = if ($IsWindows) {
     Join-Path $TargetDir "release/mod4win-rs.exe"
@@ -38,6 +41,7 @@ $WinBin = if ($IsWindows) {
 $LinX64   = Join-Path $TargetDir "x86_64-unknown-linux-gnu/release/mod4win-rs"
 $LinArm64 = Join-Path $TargetDir "aarch64-unknown-linux-gnu/release/mod4win-rs"
 
+try {
 # 1. Release-Binaries aktualisieren (Cargo inkrementell schnell; via -SkipBuild nur neu verpacken)
 if (-not $SkipBuild -or (-not (Test-Path $WinBin))) {
     if ($IsWindows) {
@@ -48,6 +52,7 @@ if (-not $SkipBuild -or (-not (Test-Path $WinBin))) {
         cargo xwin build --release --target x86_64-pc-windows-msvc --manifest-path (Join-Path $CrateDir "Cargo.toml")
     }
     if ($LASTEXITCODE -ne 0) { throw "Windows Release-Build fehlgeschlagen!" }
+    if (-not (Test-Path $WinBin)) { throw "Erwartetes Windows-Binary nicht gefunden: $WinBin" }
 }
 
 if (-not $SkipBuild -or (-not (Test-Path $LinX64)) -or (-not (Test-Path $LinArm64))) {
@@ -58,6 +63,15 @@ if (-not $SkipBuild -or (-not (Test-Path $LinX64)) -or (-not (Test-Path $LinArm6
     }
     & $BuildLinuxScript
     if ($LASTEXITCODE -ne 0) { throw "Linux Cross-Build fehlgeschlagen!" }
+    if (-not (Test-Path $LinX64)) { throw "Erwartetes Linux-x64-Binary nicht gefunden: $LinX64" }
+    if (-not (Test-Path $LinArm64)) { throw "Erwartetes Linux-ARM64-Binary nicht gefunden: $LinArm64" }
+}
+} finally {
+    if ($HadOrigTargetDir) {
+        $env:CARGO_TARGET_DIR = $OrigTargetDir
+    } else {
+        Remove-Item Env:\CARGO_TARGET_DIR -ErrorAction SilentlyContinue
+    }
 }
 
 # 2. dist/-Ordner anlegen und Einzel-Binaries kopieren

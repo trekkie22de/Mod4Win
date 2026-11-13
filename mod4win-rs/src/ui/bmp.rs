@@ -80,12 +80,17 @@ impl BmpImage {
             .and_then(|px| px.checked_mul(4))
             .ok_or_else(|| "BMP-Puffergröße läuft über".to_string())?;
 
+        if !matches!(bpp, 1 | 4 | 8 | 24 | 32) {
+            return Err(format!("Nicht unterstützte BMP-Farbtiefe: {} bpp", bpp));
+        }
+
         // Farbpalette einlesen (falls bpp <= 8)
         let palette_entries = if bpp <= 8 {
+            let max_entries = 1usize << bpp;
             if clr_used != 0 {
-                clr_used as usize
+                (clr_used as usize).min(max_entries)
             } else {
-                1usize << bpp
+                max_entries
             }
         } else {
             0
@@ -93,8 +98,9 @@ impl BmpImage {
 
         let mut palette: Vec<[u8; 4]> = Vec::with_capacity(palette_entries);
         if palette_entries > 0 {
-            let pal_offset = 14 + dib_header_size;
-            if bytes.len() < pal_offset + palette_entries * 4 {
+            let pal_offset = 14usize.saturating_add(dib_header_size);
+            let pal_end = pal_offset.saturating_add(palette_entries * 4);
+            if bytes.len() < pal_end {
                 return Err("BMP-Datei zu kurz für Farbpalette".into());
             }
             for i in 0..palette_entries {

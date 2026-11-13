@@ -667,35 +667,51 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(1);
     }
 
+    let mut state_saver_load_failed = false;
     let (loaded_module, has_initial_module, initial_file_bytes) = if let Some(ref f_arg) = file_arg
     {
         let resolved_arg = mod4win_rs::ui::resolve_path_case_insensitive(Path::new(f_arg));
         let file_path = resolved_arg.as_path();
         println!("Lade Tracker-Modul: {}", file_path.display());
-        let (file_data, ext_opt) = match mod4win_rs::ui::read_module_bytes_universal(file_path) {
-            Ok(pair) => pair,
+        match mod4win_rs::ui::read_module_bytes_universal(file_path) {
+            Ok((file_data, ext_opt)) => {
+                let f_len = file_data.len() as u32;
+                match load_module_with_ext(&file_data, ext_opt.as_deref()) {
+                    Ok(m) => (m, true, f_len),
+                    Err(err_code) => {
+                        eprintln!("Fehler beim Laden des Moduls (Fehlercode: {}).", err_code);
+                        if restored_from_state_saver && !no_gui {
+                            state_saver_load_failed = true;
+                            (create_idle_module(), false, 0u32)
+                        } else {
+                            std::process::exit(1);
+                        }
+                    }
+                }
+            }
             Err(e) => {
                 eprintln!(
                     "Fehler: Datei '{}' konnte nicht gelesen werden: {}",
                     file_path.display(),
                     e
                 );
-                std::process::exit(1);
+                if restored_from_state_saver && !no_gui {
+                    state_saver_load_failed = true;
+                    (create_idle_module(), false, 0u32)
+                } else {
+                    std::process::exit(1);
+                }
             }
-        };
-        let f_len = file_data.len() as u32;
-        let m = match load_module_with_ext(&file_data, ext_opt.as_deref()) {
-            Ok(m) => m,
-            Err(err_code) => {
-                eprintln!("Fehler beim Laden des Moduls (Fehlercode: {}).", err_code);
-                std::process::exit(1);
-            }
-        };
-        (m, true, f_len)
+        }
     } else {
         println!("Starte MOD4WIN 3.10 ohne Startdatei (bereit für Drag & Drop / Open)...");
         (create_idle_module(), false, 0u32)
     };
+    if state_saver_load_failed {
+        restored_from_state_saver = false;
+        file_arg = None;
+        seek_pattern = None;
+    }
 
     let mod_name_len = loaded_module.state.mi.mod_name_len as usize;
     let mod_name_bytes = loaded_module.state.mi.mod_name;
@@ -746,8 +762,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // SoundSettings für die MOD4WIN Audio-Engine anpassen (alle Parameter zuverlässig aus MOD4WIN.INI übernehmen!)
+    // Engine-Samplerate bleibt auf 4000..=48000 Hz begrenzt (wie in `apply_live_sound_settings`),
+    // damit `num_samples` niemals `MAX_MIX_BUF_SAMPLES` (2000) überschreitet; höhere OS-Sampleraten
+    // (z. B. 88.2 / 96 kHz) übernimmt der äußere Linear-Resampler in `live_audio.rs`.
     let mut settings = SoundSettings::default();
-    settings.samplerate = ini_cfg.sample_rate.clamp(4000, 96000) as i32;
+    settings.samplerate = ini_cfg.sample_rate.clamp(4000, 48000) as i32;
     settings.stereo = ini_cfg.channels.clamp(1, 2);
     settings.bits = if ini_cfg.bits_per_sample == 8 { 8 } else { 16 };
     settings.surround = ini_cfg.surround && settings.stereo == 2;
@@ -799,6 +818,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     init_ui_state
         .cpu_telemetry
         .reset_buffer(init_ui_state.ini_config.output_buffers);
+    if state_saver_load_failed {
+        init_ui_state.set_status_banner("SAVED FILE NOT FOUND".to_string());
+    }
     if cli_cpu_sim.is_some() || cli_authentic_stutter {
         let prof = CpuProfile::from_u8(init_ui_state.ini_config.cpu_sim_profile);
         let banner = prof.lcd_banner_with_stutter(init_ui_state.ini_config.authentic_stutter);
@@ -886,7 +908,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .ini_config
                 .saved_playlist_idx
                 .min(init_ui_state.playlist.len().saturating_sub(1));
-        } else if let Some(parent_dir) = file_path.parent() {
+        } else if let Some(raw_parent) = file_path.parent() {
+            let parent_dir = if raw_parent.as_os_str().is_empty() {
+                Path::new(".")
+            } else {
+                raw_parent
+            };
             // Playlist aus dem aktuellen Verzeichnis aufbauen
             if let Ok(entries) = std::fs::read_dir(parent_dir) {
                 let mut list: Vec<std::path::PathBuf> = entries
@@ -894,7 +921,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .filter(|p| UiSharedState::is_tracker_file(p))
                     .collect();
                 list.sort();
-                if let Some(pos) = list.iter().position(|p| p == file_path) {
+                if let Some(pos) = list.iter().position(|p| {
+                    p == file_path
+                        || (raw_parent.as_os_str().is_empty()
+                            && p.file_name() == file_path.file_name())
+                }) {
                     init_ui_state.playlist_idx = pos;
                 }
                 init_ui_state.playlist = list;
@@ -1285,8 +1316,13 @@ fn create_initial_sequencer(
     if let Some(target_pat) = seek_pattern {
         sequencer.seek_to_pattern(target_pat);
         let actual_pat = sequencer.module.state.curr_pattern + 1;
-        let phys_pat =
-            sequencer.module.state.p_arrangement[sequencer.module.state.curr_pattern as usize];
+        let phys_pat = sequencer
+            .module
+            .state
+            .p_arrangement
+            .get(sequencer.module.state.curr_pattern as usize)
+            .copied()
+            .unwrap_or(0);
         println!(
             "Springe zu Pattern {} (Order {}, physisches Pattern {}, Speed {}, BPM {})",
             actual_pat,

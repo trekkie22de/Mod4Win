@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     Baut das echte 32-Bit 80486 / Windows 3.11 (Win32s 1.30c) / Windows 95 Retro-Binary `MOD4WIN32.EXE`.
 .DESCRIPTION
@@ -11,6 +11,8 @@
 $ErrorActionPreference = "Stop"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$HadOrigTargetDir = Test-Path Env:\CARGO_TARGET_DIR
+$OrigTargetDir = $env:CARGO_TARGET_DIR
 $TargetDir = if ($env:CARGO_TARGET_DIR) {
     $env:CARGO_TARGET_DIR
 } elseif ($IsLinux -and (Test-Path "/var/tmp/mod4win-target")) {
@@ -22,6 +24,7 @@ $TargetDir = if ($env:CARGO_TARGET_DIR) {
 $OrigPath = $env:PATH
 Push-Location $ScriptDir
 try {
+    $env:CARGO_TARGET_DIR = $TargetDir
     if ($IsLinux) {
         $PathSep = [System.IO.Path]::PathSeparator
         $env:PATH = "/usr/local/bin$PathSep$HOME/.cargo/bin$PathSep$env:PATH"
@@ -50,6 +53,9 @@ try {
     }
 
     $SrcExe = Join-Path $TargetDir "i486-win32s-windows-msvc/release/mod4win-rs.exe"
+    if (-not (Test-Path $SrcExe)) {
+        throw "Erwartetes Retro-Binary wurde nicht unter '$SrcExe' erzeugt!"
+    }
     $DstExe = Join-Path $ScriptDir "MOD4WIN32.EXE"
     Copy-Item -Path $SrcExe -Destination $DstExe -Force
 
@@ -90,6 +96,11 @@ try {
     Write-Host "[3/3] Fertig: $DstExe & $DstExe83 ($sizeKb KB)" -ForegroundColor Green
 } finally {
     $env:PATH = $OrigPath
+    if ($HadOrigTargetDir) {
+        $env:CARGO_TARGET_DIR = $OrigTargetDir
+    } else {
+        Remove-Item Env:\CARGO_TARGET_DIR -ErrorAction SilentlyContinue
+    }
     Remove-Item Env:\RUSTFLAGS -ErrorAction SilentlyContinue
     Remove-Item Env:\RUSTC_BOOTSTRAP -ErrorAction SilentlyContinue
     Remove-Item Env:\RUST_TARGET_PATH -ErrorAction SilentlyContinue

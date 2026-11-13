@@ -305,6 +305,11 @@ pub fn load_instrument_into_sample_mem_with_top(
         *loop_end = 0;
     }
 
+    // BIT-EXACTNESS INVARIANT (99.97% PLAYER32.DLL Parity — DO NOT "FIX"):
+    // Ungerade Byte-Grenzen (`*iend`, `*loop_start`, `*loop_end`) bei 16-Bit-Samples werden hier
+    // bewusst NICHT mit `& !1` gerade gerundet (Carbon-Review MITTEL-LOADER-2). `loaders.pas`
+    // übernimmt diese Byte-Längen 1:1 ungerundet in das `< 1024`-Kurzloop-Unrolling; eine Rundung
+    // verschiebt die Loop-Phase historischer `.XM`/`.MTM`/`.FAR`-Module gegenüber `PLAYER32.DLL`.
     let is_16bit = (bits & 0x1F) == 16;
     let mut pcm = convert_sample_stage1(&raw_bytes[..(*iend as usize)], ins_type);
 

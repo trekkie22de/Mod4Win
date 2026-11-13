@@ -219,9 +219,11 @@ impl ItVoiceFilter {
         // Original it2play / IT 2.14 Frequenz-Formel:
         // f_c = 110 Hz * 2^((Cutoff - 128) / 24 + 5.5833) = 110 Hz * 2^(0.25 + Cutoff / 24)
         let mut fc = 110.0 * 2.0f64.powf(0.25 + (eff_cut as f64) / 24.0);
-        let nyquist = sr * 0.49;
-        if fc > nyquist {
-            fc = nyquist;
+        // Bei niedrigen Mix-Sampleraten (z. B. <= 16 kHz) muss fc auf <= 0.33 * sr begrenzt werden,
+        // da die 2-Pol-Bilinear-/IT-Approximation bei hohen Resonanzen nahe Nyquist sonst instabil wird.
+        let max_fc = sr * 0.33;
+        if fc > max_fc {
+            fc = max_fc;
         }
 
         let r = sr / (2.0 * PI * fc);
@@ -1117,6 +1119,9 @@ impl ItEngine {
 
             if self.row_delay > 0 {
                 self.row_delay -= 1;
+            }
+            if self.row_delay > 0 {
+                // SEx Pattern-Delay noch aktiv: auf derselben Zeile bleiben (ohne Re-Trigger)
             } else if self.break_order.is_some() || self.break_row.is_some() {
                 let prev_ord = self.curr_order;
                 let next_ord = self.break_order.take().unwrap_or(self.curr_order + 1);
@@ -1159,14 +1164,16 @@ impl ItEngine {
         if self.curr_row >= pat.num_rows {
             self.curr_row = 0;
         }
-        let row_cells = pat.rows[self.curr_row as usize];
+        let Some(&row_cells) = pat.rows.get(self.curr_row as usize) else {
+            return;
+        };
 
         for ch in 0..MAX_IT_HOST_CHANNELS {
             let cell = row_cells[ch];
             self.host_channels[ch].cell = cell;
 
-            // Prüfe auf Note Delay (`SDx` mit `x > 0`):
-            if cell.command == 19 && (cell.param >> 4) == 0x0D && (cell.param & 0x0F) > 0 {
+            // Prüfe auf Note Delay (`SDx`; in IT 2.14 verzögert `SD0` wie `SD1` auf Tick 1):
+            if cell.command == 19 && (cell.param >> 4) == 0x0D {
                 continue;
             }
 
@@ -1178,6 +1185,11 @@ impl ItEngine {
         for ch in 0..MAX_IT_HOST_CHANNELS {
             let cell = self.host_channels[ch].cell;
             self.apply_volume_column_tick0(it, ch, cell.vol_cmd, false);
+            // Während SEx-Wiederholungszeilen dürfen SBx (Pattern Loop) und SEx (Pattern Delay)
+            // nicht erneut ausgewertet werden (verhindert Endlosschleifen bzw. verdoppelte Loop-Zähler).
+            if cell.command == 19 && matches!(cell.param >> 4, 0x0B | 0x0E) {
+                continue;
+            }
             self.apply_command_tick0(it, state, ch, cell.command, cell.param, false);
         }
     }
@@ -1870,9 +1882,9 @@ impl ItEngine {
                         }
                     }
                     0x0E => {
-                        // SEx: Pattern Delay (in Zeilen)
-                        if self.row_delay == 0 {
-                            self.row_delay = val;
+                        // SEx: Pattern Delay (in Zeilen): 1 Original-Durchlauf + val Wiederholungen
+                        if self.row_delay == 0 && val > 0 {
+                            self.row_delay = val.saturating_add(1);
                         }
                     }
                     0x0F => {
@@ -2466,7 +2478,11 @@ impl ItEngine {
             }
 
             let base_f = self.voices[v_idx].base_freq;
-            self.voices[v_idx].freq = Self::slide_freq(base_f, total_freq_units, linear_slides);
+            let _ = linear_slides;
+            // Alle vier Modulationen (`auto_vib_units`, `tick_freq_delta` aus Arpeggio/Vibrato,
+            // sowie `pitch_env`) sind in linearen 1/64-Halbton-Einheiten (768 pro Oktave) skaliert;
+            // Portamento-Slides (`Exx`/`Fxx`/`Gxx`) nutzen weiterhin `linear_slides` auf `base_freq`.
+            self.voices[v_idx].freq = Self::slide_freq(base_f, total_freq_units, true);
 
             // End-Lautstärke (`fvol` in 0..=16384)
             let hc_muted = self.host_channels[host_idx].muted
@@ -2735,6 +2751,13 @@ impl ItEngine {
                 }
                 let pos = self.voices[v_idx].sample_pos;
                 let frac = self.voices[v_idx].sample_frac as i32; // 0..65535
+                let is_guard_frame = f_idx >= buf_samples;
+                let saved_filter_state = if is_guard_frame {
+                    let flt = &self.voices[v_idx].filter;
+                    Some((flt.y1_l, flt.y2_l, flt.y1_r, flt.y2_r))
+                } else {
+                    None
+                };
 
                 let raw_l = Self::resample_point(pcm_l, smp, pos, frac, oversamp_mode) as f32;
                 let filt_l = self.voices[v_idx].filter.process_left(raw_l) as i32;
@@ -2746,6 +2769,14 @@ impl ItEngine {
                 } else {
                     filt_l
                 };
+
+                if let Some((y1_l, y2_l, y1_r, y2_r)) = saved_filter_state {
+                    let flt = &mut self.voices[v_idx].filter;
+                    flt.y1_l = y1_l;
+                    flt.y2_l = y2_l;
+                    flt.y1_r = y1_r;
+                    flt.y2_r = y2_r;
+                }
 
                 if !silent {
                     const ACC_MAX: i64 = (i32::MAX - 1) as i64;
@@ -2849,10 +2880,10 @@ impl ItEngine {
         match oversamp_mode {
             0 | 4 => Self::get_clamped_sample(pcm, smp, pos),
             1 => {
-                // MOD4WIN IDO 1 (Linear IDO)
+                // MOD4WIN IDO 1 (Linear IDO — i64 verhindert i32-Überlauf bei Full-Scale-Sprung * 65535)
                 let s0 = Self::get_clamped_sample(pcm, smp, pos);
                 let s1 = Self::get_clamped_sample(pcm, smp, pos + 1);
-                s0 + (((s1 - s0) * frac) >> 16)
+                s0 + ((((s1 - s0) as i64 * frac as i64) >> 16) as i32)
             }
             2 => {
                 // MOD4WIN IDO 2 (32-Bit Integer Cubic-Spline aus `@Cs16HiS` in `dacmix.pas`)

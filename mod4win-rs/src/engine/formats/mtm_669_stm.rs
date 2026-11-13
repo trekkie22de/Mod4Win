@@ -63,6 +63,10 @@ pub fn load_mtm(data: &[u8]) -> Result<LoadedModule, u16> {
         state.def_panning[i] = data[34 + i] * 17;
     }
 
+    // BIT-EXACTNESS INVARIANT (99.97% PLAYER32.DLL Parity — DO NOT "FIX"):
+    // `ptrn_breaks` wird wie in `loaders.pas` Zeile 1577 bewusst ungeklammert gegen die feste
+    // 64-Zeilen-Patternlänge übernommen (Fable-Review Pkt1-M5); `sequencer.rs` fängt Zeilen-OOBs
+    // zur Laufzeit per `.get()` sicher ab.
     let pat_break = if beat_per_trck == 0 {
         63
     } else {

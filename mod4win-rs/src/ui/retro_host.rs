@@ -1808,6 +1808,23 @@ unsafe extern "system" fn retro_wnd_proc(
             return 0;
         }
         WM_MOUSEMOVE => {
+            // Falls die linke Maustaste außerhalb/durch Fokusverlust losgelassen wurde (`MK_LBUTTON == 0x0001`),
+            // hängendes Fenster-Drag/Resize sauber beenden!
+            if (w_param & 0x0001) == 0 {
+                let was_dragging = HOST_STATE.with(|cell| {
+                    let mut st = cell.borrow_mut();
+                    let active = !matches!(st.drag_mode, DragMode::None);
+                    if active {
+                        st.drag_mode = DragMode::None;
+                    }
+                    active
+                });
+                if was_dragging {
+                    unsafe {
+                        ReleaseCapture();
+                    }
+                }
+            }
             // Prüfen, ob gerade ein Fenster gezogen oder an der Kante skaliert wird
             let active_drag = HOST_STATE.with(|cell| cell.borrow().drag_mode);
             match active_drag {
@@ -1980,6 +1997,9 @@ unsafe extern "system" fn retro_wnd_proc(
             let kev =
                 translate_vk_to_key_event(w_param as UINT, l_param, event::ElementState::Pressed);
             queue_window_event(win_id, event::WindowEvent::KeyboardInput { event: kev });
+            if msg == WM_SYSKEYDOWN {
+                return unsafe { DefWindowProcA(hwnd, msg, w_param, l_param) };
+            }
             return 0;
         }
         WM_KEYUP | WM_SYSKEYUP => {
@@ -1990,6 +2010,9 @@ unsafe extern "system" fn retro_wnd_proc(
             let kev =
                 translate_vk_to_key_event(w_param as UINT, l_param, event::ElementState::Released);
             queue_window_event(win_id, event::WindowEvent::KeyboardInput { event: kev });
+            if msg == WM_SYSKEYUP {
+                return unsafe { DefWindowProcA(hwnd, msg, w_param, l_param) };
+            }
             return 0;
         }
         WM_DROPFILES => {

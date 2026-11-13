@@ -580,6 +580,28 @@ impl Mod4WinApp {
     pub(crate) fn handle_key_press(&mut self, event_loop: &ActiveEventLoop, event: &KeyEvent) {
         // 0. Wenn gerade eine F7/F8 Sicherheitsabfrage offen ist:
         if let Some(action) = self.confirm_action {
+            if event.repeat {
+                return;
+            }
+            if action == ConfirmAction::DeleteFromDisk {
+                match &event.logical_key {
+                    Key::Named(NamedKey::Enter)
+                    | Key::Named(NamedKey::Escape)
+                    | Key::Named(NamedKey::Space) => {
+                        self.confirm_action = None;
+                        self.close_window(WindowKind::ConfirmDialog);
+                    }
+                    Key::Character(ch) => {
+                        let c = ch.chars().next().unwrap_or('\0').to_ascii_uppercase();
+                        if c == 'O' {
+                            self.confirm_action = None;
+                            self.close_window(WindowKind::ConfirmDialog);
+                        }
+                    }
+                    _ => {}
+                }
+                return;
+            }
             match &event.logical_key {
                 Key::Named(NamedKey::Enter) => {
                     self.confirm_action = None;
@@ -608,9 +630,13 @@ impl Mod4WinApp {
             }
         }
 
-        // Kontextsensitives F1 (außer während der Tastenzuweisung im Hotkey-Editor):
+        // Kontextsensitives F1 (ohne Modifikatoren, außer während der Tastenzuweisung im Hotkey-Editor):
         // Öffnet den integrierten WinHelp-Viewer direkt beim Thema des aktiven Dialogfensters!
-        if matches!(&event.logical_key, Key::Named(NamedKey::F1))
+        if !event.repeat
+            && matches!(&event.logical_key, Key::Named(NamedKey::F1))
+            && !self.modifiers.state().control_key()
+            && !self.modifiers.state().alt_key()
+            && !self.modifiers.state().shift_key()
             && !(self.kind_to_id.contains_key(&WindowKind::HotkeyEditor) && self.hotkey_dlg.capturing)
         {
             let topic = self.context_help_topic_for_window(self.active_window_kind);
@@ -771,6 +797,17 @@ impl Mod4WinApp {
                         }
                         return;
                     }
+                    Key::Named(NamedKey::Space) => {
+                        let target = match self.archive_dlg.more_edit_focus {
+                            0 => &mut self.archive_dlg.more_cmd_extract,
+                            1 => &mut self.archive_dlg.more_cmd_pack,
+                            _ => &mut self.archive_dlg.more_cmd_del,
+                        };
+                        if target.len() < 80 {
+                            target.push(' ');
+                        }
+                        return;
+                    }
                     Key::Character(ch) => {
                         for c in ch.chars() {
                             if !c.is_control() {
@@ -811,6 +848,21 @@ impl Mod4WinApp {
                         s.pop();
                         return;
                     }
+                    Key::Named(NamedKey::Space) => {
+                        let is_pack = self.archive_dlg.pack_mode[arc_row.min(2)];
+                        let s = match (arc_row, is_pack) {
+                            (0, false) => &mut self.setup_cfg.arj_unpack,
+                            (0, true) => &mut self.setup_cfg.arj_pack,
+                            (1, false) => &mut self.setup_cfg.zip_unpack,
+                            (1, true) => &mut self.setup_cfg.zip_pack,
+                            (_, false) => &mut self.setup_cfg.lha_unpack,
+                            (_, true) => &mut self.setup_cfg.lha_pack,
+                        };
+                        if s.len() < 120 {
+                            s.push(' ');
+                        }
+                        return;
+                    }
                     Key::Character(ch) => {
                         let is_pack = self.archive_dlg.pack_mode[arc_row.min(2)];
                         let s = match (arc_row, is_pack) {
@@ -848,6 +900,12 @@ impl Mod4WinApp {
                     }
                     Key::Named(NamedKey::Backspace) => {
                         self.file_man_dlg.target_path_edit.pop();
+                        return;
+                    }
+                    Key::Named(NamedKey::Space) => {
+                        if self.file_man_dlg.target_path_edit.len() < 120 {
+                            self.file_man_dlg.target_path_edit.push(' ');
+                        }
                         return;
                     }
                     Key::Character(ch) => {
@@ -904,6 +962,21 @@ impl Mod4WinApp {
                     }
                     return;
                 }
+                Key::Named(NamedKey::Space) => {
+                    match self.wav_ask_dlg.focus {
+                        WavAskEditFocus::Path => {
+                            if self.wav_ask_dlg.path.len() < 120 {
+                                self.wav_ask_dlg.path.push(' ');
+                            }
+                        }
+                        WavAskEditFocus::Filename => {
+                            if self.wav_ask_dlg.filename.len() < 8 {
+                                self.wav_ask_dlg.filename.push(' ');
+                            }
+                        }
+                    }
+                    return;
+                }
                 Key::Character(ch) => {
                     for c in ch.chars() {
                         if !c.is_control() {
@@ -953,6 +1026,22 @@ impl Mod4WinApp {
                         }
                         SetupEditFocus::MixPath => {
                             self.setup_cfg.mixer_path.pop();
+                        }
+                        SetupEditFocus::None => {}
+                    }
+                    return;
+                }
+                Key::Named(NamedKey::Space) => {
+                    match self.setup_edit_focus {
+                        SetupEditFocus::RecPath => {
+                            if self.setup_cfg.hd_path.len() < 120 {
+                                self.setup_cfg.hd_path.push(' ');
+                            }
+                        }
+                        SetupEditFocus::MixPath => {
+                            if self.setup_cfg.mixer_path.len() < 120 {
+                                self.setup_cfg.mixer_path.push(' ');
+                            }
                         }
                         SetupEditFocus::None => {}
                     }
@@ -1013,6 +1102,22 @@ impl Mod4WinApp {
                         self.open_dlg.filter_fresh = false;
                     } else {
                         self.open_dlg.filter_mask.pop();
+                    }
+                    return;
+                }
+                Key::Named(NamedKey::Space) => {
+                    if self.open_dlg.saving_mol {
+                        if self.open_dlg.save_mol_name.len() < 32 {
+                            self.open_dlg.save_mol_name.push(' ');
+                        }
+                    } else if self.open_dlg.editing_filter || self.open_dlg.editing_right_filter {
+                        if self.open_dlg.filter_fresh {
+                            self.open_dlg.filter_mask.clear();
+                            self.open_dlg.filter_fresh = false;
+                        }
+                        if self.open_dlg.filter_mask.len() < 16 {
+                            self.open_dlg.filter_mask.push(' ');
+                        }
                     }
                     return;
                 }
@@ -1435,7 +1540,31 @@ impl Mod4WinApp {
                 }
             }
 
+        // Offene Popups/Menüs (`SysMenu`, `FileMenu`, `About`) zuerst per Escape schließen,
+        // bevor die Hotkey-Tabelle `ESCAPE -> Stop playback` auslöst.
+        if !event.repeat && matches!(&event.logical_key, Key::Named(NamedKey::Escape)) {
+            if self.sys_menu_open {
+                self.sys_menu_open = false;
+                self.sys_menu_hover = None;
+                return;
+            }
+            if self.file_menu_open {
+                self.file_menu_open = false;
+                self.file_menu_hover = None;
+                self.close_window(WindowKind::FileMenu);
+                return;
+            }
+            if self.kind_to_id.contains_key(&WindowKind::About) {
+                self.close_window(WindowKind::About);
+                return;
+            }
+        }
+
         // 0g. Benutzerdefinierte Hotkeys aus `state.ini_config.hotkeys` (`KEYSEL.PAS`) prüfen:
+        let has_hotkey_table = {
+            let st = self.shared_state.lock().unwrap();
+            !st.ini_config.hotkeys.is_empty()
+        };
         if let Some((_, kname)) = Self::key_event_to_vkey_and_name(event) {
             let mut st_bits = 0u8;
             if ctrl {
@@ -1455,20 +1584,25 @@ impl Mod4WinApp {
                     .find(|hk| hk.key_name.eq_ignore_ascii_case(&kname) && hk.state == st_bits)
                     .map(|hk| hk.action_id)
             };
-            if let Some(act_id) = matched_action_id
-                && self.execute_hotkey_event(event_loop, act_id) {
+            if let Some(act_id) = matched_action_id {
+                let repeatable = matches!(act_id, 4..=7 | 33..=36 | 41..=42);
+                if event.repeat && !repeatable {
                     return;
                 }
+                if self.execute_hotkey_event(event_loop, act_id) {
+                    return;
+                }
+            }
         }
 
         // 1. Numpad / und Numpad * für PreAmp sowie 1..0 für Kanal-Mute
         if let PhysicalKey::Code(code) = event.physical_key {
             match code {
-                KeyCode::NumpadDivide => {
+                KeyCode::NumpadDivide if !has_hotkey_table && !ctrl && !alt && !shift => {
                     self.step_preamp_db(-2);
                     return;
                 }
-                KeyCode::NumpadMultiply => {
+                KeyCode::NumpadMultiply if !has_hotkey_table && !ctrl && !alt && !shift => {
                     self.step_preamp_db(2);
                     return;
                 }
@@ -1483,6 +1617,9 @@ impl Mod4WinApp {
                 | KeyCode::Digit8
                 | KeyCode::Digit9
                 | KeyCode::Digit0 => {
+                    if event.repeat {
+                        return;
+                    }
                     if alt && !ctrl && !shift {
                         match code {
                             KeyCode::Digit1 => {
@@ -1497,8 +1634,11 @@ impl Mod4WinApp {
                                 self.set_scale_factor_live(3.0);
                                 return;
                             }
-                            _ => {}
+                            _ => return,
                         }
+                    }
+                    if alt {
+                        return;
                     }
                     let base = match code {
                         KeyCode::Digit1 => 0,
@@ -1531,28 +1671,44 @@ impl Mod4WinApp {
             }
         }
 
+        // Zusätzliche Tastenkürzel außerhalb der 43er `KEYSEL.PAS`-Tabelle (`G` = Skin wechseln, `-`/`+` = PreAmp):
+        if let Key::Character(ch) = &event.logical_key
+            && !ctrl
+            && !alt
+        {
+            let c = ch.chars().next().unwrap_or('\0').to_ascii_uppercase();
+            match c {
+                'G' if !shift => {
+                    if !event.repeat {
+                        self.cycle_skin_live();
+                    }
+                    return;
+                }
+                '/' | '-' if !has_hotkey_table => {
+                    self.step_preamp_db(-2);
+                    return;
+                }
+                '*' | '+' if !has_hotkey_table => {
+                    self.step_preamp_db(2);
+                    return;
+                }
+                _ => {}
+            }
+        }
+
+        // Fallback-Hotkeys greifen NUR, wenn `ini_config.hotkeys` leer ist (damit umbelegte/gelöschte Hotkeys
+        // respektiert werden) und KEINE Modifikatoren (`Ctrl`/`Alt`/`Shift`) gedrückt sind (verhindert z. B. `Alt+F4` -> `F4`).
+        if has_hotkey_table || ctrl || alt || shift {
+            return;
+        }
+
         match &event.logical_key {
             // Space = Play
-            Key::Named(NamedKey::Space) => {
+            Key::Named(NamedKey::Space) if !event.repeat => {
                 self.trigger_play_or_hdd_record(event_loop);
             }
-            // ESC = Stop (oder schließt About / File-Menü / System-Menü)
-            Key::Named(NamedKey::Escape) => {
-                if self.sys_menu_open {
-                    self.sys_menu_open = false;
-                    self.sys_menu_hover = None;
-                    return;
-                }
-                if self.file_menu_open {
-                    self.file_menu_open = false;
-                    self.file_menu_hover = None;
-                    self.close_window(WindowKind::FileMenu);
-                    return;
-                }
-                if self.kind_to_id.contains_key(&WindowKind::About) {
-                    self.close_window(WindowKind::About);
-                    return;
-                }
+            // ESC = Stop
+            Key::Named(NamedKey::Escape) if !event.repeat => {
                 let mut state = self.shared_state.lock().unwrap();
                 state.intro_scan = false;
                 state.is_playing = false;
@@ -1572,68 +1728,68 @@ impl Mod4WinApp {
                 state.pending_seek_delta += 1;
             }
             // Pos1 / Ende = Erster / Letzter Song (bzw. Pattern)
-            Key::Named(NamedKey::Home) => {
+            Key::Named(NamedKey::Home) if !event.repeat => {
                 let _ = self.execute_hotkey_event(event_loop, 8);
             }
-            Key::Named(NamedKey::End) => {
+            Key::Named(NamedKey::End) if !event.repeat => {
                 let _ = self.execute_hotkey_event(event_loop, 9);
             }
             // Bild Hoch / Bild Runter = Dateiname / Songname
-            Key::Named(NamedKey::PageUp) => {
+            Key::Named(NamedKey::PageUp) if !event.repeat => {
                 let mut state = self.shared_state.lock().unwrap();
                 state.show_filename = true;
                 state.sync_runtime_to_ini();
             }
-            Key::Named(NamedKey::PageDown) => {
+            Key::Named(NamedKey::PageDown) if !event.repeat => {
                 let mut state = self.shared_state.lock().unwrap();
                 state.show_filename = false;
                 state.sync_runtime_to_ini();
             }
             // Einfg = Panning ein/aus
-            Key::Named(NamedKey::Insert) => {
+            Key::Named(NamedKey::Insert) if !event.repeat => {
                 let _ = self.execute_hotkey_event(event_loop, 32);
             }
             // F2 = Shuffle, F3 = Repeat-Modus, F4 = 15s Introscan
-            Key::Named(NamedKey::F2) => {
+            Key::Named(NamedKey::F2) if !event.repeat => {
                 let _ = self.execute_hotkey_event(event_loop, 21);
             }
-            Key::Named(NamedKey::F3) => {
+            Key::Named(NamedKey::F3) if !event.repeat => {
                 let _ = self.execute_hotkey_event(event_loop, 22);
             }
-            Key::Named(NamedKey::F4) => {
+            Key::Named(NamedKey::F4) if !event.repeat => {
                 let _ = self.execute_hotkey_event(event_loop, 23);
             }
             // F5 = Copy, F6 = Move/Rename, F7 = Remove From Playlist, F8 = Delete from Disk
-            Key::Named(NamedKey::F5) => {
+            Key::Named(NamedKey::F5) if !event.repeat => {
                 let _ = self.execute_hotkey_event(event_loop, 24);
             }
-            Key::Named(NamedKey::F6) => {
+            Key::Named(NamedKey::F6) if !event.repeat => {
                 let _ = self.execute_hotkey_event(event_loop, 25);
             }
-            Key::Named(NamedKey::F7) => {
+            Key::Named(NamedKey::F7) if !event.repeat => {
                 let _ = self.execute_hotkey_event(event_loop, 26);
             }
-            Key::Named(NamedKey::F8) => {
+            Key::Named(NamedKey::F8) if !event.repeat => {
                 let _ = self.execute_hotkey_event(event_loop, 27);
             }
             // F9 = Clipping ein/aus
-            Key::Named(NamedKey::F9) => {
+            Key::Named(NamedKey::F9) if !event.repeat => {
                 let _ = self.execute_hotkey_event(event_loop, 28);
             }
             // F10 = BPM-Speed ein/aus
-            Key::Named(NamedKey::F10) => {
+            Key::Named(NamedKey::F10) if !event.repeat => {
                 let _ = self.execute_hotkey_event(event_loop, 29);
             }
             // F11 = Surround ein/aus
-            Key::Named(NamedKey::F11) => {
+            Key::Named(NamedKey::F11) if !event.repeat => {
                 let _ = self.execute_hotkey_event(event_loop, 30);
             }
             // F12 = IDO-Modus durchschalten (0 = IDO OFF, 1 = IDO Linear, 2 = IDO CPU-Cubic, 3 = IDO FPU-Cubic)
-            Key::Named(NamedKey::F12) => {
+            Key::Named(NamedKey::F12) if !event.repeat => {
                 let _ = self.execute_hotkey_event(event_loop, 31);
             }
-            // Buchstaben-Hotkeys (nur ohne Strg / Alt)
-            Key::Character(ch) if !ctrl && !alt => {
+            // Buchstaben-Hotkeys (nur ohne Strg / Alt / Shift)
+            Key::Character(ch) if !event.repeat => {
                 let c = ch.chars().next().unwrap_or('\0').to_ascii_uppercase();
                 match c {
                     'P' => {
@@ -1649,14 +1805,9 @@ impl Mod4WinApp {
                     'S' => self.toggle_window(event_loop, WindowKind::SetupDialog),
                     'M' => self.spawn_external_mixer(),
                     'A' => self.toggle_window(event_loop, WindowKind::About),
-                    'G' => {
-                        self.cycle_skin_live();
-                    }
                     'T' => {
                         let _ = self.execute_hotkey_event(event_loop, 15);
                     }
-                    '/' | '-' => self.step_preamp_db(-2),
-                    '*' | '+' => self.step_preamp_db(2),
                     _ => {}
                 }
             }

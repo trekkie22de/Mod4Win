@@ -295,9 +295,14 @@ impl Mod4WinIniConfig {
         local
     }
 
-    /// Ermittelt den Standardpfad für `MOD4WIN.PKS` (binäre PeakSearch-Datenbank wie in `player32.pas`).
+    /// Ermittelt den Standardpfad für `MOD4WIN.PKS` (binäre PeakSearch-Datenbank wie in `player32.pas`,
+    /// im selben Verzeichnis wie `MOD4WIN.INI` bzw. neben der `.exe`).
     pub fn default_pks_path() -> PathBuf {
-        PathBuf::from("MOD4WIN.PKS")
+        let local = PathBuf::from("MOD4WIN.PKS");
+        if local.exists() {
+            return local;
+        }
+        Self::default_ini_path().with_file_name("MOD4WIN.PKS")
     }
 
     /// Berechnet den Speicherbedarf (`min. Memory` in KB) exakt nach der Formel aus `dsetup.pas`:
@@ -316,10 +321,16 @@ impl Mod4WinIniConfig {
     }
 
     /// Lädt `MOD4WIN.INI` von der Festplatte (oder gibt `Default` zurück, falls nicht vorhanden).
+    /// Unterstützt sowohl UTF-8 (mit/ohne BOM) als auch historische Windows-1252/Latin-1 Dateien aus MOD4WIN 2.40.
     pub fn load_from_file(path: &Path) -> Self {
         let mut cfg = Self::default();
-        let Ok(content) = fs::read_to_string(path) else {
+        let Ok(raw_bytes) = fs::read(path) else {
             return cfg;
+        };
+        let stripped = raw_bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(&raw_bytes);
+        let content: String = match std::str::from_utf8(stripped) {
+            Ok(s) => s.to_string(),
+            Err(_) => stripped.iter().map(|&b| b as char).collect(),
         };
 
         let mut current_section = String::new();
@@ -759,6 +770,13 @@ impl Mod4WinIniConfig {
             let _ = write!(out, "File{}={}\r\n", i, p.to_string_lossy());
         }
 
+        let tmp_path = path.with_extension("ini.tmp");
+        if fs::write(&tmp_path, out.as_bytes()).is_ok() {
+            if fs::rename(&tmp_path, path).is_ok() {
+                return Ok(());
+            }
+            let _ = fs::remove_file(&tmp_path);
+        }
         fs::write(path, out)
     }
 
@@ -895,7 +913,7 @@ pub fn export_module_to_wav_file(
             let _ = fs::create_dir_all(parent);
         }
 
-    let sr = ini_cfg.sample_rate.clamp(4000, 96000);
+    let sr = ini_cfg.sample_rate.clamp(4000, 48000);
     let ch = ini_cfg.channels.clamp(1, 2);
     let bits = if ini_cfg.bits_per_sample == 8 { 8u8 } else { 16u8 };
     let oversamp = ini_cfg.over_sampling.min(6);
@@ -930,27 +948,64 @@ pub fn export_module_to_wav_file(
         clip_bit | ini_cfg.pre_amplification.min(40)
     };
 
-    // 2. Exakter Tick-für-Tick Render-Durchlauf (1:1 identisch zu run_stage_comparison in --diff-suite)
+    // 2. Exakter Tick-für-Tick Streaming-Render-Durchlauf direkt in einen `BufWriter<File>`
+    //    (vermeidet OOM/190+ MB Heap-Spitzen auf 32-Bit/Retro-Systemen!)
+    use std::io::{BufWriter, Seek, SeekFrom, Write as IoWrite};
+
     let clip_bit = if ini_cfg.clipping { 0x80 } else { 0x00 };
     hdd_settings.pre_amp = clip_bit | (found_pre_amp & 0x7F);
     let mut render_seq = crate::engine::sequencer::Sequencer::new(loaded_module, hdd_settings);
     render_seq.module.state.repeat_song = false;
 
-    let samples_per_frame = ch as usize;
-    let mut all_pcm16: Vec<i16> = Vec::with_capacity((sr as usize) * 180 * samples_per_frame);
-    let mut all_pcm8: Vec<u8> = Vec::new();
+    let out_file = fs::File::create(wav_path)?;
+    let mut writer = BufWriter::with_capacity(64 * 1024, out_file);
+    writer.write_all(&[0u8; 44])?;
+
+    let samples_per_frame = (ch as usize).max(1);
+    let bytes_per_sample = (bits / 8) as usize;
+    let mut total_samples: usize = 0;
+    let mut pcm16_scratch: Vec<u8> = Vec::with_capacity(8192);
     let mut tick_idx = 0usize;
+
+    let mut write_mix_out = |mix_out: crate::engine::mixer::MixOutputBuffer,
+                             writer: &mut BufWriter<fs::File>,
+                             total_samples: &mut usize|
+     -> std::io::Result<()> {
+        match mix_out {
+            crate::engine::mixer::MixOutputBuffer::Pcm16(s) if bits == 16 => {
+                pcm16_scratch.clear();
+                pcm16_scratch.reserve(s.len() * 2);
+                for sample in s {
+                    pcm16_scratch.extend_from_slice(&sample.to_le_bytes());
+                }
+                let next_bytes = total_samples
+                    .saturating_add(pcm16_scratch.len() / 2)
+                    .saturating_mul(2);
+                if next_bytes > (u32::MAX as usize - 44) {
+                    return Err(std::io::Error::other("WAV-Export überschreitet 4-GB-RIFF-Grenze"));
+                }
+                writer.write_all(&pcm16_scratch)?;
+                *total_samples += pcm16_scratch.len() / 2;
+            }
+            crate::engine::mixer::MixOutputBuffer::Pcm8(b) if bits == 8 => {
+                let next_bytes = total_samples.saturating_add(b.len());
+                if next_bytes > (u32::MAX as usize - 44) {
+                    return Err(std::io::Error::other("WAV-Export überschreitet 4-GB-RIFF-Grenze"));
+                }
+                writer.write_all(&b)?;
+                *total_samples += b.len();
+            }
+            _ => {}
+        }
+        Ok(())
+    };
 
     while !render_seq.module.state.player_repeats && tick_idx < 500_000 {
         if let Some(mix_out) = render_seq.render_it_tick(None) {
             if render_seq.module.state.player_repeats {
                 break;
             }
-            match mix_out {
-                crate::engine::mixer::MixOutputBuffer::Pcm16(s) => all_pcm16.extend_from_slice(&s),
-                crate::engine::mixer::MixOutputBuffer::Pcm8(b) => all_pcm8.extend_from_slice(&b),
-                _ => {}
-            }
+            write_mix_out(mix_out, &mut writer, &mut total_samples)?;
             tick_idx += 1;
             continue;
         }
@@ -974,49 +1029,44 @@ pub fn export_module_to_wav_file(
             &render_seq.module.sample_mem,
             am_repeating,
         );
-        match mix_out {
-            crate::engine::mixer::MixOutputBuffer::Pcm16(s) => all_pcm16.extend_from_slice(&s),
-            crate::engine::mixer::MixOutputBuffer::Pcm8(b) => all_pcm8.extend_from_slice(&b),
-            _ => {}
-        }
+        write_mix_out(mix_out, &mut writer, &mut total_samples)?;
         render_seq.advance_tick();
         tick_idx += 1;
     }
 
-    let total_samples = if bits == 16 {
-        all_pcm16.len()
-    } else {
-        all_pcm8.len()
-    };
     let total_frames = total_samples / samples_per_frame;
-    let bytes_per_sample = (bits / 8) as usize;
     let data_bytes = (total_samples * bytes_per_sample) as u32;
+    let pad_byte = if (data_bytes & 1) != 0 {
+        writer.write_all(&[0u8])?;
+        1u32
+    } else {
+        0u32
+    };
+    writer.flush()?;
+
     let byte_rate = sr * (ch as u32) * (bytes_per_sample as u32);
     let block_align = (ch as u16) * (bytes_per_sample as u16);
+    let riff_size = 36u32.saturating_add(data_bytes).saturating_add(pad_byte);
 
-    let mut wav_bytes = Vec::with_capacity(44 + data_bytes as usize);
-    wav_bytes.extend_from_slice(b"RIFF");
-    wav_bytes.extend_from_slice(&(36 + data_bytes).to_le_bytes());
-    wav_bytes.extend_from_slice(b"WAVEfmt ");
-    wav_bytes.extend_from_slice(&16u32.to_le_bytes());
-    wav_bytes.extend_from_slice(&1u16.to_le_bytes()); // PCM
-    wav_bytes.extend_from_slice(&(ch as u16).to_le_bytes());
-    wav_bytes.extend_from_slice(&sr.to_le_bytes());
-    wav_bytes.extend_from_slice(&byte_rate.to_le_bytes());
-    wav_bytes.extend_from_slice(&block_align.to_le_bytes());
-    wav_bytes.extend_from_slice(&(bits as u16).to_le_bytes());
-    wav_bytes.extend_from_slice(b"data");
-    wav_bytes.extend_from_slice(&data_bytes.to_le_bytes());
+    let mut hdr = [0u8; 44];
+    hdr[0..4].copy_from_slice(b"RIFF");
+    hdr[4..8].copy_from_slice(&riff_size.to_le_bytes());
+    hdr[8..16].copy_from_slice(b"WAVEfmt ");
+    hdr[16..20].copy_from_slice(&16u32.to_le_bytes());
+    hdr[20..22].copy_from_slice(&1u16.to_le_bytes()); // PCM
+    hdr[22..24].copy_from_slice(&(ch as u16).to_le_bytes());
+    hdr[24..28].copy_from_slice(&sr.to_le_bytes());
+    hdr[28..32].copy_from_slice(&byte_rate.to_le_bytes());
+    hdr[32..34].copy_from_slice(&block_align.to_le_bytes());
+    hdr[34..36].copy_from_slice(&(bits as u16).to_le_bytes());
+    hdr[36..40].copy_from_slice(b"data");
+    hdr[40..44].copy_from_slice(&data_bytes.to_le_bytes());
 
-    if bits == 16 {
-        for s in all_pcm16 {
-            wav_bytes.extend_from_slice(&s.to_le_bytes());
-        }
-    } else {
-        wav_bytes.extend_from_slice(&all_pcm8);
-    }
+    let mut file = writer.into_inner()?;
+    file.seek(SeekFrom::Start(0))?;
+    file.write_all(&hdr)?;
+    file.flush()?;
 
-    fs::write(wav_path, wav_bytes)?;
     Ok(total_frames)
 }
 

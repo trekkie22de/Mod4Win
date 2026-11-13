@@ -116,11 +116,19 @@ impl CompSvfStage {
     pub fn process_rc2(&mut self, u: f64, g: f64) -> (f64, f64) {
         let v1 = (u - self.ic1_a) * g;
         let lp1 = v1 + self.ic1_a;
-        self.ic1_a = lp1 + v1;
+        let mut s1 = lp1 + v1;
+        if s1.abs() < 1.0e-15 {
+            s1 = 0.0;
+        }
+        self.ic1_a = s1;
 
         let v2 = (lp1 - self.ic2_a) * g;
         let lp2 = v2 + self.ic2_a;
-        self.ic2_a = lp2 + v2;
+        let mut s2 = lp2 + v2;
+        if s2.abs() < 1.0e-15 {
+            s2 = 0.0;
+        }
+        self.ic2_a = s2;
 
         (lp2, u - lp2)
     }
@@ -130,8 +138,16 @@ impl CompSvfStage {
         let v3 = u - self.ic2_b;
         let v1 = a1 * self.ic1_b + a2 * v3;
         let v2 = self.ic2_b + a2 * self.ic1_b + a3 * v3;
-        self.ic1_b = 2.0 * v1 - self.ic1_b;
-        self.ic2_b = 2.0 * v2 - self.ic2_b;
+        let mut s1 = 2.0 * v1 - self.ic1_b;
+        let mut s2 = 2.0 * v2 - self.ic2_b;
+        if s1.abs() < 1.0e-15 {
+            s1 = 0.0;
+        }
+        if s2.abs() < 1.0e-15 {
+            s2 = 0.0;
+        }
+        self.ic1_b = s1;
+        self.ic2_b = s2;
         u - k * v1 - v2
     }
 }
@@ -462,6 +478,11 @@ pub fn get_new_smp_val(
             const ONE_BY_65536: f64 = 1.0 / 65536.0;
             const ONE_BY_4: f64 = 1.0 / 4.0;
 
+            // BIT-EXACTNESS INVARIANT (99.97% PLAYER32.DLL Parity — DO NOT "FIX"):
+            // `@fCubic8` and `@fCubic16` (`dacmix.pas` lines 169–243) are genuine x87 FPU
+            // floating-point routines in the original 1995 TASM code (`fild`/`fmul`/`fistp`
+            // with round-to-nearest-even), which is why `f64` + `.round_ties_even()` is used
+            // ONLY here while IDO-0/1/2 use 100% integer arithmetic.
             let ym1 = read_sample_i8(sample_mem, esi.wrapping_sub(1)) as i16 as f64;
             let y0 = read_sample_i8(sample_mem, esi) as i16 as f64;
             let y1 = read_sample_i8(sample_mem, esi.wrapping_add(1)) as i16 as f64;
@@ -2428,6 +2449,9 @@ pub fn process_sample_block(
         };
     }
 
+    // BIT-EXACTNESS INVARIANT (99.97% PLAYER32.DLL Parity — DO NOT "FIX"):
+    // `dacmix.pas` line 371 caps `BufSamples` to `MaxMixBufSamples` (2000) per tick (matching
+    // `PLAYER32.DLL`'s max 48000 Hz engine sample rate; higher OS device rates resample outside).
     let total_tick_samples = (state.buf_samples as usize).min(MAX_MIX_BUF_SAMPLES);
 
     // Im Direct-to-Disk-Modus (DEV_HDD, BufferSize = 32768 Bytes = 8192 Stereo-16-Bit-Frames)
@@ -2541,7 +2565,10 @@ fn analyze_sample_tail(
             is_oneshot = true;
             raw_end = loop_start;
         } else if loop_len > 0 && pre_loop_len >= 16 {
-            let step = (loop_len / 128).max(1);
+            // Stride 1 mit Early-Exit verhindert periodisches Unterabtastungs-Aliasing bei
+            // genauen Wellenlängen-Vielfachen; bei 16-Bit engere Schwelle (64 statt 512), damit
+            // leise echte 16-Bit-Sustain-Loops nicht fälschlich als DC-Flat-Tail gelten.
+            let flat_thresh = if is_16bit { 64 } else { 512 };
             let mut min_v = i32::MAX;
             let mut max_v = i32::MIN;
             let mut flat = true;
@@ -2554,11 +2581,11 @@ fn analyze_sample_tail(
                 if v > max_v {
                     max_v = v;
                 }
-                if max_v.saturating_sub(min_v) > 512 {
+                if max_v.saturating_sub(min_v) > flat_thresh {
                     flat = false;
                     break;
                 }
-                idx += step;
+                idx += 1;
             }
             if flat {
                 // Stiller bzw. reiner DC-End-Loop -> akustisch ein One-Shot bis `loop_start`
@@ -2694,6 +2721,37 @@ fn process_sample_subblock(
             .clamp(16, 128);
 
         for ch_idx in 0..num_tracks {
+            if use_declick {
+                // Noch offene Rest-Ausblendrampe im gegenüberliegenden Puffer fortführen
+                // (auch dann, wenn der Kanal in diesem Tick inaktiv oder avg_vol == 0 wird!)
+                let dc = &mut mem.chn_declick[ch_idx];
+                if dc.old_surr_tail_l != 0 || dc.old_surr_tail_r != 0 {
+                    let n = ramp_frames.max(1);
+                    let old_buf = if dc.old_surr_tail_is_sur && state.use_surround {
+                        &mut mem.sur_buffer[..total_frames]
+                    } else {
+                        &mut mem.mix_buffer[..total_frames]
+                    };
+                    let limit = n.min(total_frames);
+                    for k in 0..limit {
+                        let w = (n - k) as i64;
+                        let dl = ((dc.old_surr_tail_l as i64 * w) / (n as i64)) as i32;
+                        let dr = ((dc.old_surr_tail_r as i64 * w) / (n as i64)) as i32;
+                        old_buf[k].left = old_buf[k].left.wrapping_add(dl);
+                        old_buf[k].right = old_buf[k].right.wrapping_add(dr);
+                    }
+                    if buf_samples < n {
+                        let w_end = (n - buf_samples) as i64;
+                        dc.old_surr_tail_l =
+                            ((dc.old_surr_tail_l as i64 * w_end) / (n as i64)) as i32;
+                        dc.old_surr_tail_r =
+                            ((dc.old_surr_tail_r as i64 * w_end) / (n as i64)) as i32;
+                    } else {
+                        dc.old_surr_tail_l = 0;
+                        dc.old_surr_tail_r = 0;
+                    }
+                }
+            }
             let chn = &mut state.channels[ch_idx];
             // OR esi, esi / jz @endmix
             let mut esi = chn.note;
@@ -2884,33 +2942,6 @@ fn process_sample_subblock(
                     dc.was_active = true;
                     dc.expected_next_esi = pre_wrap_esi;
                     dc.was_surround = target_is_surround;
-                }
-                // Noch offene Rest-Ausblendrampe im gegenüberliegenden Puffer fortführen
-                if dc.old_surr_tail_l != 0 || dc.old_surr_tail_r != 0 {
-                    let n = ramp_frames.max(1);
-                    let old_buf = if dc.old_surr_tail_is_sur && state.use_surround {
-                        &mut mem.sur_buffer[..total_frames]
-                    } else {
-                        &mut mem.mix_buffer[..total_frames]
-                    };
-                    let limit = n.min(total_frames);
-                    for k in 0..limit {
-                        let w = (n - k) as i64;
-                        let dl = ((dc.old_surr_tail_l as i64 * w) / (n as i64)) as i32;
-                        let dr = ((dc.old_surr_tail_r as i64 * w) / (n as i64)) as i32;
-                        old_buf[k].left = old_buf[k].left.wrapping_add(dl);
-                        old_buf[k].right = old_buf[k].right.wrapping_add(dr);
-                    }
-                    if buf_samples < n {
-                        let w_end = (n - buf_samples) as i64;
-                        dc.old_surr_tail_l =
-                            ((dc.old_surr_tail_l as i64 * w_end) / (n as i64)) as i32;
-                        dc.old_surr_tail_r =
-                            ((dc.old_surr_tail_r as i64 * w_end) / (n as i64)) as i32;
-                    } else {
-                        dc.old_surr_tail_l = 0;
-                        dc.old_surr_tail_r = 0;
-                    }
                 }
                 // Falls der Kanal zwischen `mix_buffer` und `sur_buffer` (ProLogic-Surround) wechselt,
                 // muss der alte Pegel (`dc.prev_l`, `dc.prev_r`) im BISHERIGEN Zielpuffer sanft gegen 0
@@ -3365,34 +3396,38 @@ pub fn apply_post_filters_with_hint(
             let sc_r2 = dh.xover_r[1].process_sc_hp(sc_r1, sc_a1, sc_a2, sc_a3, SC_K);
 
             // Sidechain-Aufspaltung in 4 Detektor-Bänder über die freien `ic1_b`/`ic2_b` Zustandsspeicher von Stufe 2 & 3
+            #[inline(always)]
+            fn flush_subnormal(x: f64) -> f64 {
+                if x.abs() < 1.0e-15 { 0.0 } else { x }
+            }
             let v0_l = (sc_l2 - dh.xover_l[2].ic1_b) * g_rc[1];
             let sc_b0_l = v0_l + dh.xover_l[2].ic1_b;
-            dh.xover_l[2].ic1_b = sc_b0_l + v0_l;
+            dh.xover_l[2].ic1_b = flush_subnormal(sc_b0_l + v0_l);
             let sc_u2_l = sc_l2 - sc_b0_l;
 
             let v1_l = (sc_u2_l - dh.xover_l[2].ic2_b) * g_rc[2];
             let sc_b1_l = v1_l + dh.xover_l[2].ic2_b;
-            dh.xover_l[2].ic2_b = sc_b1_l + v1_l;
+            dh.xover_l[2].ic2_b = flush_subnormal(sc_b1_l + v1_l);
             let sc_u3_l = sc_u2_l - sc_b1_l;
 
             let v2_l = (sc_u3_l - dh.xover_l[3].ic1_b) * g_rc[3];
             let sc_b2_l = v2_l + dh.xover_l[3].ic1_b;
-            dh.xover_l[3].ic1_b = sc_b2_l + v2_l;
+            dh.xover_l[3].ic1_b = flush_subnormal(sc_b2_l + v2_l);
             let sc_b3_l = sc_u3_l - sc_b2_l;
 
             let v0_r = (sc_r2 - dh.xover_r[2].ic1_b) * g_rc[1];
             let sc_b0_r = v0_r + dh.xover_r[2].ic1_b;
-            dh.xover_r[2].ic1_b = sc_b0_r + v0_r;
+            dh.xover_r[2].ic1_b = flush_subnormal(sc_b0_r + v0_r);
             let sc_u2_r = sc_r2 - sc_b0_r;
 
             let v1_r = (sc_u2_r - dh.xover_r[2].ic2_b) * g_rc[2];
             let sc_b1_r = v1_r + dh.xover_r[2].ic2_b;
-            dh.xover_r[2].ic2_b = sc_b1_r + v1_r;
+            dh.xover_r[2].ic2_b = flush_subnormal(sc_b1_r + v1_r);
             let sc_u3_r = sc_u2_r - sc_b1_r;
 
             let v2_r = (sc_u3_r - dh.xover_r[3].ic1_b) * g_rc[3];
             let sc_b2_r = v2_r + dh.xover_r[3].ic1_b;
-            dh.xover_r[3].ic1_b = sc_b2_r + v2_r;
+            dh.xover_r[3].ic1_b = flush_subnormal(sc_b2_r + v2_r);
             let sc_b3_r = sc_u3_r - sc_b2_r;
 
             let sc_bands_l = [sc_b0_l, sc_b1_l, sc_b2_l, sc_b3_l];
@@ -3401,17 +3436,17 @@ pub fn apply_post_filters_with_hint(
             // Stereo-gekoppelte Grund-/Mittelton-Hüllkurve (< 2500 Hz)
             let e0 = b0_l.abs().max(b0_r.abs());
             let c0 = if e0 > dh.env_low { att_fast } else { rel_fast };
-            dh.env_low += c0 * (e0 - dh.env_low);
+            dh.env_low = flush_subnormal(dh.env_low + c0 * (e0 - dh.env_low));
 
             // Hüllkurven & Spectral-Flux für die 4 oberen Bänder aktualisieren
             let mut hf_flux_triggered = false;
             for b in 0..4 {
                 let eb = sc_bands_l[b].abs().max(sc_bands_r[b].abs());
                 let cf = if eb > dh.env_fast[b] { att_fast } else { rel_fast };
-                dh.env_fast[b] += cf * (eb - dh.env_fast[b]);
+                dh.env_fast[b] = flush_subnormal(dh.env_fast[b] + cf * (eb - dh.env_fast[b]));
 
                 let cs = if eb > dh.env_slow[b] { att_slow } else { rel_slow };
-                dh.env_slow[b] += cs * (eb - dh.env_slow[b]);
+                dh.env_slow[b] = flush_subnormal(dh.env_slow[b] + cs * (eb - dh.env_slow[b]));
 
                 // Transienten-Detektor in den Präsenz-/Brillanz-Bändern (Hi-Hats, Snares, Cymbals)
                 if dh.env_fast[b] > 3500.0

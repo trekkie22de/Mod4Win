@@ -173,22 +173,23 @@ impl FileManagerState {
         let sel_count = self.files.iter().filter(|f| f.selected).count();
         if sel_count == 1 {
             if let Some(f) = self.files.iter().find(|f| f.selected) {
-                self.target_path_edit = self
-                    .target_dir
-                    .join(&f.display_name)
-                    .to_string_lossy()
-                    .into_owned();
+                let fname = f
+                    .path
+                    .file_name()
+                    .unwrap_or_else(|| std::ffi::OsStr::new(&f.display_name));
+                self.target_path_edit = self.target_dir.join(fname).to_string_lossy().into_owned();
                 return;
             }
         } else if sel_count == 0
-            && let Some(f) = self.files.get(self.file_cursor) {
-                self.target_path_edit = self
-                    .target_dir
-                    .join(&f.display_name)
-                    .to_string_lossy()
-                    .into_owned();
-                return;
-            }
+            && let Some(f) = self.files.get(self.file_cursor)
+        {
+            let fname = f
+                .path
+                .file_name()
+                .unwrap_or_else(|| std::ffi::OsStr::new(&f.display_name));
+            self.target_path_edit = self.target_dir.join(fname).to_string_lossy().into_owned();
+            return;
+        }
         self.target_path_edit = self.target_dir.to_string_lossy().into_owned();
     }
 }
@@ -329,27 +330,34 @@ impl Mod4WinApp {
 
         draw_frame_3d(frame, dw, dh, 9, 113, 166, 162, 2, true);
         fill_rect(frame, dw, dh, 11, 115, 148, 158, col_black);
-        let max_fscroll = fm.dest_files.len().saturating_sub(13);
+        let max_fscroll = fm.files.len().saturating_sub(13);
         let fscroll = fm.file_scroll.min(max_fscroll);
-        for (row, (path, lower_name)) in fm
-            .dest_files
+        for (row, (idx, item)) in fm
+            .files
             .iter()
+            .enumerate()
             .skip(fscroll)
             .take(13)
             .enumerate()
         {
             let ry = 116 + (row as i32) * 12;
-            let ext = path
+            let is_cur = idx == fm.file_cursor;
+            if item.selected {
+                fill_rect(frame, dw, dh, 12, ry, 146, 12, col_green);
+            }
+            let ext = item
+                .path
                 .extension()
                 .and_then(|s| s.to_str())
                 .unwrap_or("")
                 .to_lowercase();
             let badge = self.assets.filetype_badge(&ext);
             badge.blit_rect_to(0, 0, 28, 12, frame, dw, dh, 13, ry);
-            let stem = path
+            let stem = item
+                .path
                 .file_stem()
                 .and_then(|s| s.to_str())
-                .unwrap_or(lower_name)
+                .unwrap_or(&item.display_name)
                 .to_lowercase();
             let mut s_pad: String = stem.chars().take(8).collect();
             while s_pad.chars().count() < 8 {
@@ -360,7 +368,14 @@ impl Mod4WinApp {
             } else {
                 format!("{}.{}", s_pad, ext)
             };
-            draw_oem_text(frame, dw, dh, 45, ry, &disp, col_gray);
+            let fg = if item.selected {
+                col_black
+            } else if is_cur {
+                col_white
+            } else {
+                col_green
+            };
+            draw_oem_text(frame, dw, dh, 45, ry, &disp, fg);
         }
         Self::draw_vertical_scrollbar(
             frame,
@@ -372,7 +387,7 @@ impl Mod4WinApp {
             158,
             fscroll,
             13,
-            fm.dest_files.len(),
+            fm.files.len(),
         );
 
         // Rechte Spalte: "&Directories:" Header (188, CapDY+82=100) + pdirlist (188, 116, 140, 126) + Scrollbar (328, 116, 14, 126)

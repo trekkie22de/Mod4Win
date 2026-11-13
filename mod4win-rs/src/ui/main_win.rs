@@ -843,23 +843,17 @@ impl Mod4WinApp {
             .mb_iconquestion
             .blit_rect_to(0, 0, 60, 60, frame, dw, dh, cx + 11, cy + 29);
 
-        let full_path_lower = state
-            .current_file_path
-            .as_ref()
-            .or_else(|| state.playlist.get(state.playlist_idx))
-            .map(|p| p.to_string_lossy().to_lowercase())
-            .unwrap_or_else(|| state.filename.to_lowercase());
-
+        let _ = state;
         let lines: [String; 3] = match (action, is_de) {
             (ConfirmAction::DeleteFromDisk, true) => [
-                "Wollen Sie die Datei".to_string(),
-                full_path_lower,
-                "wirklich löschen?".to_string(),
+                "Das physische Löschen von Dateien".to_string(),
+                "wurde aus Sicherheitsgründen".to_string(),
+                "dauerhaft deaktiviert.".to_string(),
             ],
             (ConfirmAction::DeleteFromDisk, false) => [
-                "Do you really want".to_string(),
-                full_path_lower,
-                "to be deleted from disk?".to_string(),
+                "Deleting files from disk has".to_string(),
+                "been permanently disabled".to_string(),
+                "for safety reasons.".to_string(),
             ],
             (ConfirmAction::RemoveFromPlaylist, true) => [
                 "Wollen Sie das aktuelle Modul".to_string(),
@@ -894,41 +888,50 @@ impl Mod4WinApp {
             );
         }
 
-        // 2 breite `pmsgbutton` Buttons (`Ja` / `Nein` bzw. `Yes` / `No`, je `62x19`) bei `by = cy + 97`
         let button_w = 62u32;
         let button_h = 19u32;
-        let buttdiff = ((cw as i32) - 11) / 2;
-        let bx_yes = cx + ((cw as i32) - (button_w as i32) - buttdiff) / 2;
-        let bx_no = bx_yes + buttdiff;
         let by = cy + 97;
 
-        // `Ja` / `Yes` Button (mit 1px schwarzem Default-Rahmen wie in `TModalwindow`)
-        draw_rect_outline(frame, dw, dh, bx_yes - 1, by - 1, button_w + 2, button_h + 2, col_black);
-        draw_frame_3d(frame, dw, dh, bx_yes, by, button_w, button_h, 2, false);
-        draw_oem_text_centered(
-            frame,
-            dw,
-            dh,
-            bx_yes,
-            by + 4,
-            button_w,
-            if is_de { "Ja" } else { "Yes" },
-            col_black,
-        );
+        if action == ConfirmAction::DeleteFromDisk {
+            // Einzelner zentrierter `OK`-Button für den Sicherheitshinweis (physisches Löschen deaktiviert)
+            let bx_ok = cx + ((cw as i32) - (button_w as i32)) / 2;
+            draw_rect_outline(frame, dw, dh, bx_ok - 1, by - 1, button_w + 2, button_h + 2, col_black);
+            draw_frame_3d(frame, dw, dh, bx_ok, by, button_w, button_h, 2, false);
+            draw_oem_text_centered(frame, dw, dh, bx_ok, by + 4, button_w, "OK", col_black);
+        } else {
+            // 2 breite `pmsgbutton` Buttons (`Ja` / `Nein` bzw. `Yes` / `No`, je `62x19`) bei `by = cy + 97`
+            let buttdiff = ((cw as i32) - 11) / 2;
+            let bx_yes = cx + ((cw as i32) - (button_w as i32) - buttdiff) / 2;
+            let bx_no = bx_yes + buttdiff;
 
-        // `Nein` / `No` Button
-        draw_frame_3d_1px(frame, dw, dh, bx_no - 1, by - 1, button_w + 2, button_h + 2, true);
-        draw_frame_3d(frame, dw, dh, bx_no, by, button_w, button_h, 2, false);
-        draw_oem_text_centered(
-            frame,
-            dw,
-            dh,
-            bx_no,
-            by + 4,
-            button_w,
-            if is_de { "Nein" } else { "No" },
-            col_black,
-        );
+            // `Ja` / `Yes` Button (mit 1px schwarzem Default-Rahmen wie in `TModalwindow`)
+            draw_rect_outline(frame, dw, dh, bx_yes - 1, by - 1, button_w + 2, button_h + 2, col_black);
+            draw_frame_3d(frame, dw, dh, bx_yes, by, button_w, button_h, 2, false);
+            draw_oem_text_centered(
+                frame,
+                dw,
+                dh,
+                bx_yes,
+                by + 4,
+                button_w,
+                if is_de { "Ja" } else { "Yes" },
+                col_black,
+            );
+
+            // `Nein` / `No` Button
+            draw_frame_3d_1px(frame, dw, dh, bx_no - 1, by - 1, button_w + 2, button_h + 2, true);
+            draw_frame_3d(frame, dw, dh, bx_no, by, button_w, button_h, 2, false);
+            draw_oem_text_centered(
+                frame,
+                dw,
+                dh,
+                bx_no,
+                by + 4,
+                button_w,
+                if is_de { "Nein" } else { "No" },
+                col_black,
+            );
+        }
     }
 
     /// Rendert das Mini-Status-Fenster (`309 x 58`) exakt nach `mod4win.pas` (`paintministate`; `--skin 2.30` ändert nur die Titelleiste).
@@ -1232,61 +1235,8 @@ impl Mod4WinApp {
             if let Some(idx) = idx_opt {
                 self.remove_playlist_item_and_update_cursor(idx);
             }
-            return;
         }
-        let mut state = self.shared_state.lock().unwrap();
-        let cur_path = state.current_file_path.clone().or_else(|| {
-            if !state.playing_track_detached
-                && !state.playlist.is_empty()
-                && state.playlist_idx < state.playlist.len()
-            {
-                Some(state.playlist[state.playlist_idx].clone())
-            } else {
-                None
-            }
-        });
-        let remove_idx = if !state.playing_track_detached
-            && state.playlist_idx < state.playlist.len()
-            && cur_path.as_ref() == Some(&state.playlist[state.playlist_idx])
-        {
-            Some(state.playlist_idx)
-        } else {
-            cur_path
-                .as_ref()
-                .and_then(|p| state.playlist.iter().position(|x| x == p))
-        };
-        if action == ConfirmAction::DeleteFromDisk
-            && let Some(ref p) = cur_path
-        {
-            let _ = std::fs::remove_file(p);
-        }
-        if let Some(idx) = remove_idx {
-            state.remove_playlist_entry(idx);
-            if state.playlist.is_empty() {
-                state.playlist_idx = 0;
-                state.playing_track_detached = false;
-                state.current_file_path = None;
-                state.filename.clear();
-                state.title = "MOD4WIN 3.10".to_string();
-                state.is_playing = false;
-                state.is_paused = false;
-            } else {
-                let next_idx = idx.min(state.playlist.len() - 1);
-                state.playlist_idx = next_idx;
-                state.playing_track_detached = false;
-                if let Some(pos) = state.number_list.iter().position(|&v| v == next_idx) {
-                    state.playlist_pos = pos;
-                }
-                let next_p = state.playlist[next_idx].clone();
-                state.pending_load_file = Some(next_p);
-            }
-        } else if cur_path.is_some() {
-            state.current_file_path = None;
-            state.filename.clear();
-            state.title = "MOD4WIN 3.10".to_string();
-            state.is_playing = false;
-            state.is_paused = false;
-        }
+        // ConfirmAction::DeleteFromDisk ist aus Sicherheitsgründen dauerhaft deaktiviert (reiner Hinweisdialog).
     }
 
     pub(crate) fn handle_file_menu_click(
@@ -1331,10 +1281,7 @@ impl Mod4WinApp {
             self.close_window(WindowKind::ConfirmDialog);
             return;
         };
-        let cw: i32 = match action {
-            ConfirmAction::DeleteFromDisk => 284,
-            ConfirmAction::RemoveFromPlaylist => 398,
-        };
+        let cw: i32 = 398;
         if (5..=19).contains(&vy) && (cw - 19..=cw - 5).contains(&vx) {
             self.confirm_action = None;
             self.close_window(WindowKind::ConfirmDialog);
@@ -1344,16 +1291,24 @@ impl Mod4WinApp {
             let _ = window.drag_window();
             return;
         }
-        let bx_yes = if cw > 320 { 80 } else { 44 };
-        let bx_no = if cw > 320 { cw - 80 - 62 } else { cw - 44 - 62 };
         if (97..=116).contains(&vy) {
-            if (bx_yes..=bx_yes + 62).contains(&vx) {
-                self.confirm_action = None;
-                self.close_window(WindowKind::ConfirmDialog);
-                self.execute_confirm_action(action);
-            } else if (bx_no..=bx_no + 62).contains(&vx) {
-                self.confirm_action = None;
-                self.close_window(WindowKind::ConfirmDialog);
+            if action == ConfirmAction::DeleteFromDisk {
+                let bx_ok = (cw - 62) / 2;
+                if (bx_ok..=bx_ok + 62).contains(&vx) {
+                    self.confirm_action = None;
+                    self.close_window(WindowKind::ConfirmDialog);
+                }
+            } else {
+                let bx_yes = 80;
+                let bx_no = cw - 80 - 62;
+                if (bx_yes..=bx_yes + 62).contains(&vx) {
+                    self.confirm_action = None;
+                    self.close_window(WindowKind::ConfirmDialog);
+                    self.execute_confirm_action(action);
+                } else if (bx_no..=bx_no + 62).contains(&vx) {
+                    self.confirm_action = None;
+                    self.close_window(WindowKind::ConfirmDialog);
+                }
             }
         }
     }
@@ -1369,26 +1324,31 @@ impl Mod4WinApp {
         // 0a. Wenn gerade eine F7/F8 Sicherheitsabfrage offen ist (Fallback im Hauptfenster):
         if let Some(action) = self.confirm_action
             && !self.kind_to_id.contains_key(&WindowKind::ConfirmDialog) {
-                let cw: i32 = match action {
-                    ConfirmAction::DeleteFromDisk => 284,
-                    ConfirmAction::RemoveFromPlaylist => 398,
-                };
+                let cw: i32 = 398;
                 let cx = (542 - cw) / 2;
                 let cy = 5;
-                let bx_yes = if cw > 320 { cx + 80 } else { cx + 44 };
-                let bx_no = if cw > 320 { cx + cw - 80 - 62 } else { cx + cw - 44 - 62 };
                 if (cy + 5..=cy + 19).contains(&vy) && (cx + cw - 19..=cx + cw - 5).contains(&vx) {
                     self.confirm_action = None;
                     return;
                 }
                 if (cy + 97..=cy + 116).contains(&vy) {
-                    if (bx_yes..=bx_yes + 62).contains(&vx) {
-                        self.confirm_action = None;
-                        self.execute_confirm_action(action);
-                        return;
-                    } else if (bx_no..=bx_no + 62).contains(&vx) {
-                        self.confirm_action = None;
-                        return;
+                    if action == ConfirmAction::DeleteFromDisk {
+                        let bx_ok = cx + (cw - 62) / 2;
+                        if (bx_ok..=bx_ok + 62).contains(&vx) {
+                            self.confirm_action = None;
+                            return;
+                        }
+                    } else {
+                        let bx_yes = cx + 80;
+                        let bx_no = cx + cw - 80 - 62;
+                        if (bx_yes..=bx_yes + 62).contains(&vx) {
+                            self.confirm_action = None;
+                            self.execute_confirm_action(action);
+                            return;
+                        } else if (bx_no..=bx_no + 62).contains(&vx) {
+                            self.confirm_action = None;
+                            return;
+                        }
                     }
                 }
                 return;
@@ -1926,6 +1886,7 @@ impl Mod4WinApp {
         if (1..=18).contains(&vy) {
             if (1..=18).contains(&vx) {
                 self.pressed_btn = Some(PressedButton::SysMenu);
+                self.save_ini_on_exit();
                 let mut state = self.shared_state.lock().unwrap();
                 state.is_playing = false;
                 state.is_paused = false;
@@ -1942,6 +1903,7 @@ impl Mod4WinApp {
                 return;
             } else if (287..=306).contains(&vx) {
                 self.pressed_btn = Some(PressedButton::Close);
+                self.save_ini_on_exit();
                 let mut state = self.shared_state.lock().unwrap();
                 state.is_playing = false;
                 state.is_paused = false;

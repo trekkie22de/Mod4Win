@@ -56,14 +56,12 @@ pub fn parse_mod_signature(sig: &[u8; 4]) -> (ModType, u16, bool) {
         b"FLT4" | b"EX04" => (ModType::StarTr, 4, true),
         b"FLT8" | b"EX08" => (ModType::StarTr, 8, true),
         _ => {
-            if &sig[1..4] == b"CHN" && (b'1'..=b'9').contains(&sig[0]) {
+            if &sig[1..4] == b"CHN" && sig[0].is_ascii_digit() {
                 return (ModType::Ftrk, (sig[0] - b'0') as u16, true);
             }
             if &sig[2..4] == b"CH" && sig[0].is_ascii_digit() && sig[1].is_ascii_digit() {
                 let ch = ((sig[0] - b'0') as u16) * 10 + ((sig[1] - b'0') as u16);
-                if (2..=32).contains(&ch) {
-                    return (ModType::Ftrk, ch, true);
-                }
+                return (ModType::Ftrk, ch, true);
             }
             // Keine bekannte 31-Sample-Signatur -> 15-Sample NoiseTracker / SoundTracker MOD
             (ModType::NoiseTr, 4, false)

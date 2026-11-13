@@ -1,4 +1,4 @@
-﻿$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "Stop"
 
 # Arbeitsverzeichnis auf mod4win-rs setzen (funktioniert sowohl aus Repo-Root als auch aus mod4win-rs/)
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -10,6 +10,8 @@ if (Test-Path (Join-Path $ScriptDir "mod4win-rs/Cargo.toml")) {
     throw "Cargo.toml konnte nicht gefunden werden."
 }
 
+$HadOrigTargetDir = Test-Path Env:\CARGO_TARGET_DIR
+$OrigTargetDir = $env:CARGO_TARGET_DIR
 $TargetDir = if ($env:CARGO_TARGET_DIR) {
     $env:CARGO_TARGET_DIR
 } elseif ($IsLinux -and (Test-Path "/var/tmp/mod4win-target")) {
@@ -21,6 +23,7 @@ $TargetDir = if ($env:CARGO_TARGET_DIR) {
 $OrigPath = $env:PATH
 Push-Location $CrateDir
 try {
+    $env:CARGO_TARGET_DIR = $TargetDir
     $PathSep = [System.IO.Path]::PathSeparator
     if ($IsLinux) {
         $env:PATH = "/usr/local/bin$PathSep$HOME/.cargo/bin$PathSep$env:PATH"
@@ -49,7 +52,7 @@ try {
     $StubSrc = Join-Path $CrateDir "scripts/alsa_stub.c"
     $StubVer = Join-Path $CrateDir "scripts/alsa_stub.ver"
 
-    $OrigPath = $env:PATH
+    $BaseBuildPath = $env:PATH
     $env:PKG_CONFIG_ALLOW_CROSS = "1"
 
     function Build-LinuxTarget {
@@ -117,7 +120,7 @@ exit 0
 
         Write-Host "[2/3] Konfiguriere pkg-config Stub ($PkgConfigCmd)..." -ForegroundColor Yellow
         $env:PKG_CONFIG = $PkgConfigCmd
-        $env:PATH = "$StubDir$PathSep$OrigPath"
+        $env:PATH = "$StubDir$PathSep$BaseBuildPath"
         $env:RUSTFLAGS = "-C link-arg=-Wl,--no-as-needed -C link-arg=$SoLinkArg -C link-arg=-Wl,--allow-shlib-undefined"
 
         $BinPath = Join-Path $TargetDir "$BinBase/release/mod4win-rs"
@@ -129,10 +132,11 @@ exit 0
             throw "cargo zigbuild für $RustTarget fehlgeschlagen!"
         }
 
-        if (Test-Path $BinPath) {
-            $SizeMB = [math]::Round((Get-Item $BinPath).Length / 1MB, 2)
-            Write-Host "[OK] Linux-Binary erstellt: $BinPath ($SizeMB MB)" -ForegroundColor Green
+        if (-not (Test-Path $BinPath)) {
+            throw "Erwartetes Linux-Binary wurde nicht unter '$BinPath' erzeugt!"
         }
+        $SizeMB = [math]::Round((Get-Item $BinPath).Length / 1MB, 2)
+        Write-Host "[OK] Linux-Binary erstellt: $BinPath ($SizeMB MB)" -ForegroundColor Green
     }
 
     # x86_64 Linux (glibc 2.28)
@@ -152,6 +156,11 @@ exit 0
     Write-Host "`nAlle Linux-Cross-Builds (x86_64 & aarch64) erfolgreich abgeschlossen!" -ForegroundColor Green
 } finally {
     $env:PATH = $OrigPath
+    if ($HadOrigTargetDir) {
+        $env:CARGO_TARGET_DIR = $OrigTargetDir
+    } else {
+        Remove-Item Env:\CARGO_TARGET_DIR -ErrorAction SilentlyContinue
+    }
     Remove-Item Env:\RUSTFLAGS -ErrorAction SilentlyContinue
     Remove-Item Env:\PKG_CONFIG -ErrorAction SilentlyContinue
     Remove-Item Env:\PKG_CONFIG_ALLOW_CROSS -ErrorAction SilentlyContinue
