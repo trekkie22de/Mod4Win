@@ -50,7 +50,7 @@ impl Mod4WinApp {
         } else if !state.filename.is_empty() {
             state.filename.as_str()
         } else {
-            "MOD4WIN 3.10"
+            "MOD4WIN 3.11"
         };
         let scroll_ms = state.main_title_scroll_elapsed_ms();
         draw_bmp_text_16x20_marquee(
@@ -420,7 +420,7 @@ impl Mod4WinApp {
             dh,
             22,
             4,
-            self.locale.tr_or("win", "main_title", "MOD4WIN 3.10"),
+            self.locale.tr_or("win", "main_title", "MOD4WIN 3.11"),
             [48, 56, 68, 255],
         );
 
@@ -960,12 +960,12 @@ impl Mod4WinApp {
         // Titelleisten-Buttons im Mini-Status (`HandleSwName` in `mod4win.pas:2496`: zeigt den Namen des laufenden Moduls!)
         let mini_caption = if state.show_filename && !state.filename.is_empty() {
             state.filename.as_str()
-        } else if !state.title.trim().is_empty() && state.title.trim() != "MOD4WIN 3.10" {
+        } else if !state.title.trim().is_empty() && state.title.trim() != "MOD4WIN 3.11" {
             state.title.trim()
         } else if !state.filename.is_empty() {
             state.filename.as_str()
         } else {
-            self.locale.tr_or("win", "main_title", "MOD4WIN 3.10")
+            self.locale.tr_or("win", "main_title", "MOD4WIN 3.11")
         };
         let mini_caption_disp: String = mini_caption.chars().take(28).collect();
         for y in 1..18 {
@@ -1112,7 +1112,7 @@ impl Mod4WinApp {
             dh,
             22,
             4,
-            self.locale.tr_or("win", "about_title", "MOD4WIN 3.10 About"),
+            self.locale.tr_or("win", "about_title", "MOD4WIN 3.11 About"),
             [48, 56, 68, 255],
         );
         self.assets
@@ -1161,7 +1161,7 @@ impl Mod4WinApp {
 
         // Vertikale Credit-Laufschrift (`laufschrift` in `ABOUT.PAS`, `x_abscr=118, y_abscr=38, dx_abscr=308, dy_abscr=40`)
         let credits: [&str; 19] = [
-            "MOD4WIN 3.10",
+            "MOD4WIN 3.11",
             "(c) 1993-96 by Kay Bruns",
             "",
             self.locale.tr_or("about", "prog_dsp", "Programming, DSP & Design:"),

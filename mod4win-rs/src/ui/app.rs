@@ -2525,7 +2525,7 @@ impl Mod4WinApp {
                             self.locale.tr_or("win", "mini_title", "MOD4WIN Mini-Status").to_string(),
                         );
                     } else {
-                        return (w, h, "MOD4WIN 3.10".to_string());
+                        return (w, h, "MOD4WIN 3.11".to_string());
                     }
                 }
                 WindowKind::ModuleInfo | WindowKind::InstrumentInfo => {
@@ -2542,7 +2542,7 @@ impl Mod4WinApp {
                     return (w, h, "[13] MOD4WIN Setup".to_string());
                 }
                 WindowKind::About => {
-                    return (w, h, "[5] About MOD4WIN 3.10".to_string());
+                    return (w, h, "[5] About MOD4WIN 3.11".to_string());
                 }
                 _ => {}
             }
@@ -2559,14 +2559,14 @@ impl Mod4WinApp {
                     (
                         w,
                         h,
-                        self.locale.tr_or("win", "main_title", "MOD4WIN 3.10").to_string(),
+                        self.locale.tr_or("win", "main_title", "MOD4WIN 3.11").to_string(),
                     )
                 }
             }
             WindowKind::ModuleInfo => (
                 w,
                 h,
-                self.locale.tr_or("win", "info_title", "MOD4WIN 3.10 Module Info").to_string(),
+                self.locale.tr_or("win", "info_title", "MOD4WIN 3.11 Module Info").to_string(),
             ),
             WindowKind::InstrumentInfo => (
                 w,
@@ -2596,7 +2596,7 @@ impl Mod4WinApp {
             WindowKind::SetupDialog => (
                 w,
                 h,
-                self.locale.tr_or("win", "setup_title", "MOD4WIN 3.10 Setup").to_string(),
+                self.locale.tr_or("win", "setup_title", "MOD4WIN 3.11 Setup").to_string(),
             ),
             WindowKind::WavAskDialog => (
                 w,
@@ -2630,7 +2630,7 @@ impl Mod4WinApp {
             WindowKind::About => (
                 w,
                 h,
-                self.locale.tr_or("win", "about_title", "MOD4WIN 3.10 About").to_string(),
+                self.locale.tr_or("win", "about_title", "MOD4WIN 3.11 About").to_string(),
             ),
             WindowKind::HelpViewer => (
                 w,

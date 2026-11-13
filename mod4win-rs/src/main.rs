@@ -88,7 +88,7 @@ fn print_cli_help(bin_name: &str) {
     println!(
         "\
 ======================================================================
-MOD4WIN 3.10 - 100% Bit-Exact Rust Port (Audio Engine & UI)
+MOD4WIN 3.11 - 100% Bit-Exact Rust Port (Audio Engine & UI)
 ======================================================================
 
 VERWENDUNG:
@@ -738,7 +738,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     } else {
-        println!("Starte MOD4WIN 3.10 ohne Startdatei (bereit für Drag & Drop / Open)...");
+        println!("Starte MOD4WIN 3.11 ohne Startdatei (bereit für Drag & Drop / Open)...");
         (create_idle_module(), false, 0u32)
     };
     if state_saver_load_failed {
@@ -839,7 +839,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // UI-Shared State vorbereiten
     let mut init_ui_state = UiSharedState::new(
-        if has_initial_module { &mod_name } else { "MOD4WIN 3.10" },
+        if has_initial_module { &mod_name } else { "MOD4WIN 3.11" },
         &format!("{:?}", file_type),
         if has_initial_module { num_tracks as usize } else { 0 },
         if has_initial_module { diff_patterns as usize } else { 0 },

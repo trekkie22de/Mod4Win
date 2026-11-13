@@ -1155,7 +1155,7 @@ impl Mod4WinApp {
             dw,
             dh,
             true,
-            "MOD4WIN 3.10",
+            "MOD4WIN 3.11",
             true,
             false,
         );
@@ -4233,7 +4233,7 @@ impl Mod4WinApp {
         dh: u32,
         _state: &UiSharedState,
     ) {
-        draw_modern_window_shell(frame, dw, dh, false, "[5] About MOD4WIN 3.10", false, false);
+        draw_modern_window_shell(frame, dw, dh, false, "[5] About MOD4WIN 3.11", false, false);
 
         // Obere Box mit 2 animierten Lautsprecher-Konussen links/rechts + MOD 4 WIN Pill
         fill_rounded_rect_grad(
@@ -4271,7 +4271,7 @@ impl Mod4WinApp {
             [0x06, 0x1c, 0x24, 255],
         );
         stroke_rounded_rect(frame, dw, dh, 116, 52, 128, 22, 2, [0x00, 0xa2, 0xb8, 255]);
-        draw_modern_ui_text(frame, dw, dh, 146, 60, "MOD4WIN 3.10", COL_CYAN_BRAND);
+        draw_modern_ui_text(frame, dw, dh, 146, 60, "MOD4WIN 3.11", COL_CYAN_BRAND);
         draw_modern_ui_text(
             frame,
             dw,
