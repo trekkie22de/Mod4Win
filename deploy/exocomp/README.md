@@ -7,9 +7,10 @@ Hochdurchsatz-Regression-Test-Umgebung auf **Exocomp** (Rocky Linux 10.1, Kernel
 1. **Sauberer Host durch Rootful Podman-Container (`localhost/mod4win-reg-worker:latest`):**
    - Da RHEL/Rocky Linux 10 keine `.i686`-Multilib-Pakete mehr mitliefert, laufen `wine32` (`winevdm.exe.so`), ein einzelner Headless-`Xvfb :99`-X-Server, `ffmpeg` (für `.IT`/`.UMX`) und das statisch gegen glibc 2.28 gebaute `mod4win-diff` gemeinsam in **einem** langlebigen Debian-Bookworm-Container.
    - Kein Container-Start-Overhead pro Datei: `mod4win-diff` spawnt alle 16 Worker direkt innerhalb des Containers (`fork+exec < 2 ms`).
-2. **Lockfreie 16-Core-Skalierung unter Wine:**
-   - Jeder Worker `W0..W15` erhält in `/dev/shm/m4w_work` (4 GiB RAM-Disk) ein eigenes, per Symlink geklontes `WINEPREFIX` (`pfx_W<id>`), einen eigenen persistenten `wineserver -p`, eigene 8.3-DOS-Laufwerke (`M:\` & `R:\`) sowie eine private `MOD4WIN.INI` und `MOD4WIN.PKS` (mit deaktiviertem `StateSaver=0` und unterdrücktem `winedbg`-Crash-Dialog).
-   - Dadurch entfällt jegliche `Win16Mutex`-, Registry- oder `MOD4WIN.PKS`-Serialisierung zwischen den 16 Kernen; Podmans `--init` (`catatonit`) erntet verwaiste Wine-Subprozesse laufend ab.
+2. **Lockfreie Multi-Worker-Skalierung unter Wine (Standard: `48` Worker auf 16 Kernen):**
+   - Da 16-Bit `MOD4WIN.EXE` beim `Direct To Disk Recording` kooperativ über Win16-Timer (`WM_TIMER`) taktet (~8 % Last pro Worker auf einem Zen-4-Kern), skaliert eine 3-fache Überbuchung (**48 Worker** bei ~5,8 GB RAM) mehr als doppelt so schnell wie 16 Worker.
+   - Jeder Worker `W0..W47` erhält in `/dev/shm/m4w_work` (4 GiB RAM-Disk) ein eigenes, per Hardlink/Symlink geklontes `WINEPREFIX` (`pfx_W<id>`), einen eigenen persistenten `wineserver -p`, eigene 8.3-DOS-Laufwerke (`M:\` & `R:\`) sowie eine private `MOD4WIN.INI` und `MOD4WIN.PKS` (mit deaktiviertem `StateSaver=0` und unterdrücktem `winedbg`-Crash-Dialog).
+   - Dadurch entfällt jegliche `Win16Mutex`-, Registry- oder `MOD4WIN.PKS`-Serialisierung; `Xvfb` läuft mit `-maxclients 2048` und Podmans `--init` (`catatonit`) erntet verwaiste Wine-Subprozesse laufend ab.
    - Der Linux-CPU-Watchdog aggregiert die CPU-Ticks über Prozessgruppe **und** Worker-Tag (`M4W_WTAG=W<id>`), sodass auch vom `wineserver` entkoppelte `winevdm.exe`-Prozesse während langer PeakSearch-Läufe exakt erfasst werden.
 3. **Nahtlose Koexistenz mit `vt-worker-daemon.service` (Video-Transcoding):**
    - `vt-worker-daemon.service` läuft dauerhaft mit `Nice=10`, `CPUWeight=25` und `IOSchedulingClass=best-effort` (`Priority=6`).

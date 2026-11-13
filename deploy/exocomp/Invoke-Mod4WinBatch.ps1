@@ -23,7 +23,7 @@ param(
     [string]$ResultPath = '',
 
     [Parameter(ParameterSetName = 'Run')]
-    [int]$Workers = 0,
+    [int]$Workers = 48,
 
     [Parameter(ParameterSetName = 'Run')]
     [string]$Idos = '0,1,2,3',
@@ -185,7 +185,7 @@ $PodmanArgs.AddRange([string[]]@(
     '--security-opt', 'seccomp=unconfined',
     '--security-opt', 'label=disable',
     "--shm-size=$ShmSize",
-    '--pids-limit=8192',
+    '--pids-limit=16384',
     "--cpu-shares=$CpuShares"
 ))
 

@@ -1037,7 +1037,7 @@ mod linux_wine {
     impl Drop for LinuxWineWorkerGuard {
         fn drop(&mut self) {
             let _ = Command::new("wineserver")
-                .arg("-k")
+                .arg("-k9")
                 .env("WINEPREFIX", &self.wine_prefix)
                 .env("WINEARCH", "win32")
                 .env("WINEDEBUG", "-all")

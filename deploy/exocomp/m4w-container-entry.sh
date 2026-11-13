@@ -10,7 +10,7 @@ chmod 0700 "$XDG_RUNTIME_DIR"
 
 rm -f /tmp/.X99-lock /tmp/.X11-unix/X99 2>/dev/null || true
 
-Xvfb "$DISPLAY" -screen 0 800x600x24 -nolisten tcp -ac >/dev/null 2>&1 &
+Xvfb "$DISPLAY" -screen 0 800x600x24 -maxclients 2048 -nolisten tcp -ac >/dev/null 2>&1 &
 XVFB_PID=$!
 
 cleanup() {
