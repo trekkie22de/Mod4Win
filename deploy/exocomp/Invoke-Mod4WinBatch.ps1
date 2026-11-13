@@ -147,29 +147,47 @@ if ($ExistingRunning) {
 }
 & podman rm -f $ContainerName 2>$null | Out-Null
 
-# Volume-Mounts zusammenstellen (identische Host-/Container-Pfade)
-$MountDirs = [System.Collections.Generic.HashSet[string]]::new()
-[void]$MountDirs.Add($WorkerRoot)
+# Volume-Mounts zusammenstellen (identische Host-/Container-Pfade; Quellarchive Read-Only!)
+$RwMountDirs = [System.Collections.Generic.HashSet[string]]::new()
+$RoMountDirs = [System.Collections.Generic.HashSet[string]]::new()
+[void]$RwMountDirs.Add($WorkerRoot)
 if (Test-Path '/mnt/nas') {
-    [void]$MountDirs.Add('/mnt/nas')
+    [void]$RwMountDirs.Add('/mnt/nas')
+}
+if (Test-Path '/mnt/mods') {
+    [void]$RoMountDirs.Add('/mnt/mods')
 }
 
-foreach ($Candidate in @($ResolvedSource, $ResolvedResult)) {
-    $DirToMount = if (Test-Path -LiteralPath $Candidate -PathType Container) {
-        $Candidate
-    } else {
-        Split-Path -Parent $Candidate
+$ResultMountDir = if (Test-Path -LiteralPath $ResolvedResult -PathType Container) {
+    $ResolvedResult
+} else {
+    Split-Path -Parent $ResolvedResult
+}
+$ResCovered = $false
+foreach ($Root in $RwMountDirs) {
+    if ($ResultMountDir -eq $Root -or $ResultMountDir.StartsWith("$Root/")) {
+        $ResCovered = $true
+        break
     }
-    $AlreadyCovered = $false
-    foreach ($Root in $MountDirs) {
-        if ($DirToMount -eq $Root -or $DirToMount.StartsWith("$Root/")) {
-            $AlreadyCovered = $true
-            break
-        }
+}
+if (-not $ResCovered) {
+    [void]$RwMountDirs.Add($ResultMountDir)
+}
+
+$SourceMountDir = if (Test-Path -LiteralPath $ResolvedSource -PathType Container) {
+    $ResolvedSource
+} else {
+    Split-Path -Parent $ResolvedSource
+}
+$SrcCovered = $false
+foreach ($Root in (@($RwMountDirs) + @($RoMountDirs))) {
+    if ($SourceMountDir -eq $Root -or $SourceMountDir.StartsWith("$Root/")) {
+        $SrcCovered = $true
+        break
     }
-    if (-not $AlreadyCovered) {
-        [void]$MountDirs.Add($DirToMount)
-    }
+}
+if (-not $SrcCovered) {
+    [void]$RoMountDirs.Add($SourceMountDir)
 }
 
 $PodmanArgs = [System.Collections.Generic.List[string]]::new()
@@ -189,9 +207,13 @@ $PodmanArgs.AddRange([string[]]@(
     "--cpu-shares=$CpuShares"
 ))
 
-foreach ($Mnt in $MountDirs) {
+foreach ($Mnt in $RwMountDirs) {
     $PodmanArgs.Add('-v')
     $PodmanArgs.Add("${Mnt}:${Mnt}:rw")
+}
+foreach ($Mnt in $RoMountDirs) {
+    $PodmanArgs.Add('-v')
+    $PodmanArgs.Add("${Mnt}:${Mnt}:ro")
 }
 
 $PodmanArgs.Add($ImageName)

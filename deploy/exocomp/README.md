@@ -59,7 +59,7 @@ ExactPeakSearch=1
 - `/opt/Mod4Win-Worker/bin/mod4win-diff` – 64-Bit Rust Batch-Diff-Engine (`--features diff-suite`)
 - `/opt/Mod4Win-Worker/bin/Invoke-Mod4WinBatch.ps1` (Symlink `/usr/local/bin/m4w-batch`) – CLI-Steuerung
 - `/opt/Mod4Win-Worker/orig_bin/` – Originale 16-Bit `MOD4WIN.EXE`, `MOD4WIN_IDO0..3.EXE`, `PLAYER32.DLL`, `MOD4WIN.INI`
-- `/mnt/nas/mod4win-regression/corpus/` – Ablageort für große Modul-Archive (z. B. Modland)
+- `/mnt/mods/` – Read-Only NFSv4.2-Mount von `voyager.berilia.net:/samba/Audio/MOD_MID_SID/MOD` (inkl. `Modland/`, `MOD`–`Mod6`, `XM`, `S3M`, `669`, `Stm`)
 - `/mnt/nas/mod4win-regression/results/<lauf>/` – Ergebnisse (`pass/`, `fail/`, `timeout/`, `logs/_ALL_MISMATCHES.log`, `wav/`, `mods/`)
 
 ## Bedienung
@@ -75,13 +75,13 @@ pwsh -NoProfile -File /mnt/targets/Data/Mod4Win/deploy/exocomp/Install-ExocompWo
 Synchron mit Live-Ausgabe:
 
 ```powershell
-ssh root@192.168.10.64 "m4w-batch /mnt/nas/mod4win-regression/corpus/Protracker"
+ssh root@192.168.10.64 "m4w-batch /mnt/mods/MOD"
 ```
 
-Als abgekoppelter Hintergrund-Job (`-Detach`) für mehrtägige Modland-Läufe:
+Als abgekoppelter Hintergrund-Job (`-Detach`) für den kompletten Voyager-Korpus (~11.800 Dateien inkl. `Modland`):
 
 ```powershell
-ssh root@192.168.10.64 "m4w-batch /mnt/nas/mod4win-regression/corpus -ResultPath /mnt/nas/mod4win-regression/results/modland_full -Detach"
+ssh root@192.168.10.64 "m4w-batch /mnt/mods -ResultPath /mnt/nas/mod4win-regression/results/voyager_full -Detach"
 ```
 
 > **Hinweis zu Dateinamen:** Sowohl PC-Endungen (`.mod`, `.nst`, `.xm`, `.s3m`, `.mtm`, `.669`, `.ult`, `.far`, `.stm`, `.okt`, `.okta`, `.wow`, `.it`, `.umx`) als auch Amiga-/Modland-Präfixnamen (`mod.<titel>`, `okt.<titel>`, …) werden automatisch erkannt. Bereits geprüfte Module in `pass/`, `fail/` oder `timeout/` werden bei Fortsetzungsläufen automatisch übersprungen (`SKIP`), sofern nicht `-RetryFails` oder `-RetryTimeouts` angegeben wird.
