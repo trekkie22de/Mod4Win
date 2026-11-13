@@ -352,13 +352,50 @@ mod os_proc {
     }
 
     /// Beendet die Prozessgruppe sowie ggf. den isolierten `wineserver` des Wine-Workers unter Linux.
+    ///
+    /// WICHTIG: Niemals `kill -9 -<pgid>` über externes `procps-kill` aufrufen, da `procps` negative
+    /// Zahlen beginnend mit `1` (z. B. `-140`) als `PID -1` (`kill(-1, SIGKILL)`) fehlinterpretiert!
+    /// Stattdessen wird ausschließlich mit positiven IDs (`pkill -9 -g <pgid>` + positiver `/proc`-Scan)
+    /// sowie `wineserver -k9` gearbeitet.
     pub fn kill_process_tree(child: &mut Child, wine_prefix: Option<&Path>) {
-        let pid = child.id();
-        let _ = Command::new("kill")
-            .args(["-9", &format!("-{}", pid)])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
+        let root_pid = child.id();
+        let self_pid = std::process::id();
+        if root_pid > 1 && root_pid != self_pid {
+            let _ = Command::new("pkill")
+                .args(["-9", "-g", &root_pid.to_string()])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+
+            if let Ok(entries) = fs::read_dir("/proc") {
+                let target_pgrp = root_pid as i32;
+                let mut pos_pids: Vec<String> = Vec::new();
+                for entry in entries.flatten() {
+                    let Some(pid_str) = entry.file_name().to_str().map(str::to_owned) else {
+                        continue;
+                    };
+                    let Ok(pid) = pid_str.parse::<u32>() else {
+                        continue;
+                    };
+                    if pid <= 1 || pid == self_pid {
+                        continue;
+                    }
+                    if let Some((_, pgrp)) = parse_proc_stat_ticks_and_pgrp(pid)
+                        && (pid == root_pid || pgrp == target_pgrp)
+                    {
+                        pos_pids.push(pid.to_string());
+                    }
+                }
+                if !pos_pids.is_empty() {
+                    let _ = Command::new("kill")
+                        .arg("-9")
+                        .args(&pos_pids)
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .status();
+                }
+            }
+        }
         let _ = child.kill();
         let _ = child.wait();
         if let Some(pfx) = wine_prefix {

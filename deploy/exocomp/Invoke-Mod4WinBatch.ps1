@@ -44,7 +44,7 @@ param(
     [int]$CpuShares = 1024,
 
     [Parameter(ParameterSetName = 'Run')]
-    [string]$ShmSize = '4g',
+    [string]$ShmSize = '8g',
 
     [Parameter(ParameterSetName = 'Run')]
     [switch]$RetryFails,
