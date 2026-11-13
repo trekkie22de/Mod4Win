@@ -7,6 +7,7 @@ use super::winit::window::Window;
 
 use super::app::{
     Mod4WinApp, PressedButton, UiSharedState, WindowKind, INFO_WINDOW_WIDTH, INST_WINDOW_WIDTH,
+    QUICK_SELECT_WIDTH,
 };
 use super::widgets::{
     draw_3d_frame_only, draw_3d_panel, draw_bmp_button_2state, draw_bmp_lcd_number,
@@ -408,13 +409,72 @@ impl Mod4WinApp {
         items
     }
 
-    /// Rendert die rahmenlose Playlist-Schnellauswahl (`tviewwin` in `MULBOX.PAS`: `capdy = 0`, dynamische Höhe).
+    /// Berechnet das dynamische Mehrspalten-Layout (`LBS_MULTICOLUMN`) des Classic-Playlistfensters exakt nach `MULBOX.PAS` (Zeilen 126–169):
+    /// Wächst bis zu `2/3` der Bildschirmbreite (`19 * FW = 152 px` pro Spalte) und `2/3` der Bildschirmhöhe (`FH + 1 = 13 px` pro Zeile)
+    /// mit und blendet bei noch mehr Einträgen unten links eine horizontale Scrollbar (`myscroll`) ein.
+    /// Rückgabe: `(width, height, vis_rows, vis_cols, total_cols, has_hscroll)`.
+    pub(crate) fn classic_quick_select_layout(
+        &self,
+        song_count: usize,
+    ) -> (u32, u32, usize, usize, usize, bool) {
+        let scale = if cfg!(any(feature = "retro-win32", target_arch = "x86")) {
+            1.0
+        } else {
+            self.scale_factor.clamp(0.5, 4.0)
+        };
+        let (mon_phys_w, mon_phys_h) = self
+            .kind_to_id
+            .get(&WindowKind::Main)
+            .and_then(|id| self.windows.get(id))
+            .and_then(|s| s.window.current_monitor())
+            .map(|m| {
+                let sz = m.size();
+                (sz.width.max(640) as f64, sz.height.max(480) as f64)
+            })
+            .unwrap_or((1280.0 * scale, 960.0 * scale));
+        let scr_w = (mon_phys_w / scale).round().max(640.0) as usize;
+        let scr_h = (mon_phys_h / scale).round().max(480.0) as usize;
+
+        let max_cols = ((2 * scr_w) / 3 / 152).max(1);
+        let max_lines = ((2 * scr_h) / 3 / 13).max(12);
+        let count = song_count.max(1);
+
+        let (vis_rows, vis_cols, total_cols, has_hscroll) = if count <= max_lines {
+            (count, 1, 1, false)
+        } else {
+            let tcols = count.div_ceil(max_lines);
+            let vcols = tcols.min(max_cols);
+            (max_lines, vcols, tcols, tcols > max_cols)
+        };
+
+        let w = QUICK_SELECT_WIDTH + ((vis_cols.saturating_sub(1)) as u32) * 152;
+        let h = 56 + ((vis_rows.saturating_sub(1)) as u32) * 13;
+        (w, h, vis_rows, vis_cols, total_cols, has_hscroll)
+    }
+
+    /// Stellt sicher, dass die sichtbare Listenposition `vis_pos` im mehrspaltigen Classic-`QuickSelect` im sichtbaren Spaltenfenster liegt.
+    pub(crate) fn ensure_classic_quick_select_visible(&mut self, vis_pos: usize, total_len: usize) {
+        let (_, _, vis_rows, vis_cols, total_cols, _) = self.classic_quick_select_layout(total_len);
+        let rows = vis_rows.max(1);
+        let max_col_off = total_cols.saturating_sub(vis_cols);
+        let mut col_off = (self.quick_select_scroll / rows).min(max_col_off);
+        let target_col = vis_pos / rows;
+        if target_col < col_off {
+            col_off = target_col;
+        } else if target_col >= col_off + vis_cols {
+            col_off = target_col + 1 - vis_cols;
+        }
+        self.quick_select_scroll = col_off.min(max_col_off) * rows;
+    }
+
+    /// Rendert die rahmenlose mehrspaltige Playlist-Schnellauswahl (`tviewwin` in `MULBOX.PAS`: `capdy = 0`, dynamische Größe bis 2/3 Screen).
     pub(crate) fn render_quick_select_window(&self, frame: &mut [u8], dw: u32, dh: u32, state: &UiSharedState) {
         let col_gray = [192, 192, 192, 255];
+        let col_dark = [128, 128, 128, 255];
         let col_black = [0, 0, 0, 255];
         let col_green = [0, 255, 0, 255];
 
-        // 1. Äußerer 1px schwarzer Rahmen + 2px erhabener 3D-Hauptrahmen (`MULBOX.PAS:201`)
+        // 1. Äußerer 1px schwarzer Rahmen + 2px erhabener 3D-Hauptrahmen (`MULBOX.PAS:204`)
         fill_rect(frame, dw, dh, 0, 0, dw, dh, col_black);
         draw_3d_panel(
             frame,
@@ -428,9 +488,10 @@ impl Mod4WinApp {
             col_gray,
         );
 
-        // 2. Schwarzer Listenbereich (`7, 7, dw-14, dh-41`) mit 2px versenktem 3D-Rahmen (`MULBOX.PAS:202`)
+        // 2. Schwarzer Mehrspalten-Listenbereich (`7, 7, dw-14, dh-41`) mit 2px versenktem 3D-Rahmen (`MULBOX.PAS:205`)
         let lb_h = dh.saturating_sub(41).max(15);
         let vis_rows = ((lb_h.saturating_sub(2)) / 13).max(1) as usize;
+        let vis_cols = (((dw.saturating_sub(14)) / 152) as usize).max(1);
         draw_3d_panel(
             frame,
             dw,
@@ -443,57 +504,78 @@ impl Mod4WinApp {
             col_black,
         );
 
-        let total_items = state.playlist.len();
-        let max_scroll = total_items.saturating_sub(vis_rows);
-        let scroll = self.quick_select_scroll.min(max_scroll);
+        let items = self.sorted_quick_select_items(state);
+        let total_items = items.len();
+        let total_cols = if total_items == 0 {
+            1
+        } else {
+            total_items.div_ceil(vis_rows)
+        };
+        let max_col_off = total_cols.saturating_sub(vis_cols);
+        let col_off = (self.quick_select_scroll / vis_rows).min(max_col_off);
+        let has_hscroll = total_cols > vis_cols && dw >= 318;
 
-        if self.quick_select_sort == 0 {
+        for c in 0..vis_cols {
+            let col_x = 8 + (c as i32) * 152;
+            if c > 0 {
+                fill_rect(frame, dw, dh, col_x - 2, 7, 1, lb_h, [0, 64, 0, 255]);
+            }
             for row in 0..vis_rows {
-                let orig_idx = scroll + row;
-                let Some(p) = state.playlist.get(orig_idx) else {
+                let item_pos = (col_off + c) * vis_rows + row;
+                let Some((orig_idx, name)) = items.get(item_pos) else {
                     break;
                 };
                 let ry = 8 + (row as i32) * 13;
                 let is_cursor =
-                    self.quick_select_all_selected || orig_idx == self.quick_select_cursor;
-                if is_cursor {
-                    fill_rect(frame, dw, dh, 15, ry, dw.saturating_sub(30), 13, col_green);
-                }
-                let text_col = if is_cursor { col_black } else { col_green };
-                let name = p
-                    .to_str()
-                    .and_then(|s| s.rsplit(['/', '\\']).find(|seg| !seg.is_empty()))
-                    .or_else(|| p.file_name().and_then(|n| n.to_str()))
-                    .unwrap_or("module.mod")
-                    .to_lowercase();
-                let line = format!("{:4}:{}", orig_idx + 1, name);
-                let disp: String = line.chars().take(17).collect();
-                draw_oem_text(frame, dw, dh, 15, ry + 1, &disp, text_col);
-            }
-        } else {
-            let items = self.sorted_quick_select_items(state);
-            for (row, (orig_idx, name)) in items.iter().skip(scroll).take(vis_rows).enumerate() {
-                let ry = 8 + (row as i32) * 13;
-                let is_cursor =
                     self.quick_select_all_selected || *orig_idx == self.quick_select_cursor;
                 if is_cursor {
-                    fill_rect(frame, dw, dh, 15, ry, dw.saturating_sub(30), 13, col_green);
+                    fill_rect(frame, dw, dh, col_x, ry, 148, 13, col_green);
                 }
                 let text_col = if is_cursor { col_black } else { col_green };
                 let mut disp_name = name.clone();
-                if let Some(first) = disp_name.get_mut(0..1) {
+                if self.quick_select_sort != 0
+                    && let Some(first) = disp_name.get_mut(0..1)
+                {
                     first.make_ascii_uppercase();
                 }
                 let line = format!("{:4}:{}", orig_idx + 1, disp_name);
-                let disp: String = line.chars().take(17).collect();
-                draw_oem_text(frame, dw, dh, 15, ry + 1, &disp, text_col);
+                let disp: String = line.chars().take(18).collect();
+                draw_oem_text(frame, dw, dh, col_x + 2, ry + 1, &disp, text_col);
             }
         }
 
-        // 3. Drei Sortier-Buttons unten bündig nebeneinander (`b_order`, `b_name`, `b_ext`, je 47x21)
-        //    in einem 1px versenkten 3D-Rahmen (`MULBOX.PAS:158-160, 204`)
+        // 2b. Horizontale Scrollbar unten links (`myscroll` in `MULBOX.PAS:166-169, 206`), falls `total_cols > vis_cols`
         let by = dh as i32 - 28;
         let bx = dw as i32 - 149;
+        if has_hscroll {
+            let sb_x = 6i32;
+            let sb_y = by + 1;
+            let sb_w = (bx - 8 - sb_x).max(48) as u32;
+            let sb_h = 19u32;
+            draw_3d_frame_only(frame, dw, dh, sb_x - 2, sb_y - 2, sb_w + 4, sb_h + 4, true);
+            fill_rect(frame, dw, dh, sb_x, sb_y, sb_w, sb_h, [224, 224, 224, 255]);
+            // Links-/Rechts-Pfeilbuttons (je 15x19)
+            draw_3d_panel(frame, dw, dh, sb_x, sb_y, 15, sb_h, false, col_gray);
+            draw_oem_text(frame, dw, dh, sb_x + 4, sb_y + 3, "<", col_black);
+            let rbtn_x = sb_x + sb_w as i32 - 15;
+            draw_3d_panel(frame, dw, dh, rbtn_x, sb_y, 15, sb_h, false, col_gray);
+            draw_oem_text(frame, dw, dh, rbtn_x + 4, sb_y + 3, ">", col_black);
+
+            let track_x = sb_x + 15;
+            let track_w = (sb_w.saturating_sub(30)).max(8);
+            let thumb_w = ((track_w as usize * vis_cols) / total_cols.max(1)).clamp(14, track_w as usize) as u32;
+            let avail_w = track_w.saturating_sub(thumb_w);
+            let thumb_off = if max_col_off > 0 {
+                ((avail_w as usize * col_off) / max_col_off) as i32
+            } else {
+                0
+            };
+            draw_3d_panel(frame, dw, dh, track_x + thumb_off, sb_y, thumb_w, sb_h, false, col_gray);
+            fill_rect(frame, dw, dh, track_x + thumb_off + (thumb_w as i32 / 2), sb_y + 4, 1, sb_h.saturating_sub(8), col_dark);
+        }
+
+        // 3. Drei Sortier-Buttons unten rechts bündig nebeneinander (`b_order`, `b_name`, `b_ext`, je 47x21)
+        //    in einem 1px versenkten 3D-Rahmen (`MULBOX.PAS:161-163, 207`)
         draw_3d_frame_only(frame, dw, dh, bx - 1, by - 1, 143, 23, true);
         draw_bmp_button_2state(
             frame,
@@ -613,63 +695,97 @@ impl Mod4WinApp {
         window: &Arc<Window>,
         is_double_click: bool,
     ) {
-        let (dh, items, cur_pl_idx, classic_input) = {
+        let (dw, dh, items, cur_pl_idx, classic_input) = {
             let st = self.shared_state.lock().unwrap();
-            let (_, dh, _) = self.window_dimensions(WindowKind::QuickSelect, &st);
+            let (dw, dh, _) = self.window_dimensions(WindowKind::QuickSelect, &st);
             let items = self.sorted_quick_select_items(&st);
-            (dh, items, st.playlist_idx, st.classic_input)
+            (dw, dh, items, st.playlist_idx, st.classic_input)
         };
         let lb_h = dh.saturating_sub(41).max(15);
         let vis_rows = ((lb_h.saturating_sub(2)) / 13).max(1) as usize;
-        let max_scroll = items.len().saturating_sub(vis_rows);
-        self.quick_select_scroll = self.quick_select_scroll.min(max_scroll);
+        let vis_cols = (((dw.saturating_sub(14)) / 152) as usize).max(1);
+        let total_cols = if items.is_empty() {
+            1
+        } else {
+            items.len().div_ceil(vis_rows)
+        };
+        let max_col_off = total_cols.saturating_sub(vis_cols);
+        let col_off = (self.quick_select_scroll / vis_rows).min(max_col_off);
+        self.quick_select_scroll = col_off * vis_rows;
 
-        // Sortierbuttons unten (`by = dh - 28`, je 47x21 bei x = 17..63, 64..110, 111..158)
+        // Untere Leiste (`by = dh - 28`): Horizontale Scrollbar links (falls vorhanden) + Sortierbuttons rechts (`bx = dw - 149`)
         let by = dh as i32 - 28;
+        let bx = dw as i32 - 149;
         if (by..=(by + 21)).contains(&vy) {
-            if (17..=63).contains(&vx) {
+            if (bx..=(bx + 46)).contains(&vx) {
                 self.quick_select_sort = 0;
-            } else if (64..=110).contains(&vx) {
+            } else if ((bx + 47)..=(bx + 93)).contains(&vx) {
                 self.quick_select_sort = 1;
-            } else if (111..=158).contains(&vx) {
+            } else if ((bx + 94)..=(bx + 141)).contains(&vx) {
                 self.quick_select_sort = 2;
+            } else if total_cols > vis_cols && dw >= 318 && (6..=(bx - 8)).contains(&vx) {
+                let sb_x = 6i32;
+                let sb_w = (bx - 8 - sb_x).max(48);
+                let next_col_off = if vx < sb_x + 15 {
+                    col_off.saturating_sub(1)
+                } else if vx > sb_x + sb_w - 15 {
+                    (col_off + 1).min(max_col_off)
+                } else {
+                    let track_x = sb_x + 15;
+                    let track_w = (sb_w - 30).max(8);
+                    let rel = (vx - track_x).clamp(0, track_w) as usize;
+                    ((rel * max_col_off + (track_w as usize / 2)) / track_w as usize).min(max_col_off)
+                };
+                self.quick_select_scroll = next_col_off * vis_rows;
+                return;
+            } else {
+                return;
             }
             let new_items = {
                 let st = self.shared_state.lock().unwrap();
                 self.sorted_quick_select_items(&st)
             };
-            if let Some(pos) = new_items
-                .iter()
-                .position(|(orig_idx, _)| *orig_idx == cur_pl_idx)
-                && (pos < self.quick_select_scroll || pos >= self.quick_select_scroll + vis_rows) {
-                    self.quick_select_scroll = pos
-                        .saturating_sub(vis_rows / 2)
-                        .min(new_items.len().saturating_sub(vis_rows));
-                }
+            let target_orig = if self.quick_select_cursor < new_items.len() {
+                self.quick_select_cursor
+            } else {
+                cur_pl_idx
+            };
+            if let Some(pos) = new_items.iter().position(|(orig_idx, _)| *orig_idx == target_orig) {
+                self.ensure_classic_quick_select_visible(pos, new_items.len());
+            }
             return;
         }
 
-        // Klick in die Dateiliste (`x = 7..158, y = 7..(7 + lb_h)`):
-        if (7..=158).contains(&vx) && (7..=(7 + lb_h as i32)).contains(&vy) {
-            let row = ((vy - 8).max(0) / 13) as usize;
-            let item_idx = self.quick_select_scroll + row;
-            if let Some(&(orig_idx, _)) = items.get(item_idx) {
-                self.quick_select_cursor = orig_idx;
-                if classic_input || is_double_click {
-                    let mut state = self.shared_state.lock().unwrap();
-                    if orig_idx < state.playlist.len() {
-                        state.playlist_idx = orig_idx;
-                        state.playing_track_detached = false;
-                        if let Some(pos) = state.number_list.iter().position(|&i| i == orig_idx) {
-                            state.playlist_pos = pos;
+        // Klick in die mehrspaltige Dateiliste (`x = 7..(dw - 7), y = 7..(7 + lb_h)`):
+        if (7..=(dw as i32 - 7)).contains(&vx) && (7..=(7 + lb_h as i32)).contains(&vy) {
+            let col = (((vx - 8).max(0)) / 152) as usize;
+            let row = (((vy - 8).max(0)) / 13) as usize;
+            if col < vis_cols && row < vis_rows {
+                let item_idx = (col_off + col) * vis_rows + row;
+                if let Some(&(orig_idx, _)) = items.get(item_idx) {
+                    self.quick_select_all_selected = false;
+                    self.quick_select_cursor = orig_idx;
+                    if classic_input || is_double_click {
+                        let mut state = self.shared_state.lock().unwrap();
+                        if orig_idx < state.playlist.len() {
+                            state.playlist_idx = orig_idx;
+                            state.playing_track_detached = false;
+                            if state.shuffle {
+                                state.rebuild_number_list();
+                            }
+                            if let Some(pos) = state.number_list.iter().position(|&i| i == orig_idx) {
+                                state.playlist_pos = pos;
+                            } else {
+                                state.playlist_pos = orig_idx;
+                            }
+                            let path = state.playlist[orig_idx].clone();
+                            state.pending_load_file = Some(path);
+                            state.is_playing = true;
+                            state.is_paused = false;
                         }
-                        let path = state.playlist[orig_idx].clone();
-                        state.pending_load_file = Some(path);
-                        state.is_playing = true;
-                        state.is_paused = false;
+                        drop(state);
+                        self.close_window(WindowKind::QuickSelect);
                     }
-                    drop(state);
-                    self.close_window(WindowKind::QuickSelect);
                 }
             }
             return;

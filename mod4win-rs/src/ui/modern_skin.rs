@@ -8,7 +8,8 @@ use super::winit::event_loop::ActiveEventLoop;
 use super::winit::window::Window;
 
 use super::app::{
-    ConfirmAction, Mod4WinApp, PressedButton, SetupEditFocus, UiSharedState, WindowKind,
+    ConfirmAction, Mod4WinApp, PlaylistReorderDrag, PressedButton, SetupEditFocus, UiSharedState,
+    WindowKind,
 };
 #[cfg(any(not(target_os = "windows"), feature = "retro-win32"))]
 use super::app::FileSelectTarget;
@@ -902,11 +903,12 @@ impl Mod4WinApp {
         if self.suppress_move_snap {
             if let Some(surf) = self.windows.get_mut(&moved_id) {
                 surf.last_outer_pos = Some((pos_x, pos_y));
+                surf.last_raw_outer_pos = Some((pos_x, pos_y));
             }
             return (pos_x, pos_y);
         }
 
-        let Some((moved_kind, old_pos, dw, dh, monitor_rect)) =
+        let Some((moved_kind, old_pos, old_raw_pos, dw, dh, monitor_rect)) =
             self.windows.get(&moved_id).map(|s| {
                 let sz = s.window.outer_size();
                 let mon = s.window.current_monitor().map(|m| {
@@ -917,6 +919,7 @@ impl Mod4WinApp {
                 (
                     s.kind,
                     s.last_outer_pos,
+                    s.last_raw_outer_pos.or(s.last_outer_pos),
                     sz.width as i32,
                     sz.height as i32,
                     mon,
@@ -984,31 +987,70 @@ impl Mod4WinApp {
                 }
             }
 
-        let mut nx = pos_x;
-        let mut ny = pos_y;
+        let (raw_dx, raw_dy) = old_raw_pos
+            .map(|(rx, ry)| (pos_x - rx, pos_y - ry))
+            .unwrap_or((0, 0));
+        let (old_sx, old_sy) = old_pos.unwrap_or((pos_x, pos_y));
+
+        // Richtungsabhängiges Snapping mit Break-Away-Hysterese:
+        // - Zieht man von einer bereits gedockten Kante aktiv weg, wird NIEMALS zurückgesnappt
+        //   (löst das Festkleben im „unteren Eck-Dreieck“ zuverlässig auf).
+        // - Nur bei Annäherung an eine Kante (`SNAP_IN = 8px`) oder beim rein orthogonalen Entlanggleiten (`HOLD = 4px`)
+        //   an einer überlappenden Kante rastet die Position ein.
+        const SNAP_IN: i32 = 8;
+        const SNAP_HOLD: i32 = 4;
+        let can_snap_axis = |cur: i32, target: i32, old_snapped: i32, raw_delta: i32| -> Option<i32> {
+            let dist = (cur - target).abs();
+            if dist == 0 {
+                return Some(0);
+            }
+            let was_docked_here = (old_snapped - target).abs() <= 1;
+            if was_docked_here {
+                let pulling_away = (cur > target && raw_delta > 0) || (cur < target && raw_delta < 0);
+                if !pulling_away && dist <= SNAP_HOLD {
+                    Some(dist)
+                } else {
+                    None
+                }
+            } else {
+                let approaching = (cur > target && raw_delta < 0) || (cur < target && raw_delta > 0);
+                if approaching && dist <= SNAP_IN {
+                    Some(dist)
+                } else {
+                    None
+                }
+            }
+        };
+
+        let mut best_x: Option<(i32, i32)> = None; // (dist, target_x)
+        let mut best_y: Option<(i32, i32)> = None; // (dist, target_y)
+        let mut consider_x = |target_x: i32| {
+            if let Some(d) = can_snap_axis(pos_x, target_x, old_sx, raw_dx)
+                && best_x.map_or(true, |(bd, _)| d < bd)
+            {
+                best_x = Some((d, target_x));
+            }
+        };
+        let mut consider_y = |target_y: i32| {
+            if let Some(d) = can_snap_axis(pos_y, target_y, old_sy, raw_dy)
+                && best_y.map_or(true, |(bd, _)| d < bd)
+            {
+                best_y = Some((d, target_y));
+            }
+        };
 
         // 1. Snapping an Bildschirmrändern (links/oben/rechts/unten)
         if let Some((mx, my, mw, mh)) = monitor_rect {
-            if (nx - mx).abs() < MODERN_SNAP_THRESHOLD {
-                nx = mx;
-            } else if ((nx + dw) - (mx + mw)).abs() < MODERN_SNAP_THRESHOLD {
-                nx = mx + mw - dw;
-            }
-            if (ny - my).abs() < MODERN_SNAP_THRESHOLD {
-                ny = my;
-            } else if ((ny + dh) - (my + mh)).abs() < MODERN_SNAP_THRESHOLD {
-                ny = my + mh - dh;
-            }
+            consider_x(mx);
+            consider_x(mx + mw - dw);
+            consider_y(my);
+            consider_y(my + mh - dh);
         } else {
-            if nx.abs() < MODERN_SNAP_THRESHOLD {
-                nx = 0;
-            }
-            if ny.abs() < MODERN_SNAP_THRESHOLD {
-                ny = 0;
-            }
+            consider_x(0);
+            consider_y(0);
         }
 
-        // 2. Snapping an alle anderen geöffneten Player-Fenster (ausgenommen Fenster, die gerade mit `Main` mitgezogen werden)
+        // 2. Snapping an alle anderen geöffneten Player-Fenster (nur bei echter Kanten-Überlappung!)
         for (&other_id, other_surf) in &self.windows {
             if other_id == moved_id
                 || docked_followers.iter().any(|(fid, _, _, _)| *fid == other_id)
@@ -1022,40 +1064,31 @@ impl Mod4WinApp {
                 let ow = osize.width as i32;
                 let oh = osize.height as i32;
 
-                let vert_near = ny < oy + oh + MODERN_SNAP_THRESHOLD * 2
-                    && ny + dh > oy - MODERN_SNAP_THRESHOLD * 2;
-                let horiz_near = nx < ox + ow + MODERN_SNAP_THRESHOLD * 2
-                    && nx + dw > ox - MODERN_SNAP_THRESHOLD * 2;
+                let vert_overlap = pos_y < oy + oh && pos_y + dh > oy;
+                let horiz_overlap = pos_x < ox + ow && pos_x + dw > ox;
 
-                if vert_near {
-                    if (nx - (ox + ow)).abs() < MODERN_SNAP_THRESHOLD {
-                        nx = ox + ow;
-                    } else if ((nx + dw) - ox).abs() < MODERN_SNAP_THRESHOLD {
-                        nx = ox - dw;
-                    } else if (nx - ox).abs() < MODERN_SNAP_THRESHOLD {
-                        nx = ox;
-                    } else if ((nx + dw) - (ox + ow)).abs() < MODERN_SNAP_THRESHOLD {
-                        nx = ox + ow - dw;
-                    }
+                if vert_overlap {
+                    consider_x(ox + ow);
+                    consider_x(ox - dw);
+                    consider_x(ox);
+                    consider_x(ox + ow - dw);
                 }
-                if horiz_near {
-                    if (ny - (oy + oh)).abs() < MODERN_SNAP_THRESHOLD {
-                        ny = oy + oh;
-                    } else if ((ny + dh) - oy).abs() < MODERN_SNAP_THRESHOLD {
-                        ny = oy - dh;
-                    } else if (ny - oy).abs() < MODERN_SNAP_THRESHOLD {
-                        ny = oy;
-                    } else if ((ny + dh) - (oy + oh)).abs() < MODERN_SNAP_THRESHOLD {
-                        ny = oy + oh - dh;
-                    }
+                if horiz_overlap {
+                    consider_y(oy + oh);
+                    consider_y(oy - dh);
+                    consider_y(oy);
+                    consider_y(oy + oh - dh);
                 }
             }
         }
 
+        let nx = best_x.map(|(_, tx)| tx).unwrap_or(pos_x);
+        let ny = best_y.map(|(_, ty)| ty).unwrap_or(pos_y);
+
         self.suppress_move_snap = true;
         if (nx != pos_x || ny != pos_y)
-            && (nx - pos_x).abs() <= MODERN_SNAP_THRESHOLD
-            && (ny - pos_y).abs() <= MODERN_SNAP_THRESHOLD
+            && (nx - pos_x).abs() <= SNAP_IN
+            && (ny - pos_y).abs() <= SNAP_IN
             && let Some(moved_surf) = self.windows.get(&moved_id) {
                 moved_surf
                     .window
@@ -1063,6 +1096,7 @@ impl Mod4WinApp {
             }
         if let Some(moved_surf) = self.windows.get_mut(&moved_id) {
             moved_surf.last_outer_pos = Some((nx, ny));
+            moved_surf.last_raw_outer_pos = Some((pos_x, pos_y));
         }
 
         // 3. Wenn `Main` verschoben wurde: Alle angedockten Unterfenster synchron um `(dx, dy)` mitbewegen!
@@ -1076,6 +1110,7 @@ impl Mod4WinApp {
                         let new_fy = fy + dy;
                         if let Some(fsurf) = self.windows.get_mut(&fid) {
                             fsurf.last_outer_pos = Some((new_fx, new_fy));
+                            fsurf.last_raw_outer_pos = Some((new_fx, new_fy));
                             fsurf
                                 .window
                                 .set_outer_position(super::winit::dpi::PhysicalPosition::new(new_fx, new_fy));
@@ -1700,50 +1735,9 @@ impl Mod4WinApp {
         draw_modern_seg_value(frame, dw, dh, 545, 113, "-88", &db_str, false);
         draw_modern_ui_text(frame, dw, dh, 551, 128, "dB", COL_LCD_BRIGHT);
 
-        // [6] Rechtsklick-Kontextmenü (falls file_menu_open)
+        // Bestätigungs-Overlay (nur F7 RemoveFromPlaylist; F5/F6/F8 & Rechtsklick-Kontextmenü im Modern Skin deaktiviert)
         let is_de = self.locale.is_german();
-        if self.file_menu_open {
-            let mx = 350i32;
-            let my = 48i32;
-            let mw = 184u32;
-            let mh = 76u32;
-            fill_rounded_rect_grad(
-                frame,
-                dw,
-                dh,
-                mx,
-                my,
-                mw,
-                mh,
-                3,
-                [0x22, 0x2c, 0x39, 255],
-                [0x18, 0x20, 0x2a, 255],
-            );
-            stroke_rounded_rect(frame, dw, dh, mx, my, mw, mh, 3, COL_CYAN_BRAND);
-            let items = if is_de {
-                [
-                    ("Datei kopieren...", "F5", COL_TEXT_UI),
-                    ("Verschieben...", "F6", COL_TEXT_UI),
-                    ("Aus Liste entf.", "F7", COL_TEXT_UI),
-                    ("Von Disk löschen", "F8", [0xff, 0x6e, 0x40, 255]),
-                ]
-            } else {
-                [
-                    ("Copy File...", "F5", COL_TEXT_UI),
-                    ("Move / Rename...", "F6", COL_TEXT_UI),
-                    ("Remove Track", "F7", COL_TEXT_UI),
-                    ("Delete Disk", "F8", [0xff, 0x6e, 0x40, 255]),
-                ]
-            };
-            for (idx, (lbl, hk, col)) in items.iter().enumerate() {
-                let iy = my + 6 + (idx as i32) * 16;
-                draw_modern_ui_text(frame, dw, dh, mx + 10, iy, lbl, *col);
-                draw_modern_ui_text(frame, dw, dh, mx + 158, iy, hk, COL_TEXT_MUTED);
-            }
-        }
-
-        // Bestätigungs-Overlay (F7 / F8)
-        if let Some(action) = self.confirm_action {
+        if self.confirm_action == Some(ConfirmAction::RemoveFromPlaylist) {
             let ox = 110i32;
             let oy = 38i32;
             let ow = 360u32;
@@ -1761,18 +1755,11 @@ impl Mod4WinApp {
                 [0x12, 0x19, 0x22, 255],
             );
             stroke_rounded_rect(frame, dw, dh, ox, oy, ow, oh, 3, COL_CYAN_BRAND);
-            let msg = match action {
-                ConfirmAction::RemoveFromPlaylist => self.locale.tr_or(
-                    "confirm",
-                    "remove_playlist",
-                    "Remove current track from playlist? (F7)",
-                ),
-                ConfirmAction::DeleteFromDisk => self.locale.tr_or(
-                    "confirm",
-                    "delete_disk",
-                    "REALLY DELETE FILE FROM DISK? (F8)",
-                ),
-            };
+            let msg = self.locale.tr_or(
+                "confirm",
+                "remove_playlist",
+                "Remove current track from playlist? (F7)",
+            );
             draw_modern_ui_text(frame, dw, dh, ox + 16, oy + 16, msg, COL_LCD_BRIGHT);
             let yes_lbl = if is_de { "JA" } else { "YES" };
             let no_lbl = if is_de { "NEIN" } else { "NO" };
@@ -1790,7 +1777,7 @@ impl Mod4WinApp {
         window: &Arc<Window>,
     ) {
         if let Some(action) = self.confirm_action {
-            if (80..=102).contains(&vy) {
+            if action == ConfirmAction::RemoveFromPlaylist && (80..=102).contains(&vy) {
                 if (180..=270).contains(&vx) {
                     self.confirm_action = None;
                     self.execute_confirm_action(action);
@@ -1804,32 +1791,7 @@ impl Mod4WinApp {
             return;
         }
 
-        if self.file_menu_open {
-            let mx = 350i32;
-            let my = 48i32;
-            if (mx..=mx + 184).contains(&vx) && (my..=my + 76).contains(&vy) {
-                let row = (vy - (my + 4)) / 17;
-                self.file_menu_open = false;
-                match row {
-                    0 => {
-                        self.file_man_dlg.is_copy = true;
-                        self.open_window(event_loop, WindowKind::FileManager);
-                    }
-                    1 => {
-                        self.file_man_dlg.is_copy = false;
-                        self.open_window(event_loop, WindowKind::FileManager);
-                    }
-                    2 => self.confirm_action = Some(ConfirmAction::RemoveFromPlaylist),
-                    3 => self.confirm_action = Some(ConfirmAction::DeleteFromDisk),
-                    _ => {}
-                }
-                return;
-            }
-            self.file_menu_open = false;
-            return;
-        }
-
-        // Rechtsklick-Interaktionen im Modern Main Window
+        // Rechtsklick-Interaktionen im Modern Main Window (ohne Classic-Datei-Kontextmenü)
         if button == MouseButton::Right {
             // Rechtsklick auf PreAmp-Schacht setzt PreAmp auf +00 dB zurück
             if (538..=574).contains(&vx) && (30..=142).contains(&vy) {
@@ -1886,8 +1848,6 @@ impl Mod4WinApp {
                 state.pending_seek_delta -= 1;
                 return;
             }
-            // Sonst [6] Kontextmenü öffnen
-            self.file_menu_open = true;
             return;
         }
 
@@ -2732,7 +2692,7 @@ impl Mod4WinApp {
             }
         }
         if button == MouseButton::Right {
-            self.close_window(WindowKind::Effects);
+            self.pending_right_click_close = Some(WindowKind::Effects);
             return;
         }
         self.drag_window_if_allowed(vy, window);
@@ -2794,8 +2754,9 @@ impl Mod4WinApp {
             };
             let ry = 35 + (row as i32) * 16;
             let is_playing = !state.playing_track_detached && orig_idx == state.playlist_idx;
-            let is_selected =
-                self.quick_select_all_selected || orig_idx == self.quick_select_cursor;
+            let is_selected = self.quick_select_all_selected
+                || self.playlist_selected.contains(&orig_idx)
+                || (self.playlist_selected.is_empty() && orig_idx == self.quick_select_cursor);
             if is_selected && is_playing {
                 fill_rounded_rect_grad(
                     frame,
@@ -2847,29 +2808,78 @@ impl Mod4WinApp {
             };
             draw_modern_ui_text(frame, dw, dh, 14, ry + 4, &format!("{:02}.", orig_idx + 1), fg);
 
+            #[cfg(not(feature = "retro-win32"))]
+            let cached_meta = state
+                .playlist
+                .get(orig_idx)
+                .and_then(|p| self.playlist_meta_cache.get(&UiSharedState::playlist_path_key(p)))
+                .and_then(|m| m.as_ref());
+
             let fname = label.as_str();
             let disp = if is_playing && !state.title.trim().is_empty() {
                 format!("{} - {}", fname, state.title.trim())
             } else {
-                fname.to_string()
+                #[cfg(not(feature = "retro-win32"))]
+                {
+                    if let Some(meta) = cached_meta
+                        && !meta.title.trim().is_empty()
+                    {
+                        format!("{} - {}", fname, meta.title.trim())
+                    } else {
+                        fname.to_string()
+                    }
+                }
+                #[cfg(feature = "retro-win32")]
+                {
+                    fname.to_string()
+                }
             };
-            let short_disp: String = disp.chars().take(58).collect();
+            let short_disp: String = disp.chars().take(54).collect();
             draw_modern_ui_text(frame, dw, dh, 42, ry + 4, &short_disp, fg);
 
             let ch_str = if is_playing {
                 format!("{:02}CH", state.num_channels)
             } else {
-                fname
-                    .rsplit('.')
-                    .next()
-                    .unwrap_or("MOD")
-                    .chars()
-                    .take(4)
-                    .collect()
+                #[cfg(not(feature = "retro-win32"))]
+                {
+                    if let Some(meta) = cached_meta {
+                        format!("{} {:02}C", meta.short_fmt, meta.num_channels)
+                    } else {
+                        fname
+                            .rsplit('.')
+                            .next()
+                            .unwrap_or("MOD")
+                            .to_ascii_uppercase()
+                            .chars()
+                            .take(4)
+                            .collect()
+                    }
+                }
+                #[cfg(feature = "retro-win32")]
+                {
+                    fname
+                        .rsplit('.')
+                        .next()
+                        .unwrap_or("MOD")
+                        .chars()
+                        .take(4)
+                        .collect()
+                }
             };
-            draw_modern_ui_text(frame, dw, dh, 448, ry + 4, &ch_str, fg);
+            draw_modern_ui_text(frame, dw, dh, 434, ry + 4, &ch_str, fg);
 
-            let dur_secs = if is_playing { state.total_time_secs } else { 0 };
+            let dur_secs = if is_playing {
+                state.total_time_secs
+            } else {
+                #[cfg(not(feature = "retro-win32"))]
+                {
+                    cached_meta.map(|m| m.duration_secs).unwrap_or(0)
+                }
+                #[cfg(feature = "retro-win32")]
+                {
+                    0
+                }
+            };
             let dur_str = if dur_secs > 0 {
                 format!("{:02}:{:02}", dur_secs / 60, dur_secs % 60)
             } else {
@@ -2892,6 +2902,20 @@ impl Mod4WinApp {
             );
             stroke_rounded_rect(frame, dw, dh, 536, ry + 1, 15, 13, 2, [0x5c, 0x34, 0x3e, 255]);
             draw_modern_ui_text(frame, dw, dh, 541, ry + 4, "X", [0xf0, 0x80, 0x80, 255]);
+        }
+
+        // Leuchtende Einfügelinie während einer laufenden Drag-&-Drop-Umsortierung
+        if let Some(ref drag) = self.playlist_reorder_drag
+            && drag.active
+            && !self.quick_select_all_selected
+            && drag.drop_slot >= scroll
+            && drag.drop_slot <= scroll + max_vis
+        {
+            let rel_row = drag.drop_slot - scroll;
+            let line_y = 34 + (rel_row as i32) * 16;
+            fill_rect(frame, dw, dh, 10, line_y, 544, 2, [0x42, 0xd4, 0xff, 255]);
+            fill_rect(frame, dw, dh, 8, line_y - 2, 4, 6, [0x7c, 0xe8, 0xff, 255]);
+            fill_rect(frame, dw, dh, 552, line_y - 2, 4, 6, [0x7c, 0xe8, 0xff, 255]);
         }
 
         // Vertikaler Scrollbalken rechts in der Playlist-Box (x = 558..570, y = 34..34+sb_h)
@@ -3010,18 +3034,57 @@ impl Mod4WinApp {
             (state.playlist_idx + 1).min(state.playlist.len())
         };
         let tot = state.playlist.len();
-        let mins = state.total_time_secs / 60;
-        let secs = state.total_time_secs % 60;
+        #[cfg(not(feature = "retro-win32"))]
+        let total_pl_secs: u64 = state
+            .playlist
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                if !state.playing_track_detached && i == state.playlist_idx && state.total_time_secs > 0 {
+                    state.total_time_secs as u64
+                } else {
+                    self.playlist_meta_cache
+                        .get(&UiSharedState::playlist_path_key(p))
+                        .and_then(|m| m.as_ref())
+                        .map(|m| m.duration_secs as u64)
+                        .unwrap_or(0)
+                }
+            })
+            .sum();
+        #[cfg(feature = "retro-win32")]
+        let total_pl_secs: u64 = state.total_time_secs as u64;
+
+        let dur_fmt = if total_pl_secs >= 3600 {
+            format!(
+                "{}:{:02}:{:02}",
+                total_pl_secs / 3600,
+                (total_pl_secs % 3600) / 60,
+                total_pl_secs % 60
+            )
+        } else {
+            format!("{:02}:{:02}", total_pl_secs / 60, total_pl_secs % 60)
+        };
+        let sel_count = if self.quick_select_all_selected {
+            tot
+        } else {
+            self.playlist_selected.len()
+        };
         let summary = if self.quick_select_all_selected && tot > 0 {
             if is_de {
                 format!("Alle {} markiert (Entf = Leeren)", tot)
             } else {
                 format!("All {} selected (Del = Clear)", tot)
             }
+        } else if sel_count > 1 {
+            if is_de {
+                format!("{} von {} markiert ({})", sel_count, tot, dur_fmt)
+            } else {
+                format!("{} of {} selected ({})", sel_count, tot, dur_fmt)
+            }
         } else if is_de {
-            format!("Song {} von {} ({:02}:{:02})", cur_idx, tot, mins, secs)
+            format!("Song {} von {} ({})", cur_idx, tot, dur_fmt)
         } else {
-            format!("Song {} of {} ({:02}:{:02})", cur_idx, tot, mins, secs)
+            format!("Song {} of {} ({})", cur_idx, tot, dur_fmt)
         };
         draw_modern_ui_text(frame, dw, dh, 394, btn_y + 8, &summary, COL_TEXT_MUTED);
 
@@ -3100,12 +3163,32 @@ impl Mod4WinApp {
             if let Some(orig_idx) = orig_idx_opt {
                 if vx >= 534 {
                     // Klick auf das kleine `x` am Zeilenende -> Eintrag sofort entfernen
+                    self.playlist_selected.remove(&orig_idx);
+                    let shifted: std::collections::BTreeSet<usize> = self
+                        .playlist_selected
+                        .iter()
+                        .map(|&i| if i > orig_idx { i - 1 } else { i })
+                        .collect();
+                    self.playlist_selected = shifted;
+                    self.playlist_reorder_drag = None;
                     self.remove_playlist_item_and_update_cursor(orig_idx);
                     return;
                 }
-                self.quick_select_all_selected = false;
-                self.quick_select_cursor = orig_idx;
+                let ctrl = self.modifiers.state().control_key();
+                let shift = self.modifiers.state().shift_key();
+                if self.quick_select_all_selected {
+                    let len = self.shared_state.lock().unwrap().playlist.len();
+                    self.playlist_selected = (0..len).collect();
+                    self.quick_select_all_selected = false;
+                }
+
+                let mut defer_collapse_idx = None;
                 if is_double_click {
+                    self.playlist_selected.clear();
+                    self.playlist_selected.insert(orig_idx);
+                    self.playlist_anchor = orig_idx;
+                    self.quick_select_cursor = orig_idx;
+                    self.playlist_reorder_drag = None;
                     let mut state = self.shared_state.lock().unwrap();
                     if let Some(path) = state.playlist.get(orig_idx).cloned() {
                         state.playlist_idx = orig_idx;
@@ -3122,6 +3205,75 @@ impl Mod4WinApp {
                         state.is_playing = true;
                         state.is_paused = false;
                     }
+                    return;
+                } else if shift {
+                    if !ctrl {
+                        self.playlist_selected.clear();
+                    }
+                    if self.quick_select_sort == 0 {
+                        let a = self.playlist_anchor.min(orig_idx);
+                        let b = self.playlist_anchor.max(orig_idx);
+                        let len = self.shared_state.lock().unwrap().playlist.len();
+                        for i in a..=b.min(len.saturating_sub(1)) {
+                            self.playlist_selected.insert(i);
+                        }
+                    } else {
+                        let st_snap = self.shared_state.lock().unwrap();
+                        let items = self.sorted_quick_select_items(&st_snap);
+                        let anchor_pos = items
+                            .iter()
+                            .position(|(idx, _)| *idx == self.playlist_anchor)
+                            .unwrap_or(0);
+                        let target_pos = items
+                            .iter()
+                            .position(|(idx, _)| *idx == orig_idx)
+                            .unwrap_or(0);
+                        let a = anchor_pos.min(target_pos);
+                        let b = anchor_pos.max(target_pos);
+                        for i in a..=b {
+                            if let Some((oidx, _)) = items.get(i) {
+                                self.playlist_selected.insert(*oidx);
+                            }
+                        }
+                    }
+                    self.quick_select_cursor = orig_idx;
+                } else if ctrl {
+                    if self.playlist_selected.is_empty() {
+                        let cur = self.quick_select_cursor;
+                        let len = self.shared_state.lock().unwrap().playlist.len();
+                        if cur < len {
+                            self.playlist_selected.insert(cur);
+                        }
+                    }
+                    if self.playlist_selected.contains(&orig_idx) {
+                        self.playlist_selected.remove(&orig_idx);
+                    } else {
+                        self.playlist_selected.insert(orig_idx);
+                    }
+                    self.playlist_anchor = orig_idx;
+                    self.quick_select_cursor = orig_idx;
+                } else if self.playlist_selected.len() > 1
+                    && self.playlist_selected.contains(&orig_idx)
+                {
+                    // Klick auf bereits mehrfach ausgewählten Eintrag ohne Modifikator:
+                    // Mehrfachauswahl zunächst behalten, damit sie per Drag & Drop als Block gezogen werden kann!
+                    // Wird ohne Ziehen losgelassen, reduziert `finish_modern_playlist_reorder_drag` auf `orig_idx`.
+                    defer_collapse_idx = Some(orig_idx);
+                    self.quick_select_cursor = orig_idx;
+                } else {
+                    self.playlist_selected.clear();
+                    self.playlist_selected.insert(orig_idx);
+                    self.playlist_anchor = orig_idx;
+                    self.quick_select_cursor = orig_idx;
+                }
+
+                if !self.playlist_selected.is_empty() {
+                    self.playlist_reorder_drag = Some(PlaylistReorderDrag {
+                        press_vy: vy,
+                        active: false,
+                        drop_slot: orig_idx,
+                        defer_collapse_idx,
+                    });
                 }
             }
             return;
@@ -3150,6 +3302,9 @@ impl Mod4WinApp {
                             state.playlist_idx
                         };
                         self.quick_select_all_selected = false;
+                        self.playlist_selected.clear();
+                        self.playlist_selected.insert(new_cursor);
+                        self.playlist_anchor = new_cursor;
                         self.quick_select_cursor = new_cursor;
                     }
                     return;
@@ -3166,21 +3321,8 @@ impl Mod4WinApp {
                 let _ = event_loop;
                 return;
             } else if (108..=170).contains(&vx) {
-                // Remove-Button: wenn `Strg+A` aktiv ist, gesamte Playlist leeren, sonst markierten Eintrag entfernen
-                if self.quick_select_all_selected {
-                    {
-                        let mut st = self.shared_state.lock().unwrap();
-                        st.clear_playlist();
-                        let _ = st
-                            .ini_config
-                            .save_to_file(&Mod4WinIniConfig::default_ini_path());
-                    }
-                    self.quick_select_all_selected = false;
-                    self.quick_select_cursor = 0;
-                    self.quick_select_scroll = 0;
-                } else {
-                    self.remove_playlist_item_and_update_cursor(self.quick_select_cursor);
-                }
+                // Remove-Button: entfernt Alle / Mehrfachauswahl / Einzeleintrag ohne Wiedergabeabbruch
+                self.remove_selected_modern_playlist_items();
                 return;
             } else if (174..=228).contains(&vx) {
                 // Clear-Button: gesamte Playlist leeren (laufender Song spielt normal zu Ende)
@@ -3192,22 +3334,28 @@ impl Mod4WinApp {
                         .save_to_file(&Mod4WinIniConfig::default_ini_path());
                 }
                 self.quick_select_all_selected = false;
+                self.playlist_selected.clear();
+                self.playlist_reorder_drag = None;
+                self.playlist_anchor = 0;
                 self.quick_select_cursor = 0;
                 self.quick_select_scroll = 0;
                 return;
             } else if (232..=306).contains(&vx) {
-                let start_dir = self
-                    .shared_state
-                    .lock()
-                    .unwrap()
-                    .ini_config
-                    .last_dir
-                    .clone();
+                let start_dir = {
+                    let st = self.shared_state.lock().unwrap();
+                    if st.ini_config.last_playlist_dir.is_empty() {
+                        st.ini_config.last_dir.clone()
+                    } else {
+                        st.ini_config.last_playlist_dir.clone()
+                    }
+                };
                 if let Some(mol_path) = native_open_mol_dialog(&start_dir) {
-                    let loaded = super::archive_mol::load_mol_file(&mol_path);
+                    let loaded = UiSharedState::dedup_playlist_vec(
+                        super::archive_mol::load_mol_file(&mol_path),
+                    );
                     let mut st = self.shared_state.lock().unwrap();
                     if let Some(parent) = mol_path.parent() {
-                        st.ini_config.last_dir = parent.to_string_lossy().into_owned();
+                        st.ini_config.last_playlist_dir = parent.to_string_lossy().into_owned();
                     }
                     if !loaded.is_empty() {
                         st.playlist = loaded;
@@ -3217,8 +3365,11 @@ impl Mod4WinApp {
                         if st.ini_config.play_on_load
                             && let Some(first) = st.playlist.first().cloned() {
                                 st.pending_load_file = Some(first);
+                                st.is_playing = true;
+                                st.is_paused = false;
                             }
                     }
+                    st.sync_runtime_to_ini();
                     let fname = mol_path
                         .file_name()
                         .and_then(|n| n.to_str())
@@ -3228,6 +3379,10 @@ impl Mod4WinApp {
                         .ini_config
                         .save_to_file(&Mod4WinIniConfig::default_ini_path());
                     drop(st);
+                    self.quick_select_all_selected = false;
+                    self.playlist_selected.clear();
+                    self.playlist_reorder_drag = None;
+                    self.playlist_anchor = 0;
                     self.quick_select_cursor = 0;
                     self.quick_select_scroll = 0;
                 }
@@ -3235,19 +3390,27 @@ impl Mod4WinApp {
             } else if (310..=384).contains(&vx) {
                 let (start_dir, playlist_snap) = {
                     let st = self.shared_state.lock().unwrap();
-                    (st.ini_config.last_dir.clone(), st.playlist.clone())
+                    let dir = if st.ini_config.last_playlist_dir.is_empty() {
+                        st.ini_config.last_dir.clone()
+                    } else {
+                        st.ini_config.last_playlist_dir.clone()
+                    };
+                    (dir, st.playlist.clone())
                 };
                 if let Some(mol_path) = native_save_mol_dialog(&start_dir) {
                     if super::archive_mol::save_mol_file(&mol_path, &playlist_snap).is_ok() {
                         let mut st = self.shared_state.lock().unwrap();
                         if let Some(parent) = mol_path.parent() {
-                            st.ini_config.last_dir = parent.to_string_lossy().into_owned();
+                            st.ini_config.last_playlist_dir = parent.to_string_lossy().into_owned();
                         }
                         let fname = mol_path
                             .file_name()
                             .and_then(|n| n.to_str())
                             .unwrap_or("PLAYLIST.MOL");
                         st.set_status_banner(format!("SAVED {}", fname.to_ascii_uppercase()));
+                        let _ = st
+                            .ini_config
+                            .save_to_file(&Mod4WinIniConfig::default_ini_path());
                     }
                     return;
                 }
@@ -3764,7 +3927,7 @@ impl Mod4WinApp {
         if vy < 24 {
             if button == MouseButton::Left {
                 if vx >= (MODERN_SETUP_W as i32 - 26) {
-                    self.close_window(WindowKind::SetupDialog);
+                    self.cancel_setup_dialog();
                     return;
                 }
                 let _ = window.drag_window();

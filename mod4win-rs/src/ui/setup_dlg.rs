@@ -1232,6 +1232,7 @@ impl Mod4WinApp {
             let old_mini_state = st.ini_config.mini_state;
             let old_pl_rows = st.ini_config.modern_playlist_rows;
             let old_last_dir = st.ini_config.last_dir.clone();
+            let old_last_playlist_dir = st.ini_config.last_playlist_dir.clone();
             let old_last_fm_dir = st.ini_config.last_fm_dir.clone();
             let old_saved_playing = st.ini_config.saved_playing;
             let old_saved_paused = st.ini_config.saved_paused;
@@ -1264,6 +1265,7 @@ impl Mod4WinApp {
             st.ini_config.mini_state = old_mini_state;
             st.ini_config.modern_playlist_rows = old_pl_rows;
             st.ini_config.last_dir = old_last_dir;
+            st.ini_config.last_playlist_dir = old_last_playlist_dir;
             st.ini_config.last_fm_dir = old_last_fm_dir;
             st.ini_config.saved_playing = old_saved_playing;
             st.ini_config.saved_paused = old_saved_paused;
@@ -1294,6 +1296,12 @@ impl Mod4WinApp {
         if save_to_disk {
             self.save_ini_on_exit();
         }
+    }
+
+    pub(crate) fn cancel_setup_dialog(&mut self) {
+        self.setup_cfg = self.setup_backup_cfg.clone();
+        self.sync_live_setup_to_state();
+        self.close_window(WindowKind::SetupDialog);
     }
 
     pub(crate) fn step_setup_samplerate(&mut self, dir: i32) {
@@ -1349,7 +1357,7 @@ impl Mod4WinApp {
         // 1. Titelleiste (y <= 18)
         if vy <= cap_dy {
             if vx <= 20 || vx >= (SETUP_WINDOW_WIDTH as i32 - 20) {
-                self.close_window(WindowKind::SetupDialog);
+                self.cancel_setup_dialog();
             } else {
                 let _ = window.drag_window();
             }

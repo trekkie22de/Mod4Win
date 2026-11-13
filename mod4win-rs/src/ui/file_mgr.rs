@@ -1190,6 +1190,7 @@ impl Mod4WinApp {
 
         if vy <= 18 {
             if vx <= 20 || vx >= (ARCHIVE_WINDOW_WIDTH as i32 - 20) {
+                self.setup_cfg = self.setup_backup_cfg.clone();
                 self.close_window(WindowKind::ArchiveSetup);
             } else {
                 let _ = window.drag_window();

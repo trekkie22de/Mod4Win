@@ -37,7 +37,8 @@ pub use app::{
     VIRTUAL_WIDTH,
 };
 pub use archive_mol::{
-    parse_zip_virtual_path, read_module_bytes_universal, resolve_path_case_insensitive,
+    load_mol_file, parse_zip_virtual_path, read_module_bytes_universal,
+    resolve_path_case_insensitive,
 };
 pub use assets::EmbeddedAssets;
 pub use batch_cli::{

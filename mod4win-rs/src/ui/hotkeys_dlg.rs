@@ -9,7 +9,7 @@ use super::winit::window::Window;
 use super::app::{Mod4WinApp, PressedButton, UiSharedState, WindowKind, HOTKEY_WINDOW_WIDTH};
 use super::ini_config::{default_hotkey_bindings, HotkeyBinding, Mod4WinIniConfig};
 use super::main_win::ConfirmAction;
-use super::setup_dlg::{SetupEditFocus, WavAskEditFocus};
+use super::setup_dlg::{FileSelectEntry, SetupEditFocus, WavAskEditFocus};
 use super::widgets::{
     draw_3d_panel, draw_bmp_button_2state, draw_frame_3d_1px, draw_hkonoff_led, draw_oem_text,
     draw_oem_text_centered, draw_rect_outline, fill_rect,
@@ -457,9 +457,38 @@ impl Mod4WinApp {
                     state.pending_seek_pattern = Some(last_pat);
                 }
             }
-            10 => self.toggle_window(event_loop, WindowKind::OpenDialog),
-            11 => self.toggle_window(event_loop, WindowKind::QuickSelect),
+            10 => {
+                let is_modern = {
+                    let st = self.shared_state.lock().unwrap();
+                    self.is_modern_skin(&st)
+                };
+                if is_modern {
+                    self.toggle_window(event_loop, WindowKind::OpenDialog);
+                } else {
+                    // Classic Skin: `O` öffnet den modalen Open-Dialog (oder fokussiert ihn), flackert niemals weg!
+                    self.open_window(event_loop, WindowKind::OpenDialog);
+                }
+            }
+            11 => {
+                let is_modern = {
+                    let st = self.shared_state.lock().unwrap();
+                    self.is_modern_skin(&st)
+                };
+                if is_modern {
+                    self.toggle_window(event_loop, WindowKind::QuickSelect);
+                } else {
+                    // Classic Skin: `L` öffnet die modale Quick Selection (oder fokussiert sie)
+                    self.open_window(event_loop, WindowKind::QuickSelect);
+                }
+            }
             12 => {
+                let is_modern = {
+                    let st = self.shared_state.lock().unwrap();
+                    self.is_modern_skin(&st)
+                };
+                if is_modern {
+                    return false;
+                }
                 self.file_menu_open = !self.file_menu_open;
                 self.file_menu_hover = None;
                 if self.file_menu_open {
@@ -503,18 +532,49 @@ impl Mod4WinApp {
                 state.toggle_intro_scan();
             }
             24 => {
+                let is_modern = {
+                    let st = self.shared_state.lock().unwrap();
+                    self.is_modern_skin(&st)
+                };
+                if is_modern {
+                    return false;
+                }
                 self.file_man_dlg.is_copy = true;
                 self.open_window(event_loop, WindowKind::FileManager);
             }
             25 => {
+                let is_modern = {
+                    let st = self.shared_state.lock().unwrap();
+                    self.is_modern_skin(&st)
+                };
+                if is_modern {
+                    return false;
+                }
                 self.file_man_dlg.is_copy = false;
                 self.open_window(event_loop, WindowKind::FileManager);
             }
             26 => {
-                self.confirm_action = Some(ConfirmAction::RemoveFromPlaylist);
-                self.open_window(event_loop, WindowKind::ConfirmDialog);
+                let is_modern = {
+                    let st = self.shared_state.lock().unwrap();
+                    self.is_modern_skin(&st)
+                };
+                if is_modern {
+                    // Im Modern Skin entfernt F7 direkt den aktuell gespielten/ausgewählten Eintrag aus der Playlist ohne Classic-Popup
+                    let idx = self.shared_state.lock().unwrap().playlist_idx;
+                    self.remove_playlist_item_and_update_cursor(idx);
+                } else {
+                    self.confirm_action = Some(ConfirmAction::RemoveFromPlaylist);
+                    self.open_window(event_loop, WindowKind::ConfirmDialog);
+                }
             }
             27 => {
+                let is_modern = {
+                    let st = self.shared_state.lock().unwrap();
+                    self.is_modern_skin(&st)
+                };
+                if is_modern {
+                    return false;
+                }
                 self.confirm_action = Some(ConfirmAction::DeleteFromDisk);
                 self.open_window(event_loop, WindowKind::ConfirmDialog);
             }
@@ -571,7 +631,16 @@ impl Mod4WinApp {
             42 => {
                 self.selected_instrument = self.selected_instrument.saturating_sub(1).max(1);
             }
-            43 => self.toggle_window(event_loop, WindowKind::About),
+            43 => {
+                let is_modern = {
+                    let st = self.shared_state.lock().unwrap();
+                    self.is_modern_skin(&st)
+                };
+                if is_modern {
+                    return false;
+                }
+                self.open_window(event_loop, WindowKind::About);
+            }
             _ => return false,
         }
         true
@@ -684,6 +753,97 @@ impl Mod4WinApp {
                     return;
                 }
                 _ => {}
+            }
+        }
+
+        // 0_fsel. Wenn der Datei-/Verzeichnis-Auswahldialog (`FileSelectDialog` / `tbrowse` / `tDirbrowse`) offen ist:
+        if self.kind_to_id.contains_key(&WindowKind::FileSelectDialog) {
+            let is_fb = self.fsel_dlg.is_file_browse();
+            match &event.logical_key {
+                Key::Named(NamedKey::Escape) => {
+                    self.close_window(WindowKind::FileSelectDialog);
+                    return;
+                }
+                Key::Named(NamedKey::Enter) => {
+                    if !is_fb || self.fsel_dlg.active_list == 1 {
+                        if let Some(entry) = self.fsel_dlg.entries.get(self.fsel_dlg.cursor).cloned() {
+                            match entry {
+                                FileSelectEntry::Parent(p) | FileSelectEntry::Subdir(_, p) => {
+                                    self.fsel_dlg.current_dir = p;
+                                    self.fsel_dlg.refresh();
+                                    return;
+                                }
+                                FileSelectEntry::Drive(drv) => {
+                                    self.fsel_dlg.current_dir =
+                                        std::path::PathBuf::from(format!("{}:\\", drv));
+                                    self.fsel_dlg.refresh();
+                                    return;
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    self.commit_file_select_ok();
+                    return;
+                }
+                Key::Named(NamedKey::Tab) => {
+                    if is_fb {
+                        self.fsel_dlg.active_list = if self.fsel_dlg.active_list == 0 { 1 } else { 0 };
+                    }
+                    return;
+                }
+                Key::Named(NamedKey::Backspace) => {
+                    if let Some(parent) = self.fsel_dlg.current_dir.parent().map(|p| p.to_path_buf())
+                        && parent != self.fsel_dlg.current_dir
+                    {
+                        self.fsel_dlg.current_dir = parent;
+                        self.fsel_dlg.refresh();
+                    }
+                    return;
+                }
+                Key::Named(NamedKey::ArrowUp) => {
+                    if is_fb && self.fsel_dlg.active_list == 0 {
+                        self.fsel_dlg.file_cursor = self.fsel_dlg.file_cursor.saturating_sub(1);
+                        if self.fsel_dlg.file_cursor < self.fsel_dlg.file_scroll {
+                            self.fsel_dlg.file_scroll = self.fsel_dlg.file_cursor;
+                        }
+                    } else {
+                        self.fsel_dlg.cursor = self.fsel_dlg.cursor.saturating_sub(1);
+                        if self.fsel_dlg.cursor < self.fsel_dlg.scroll {
+                            self.fsel_dlg.scroll = self.fsel_dlg.cursor;
+                        }
+                    }
+                    return;
+                }
+                Key::Named(NamedKey::ArrowDown) => {
+                    if is_fb && self.fsel_dlg.active_list == 0 {
+                        let max_idx = self.fsel_dlg.files.len().saturating_sub(1);
+                        self.fsel_dlg.file_cursor = (self.fsel_dlg.file_cursor + 1).min(max_idx);
+                        if self.fsel_dlg.file_cursor >= self.fsel_dlg.file_scroll + 13 {
+                            self.fsel_dlg.file_scroll = self.fsel_dlg.file_cursor.saturating_sub(12);
+                        }
+                    } else {
+                        let max_idx = self.fsel_dlg.entries.len().saturating_sub(1);
+                        self.fsel_dlg.cursor = (self.fsel_dlg.cursor + 1).min(max_idx);
+                        if self.fsel_dlg.cursor >= self.fsel_dlg.scroll + 10 {
+                            self.fsel_dlg.scroll = self.fsel_dlg.cursor.saturating_sub(9);
+                        }
+                    }
+                    return;
+                }
+                Key::Character(ch) if self.modifiers.state().alt_key() => {
+                    let c = ch.chars().next().unwrap_or('\0').to_ascii_uppercase();
+                    match c {
+                        'O' => self.commit_file_select_ok(),
+                        'Q' | 'C' => self.close_window(WindowKind::FileSelectDialog),
+                        'H' => self.open_help_topic(event_loop, "FselDlg"),
+                        'F' if is_fb => self.fsel_dlg.active_list = 0,
+                        'D' => self.fsel_dlg.active_list = 1,
+                        _ => {}
+                    }
+                    return;
+                }
+                _ => return,
             }
         }
 
@@ -882,10 +1042,36 @@ impl Mod4WinApp {
                     }
                     _ => return,
                 }
+            } else {
+                match &event.logical_key {
+                    Key::Named(NamedKey::Enter) => {
+                        self.commit_archive_setup_ok();
+                        return;
+                    }
+                    Key::Named(NamedKey::Escape) => {
+                        self.setup_cfg = self.setup_backup_cfg.clone();
+                        self.close_window(WindowKind::ArchiveSetup);
+                        return;
+                    }
+                    Key::Character(ch) if self.modifiers.state().alt_key() => {
+                        let c = ch.chars().next().unwrap_or('\0').to_ascii_uppercase();
+                        match c {
+                            'O' => self.commit_archive_setup_ok(),
+                            'C' | 'Q' => {
+                                self.setup_cfg = self.setup_backup_cfg.clone();
+                                self.close_window(WindowKind::ArchiveSetup);
+                            }
+                            'H' => self.open_help_topic(event_loop, "ArcOptDlg"),
+                            _ => {}
+                        }
+                        return;
+                    }
+                    _ => return,
+                }
             }
         }
 
-        // 0c. Wenn im Mini-File-Manager (`COPYWND.PAS`) das Zielpfad-Feld (`to  :`) editiert wird:
+        // 0c. Wenn der Mini-File-Manager (`COPYWND.PAS`) offen ist (strikt modal):
         if self.kind_to_id.contains_key(&WindowKind::FileManager) {
             if self.file_man_dlg.editing_target {
                 match &event.logical_key {
@@ -928,7 +1114,58 @@ impl Mod4WinApp {
                         self.close_window(WindowKind::FileManager);
                         return;
                     }
-                    _ => {}
+                    Key::Named(NamedKey::Tab) => {
+                        self.file_man_dlg.editing_target = true;
+                        return;
+                    }
+                    Key::Named(NamedKey::ArrowUp) => {
+                        self.file_man_dlg.file_cursor =
+                            self.file_man_dlg.file_cursor.saturating_sub(1);
+                        if self.file_man_dlg.file_cursor < self.file_man_dlg.file_scroll {
+                            self.file_man_dlg.file_scroll = self.file_man_dlg.file_cursor;
+                        }
+                        return;
+                    }
+                    Key::Named(NamedKey::ArrowDown) => {
+                        let max_idx = self.file_man_dlg.files.len().saturating_sub(1);
+                        self.file_man_dlg.file_cursor =
+                            (self.file_man_dlg.file_cursor + 1).min(max_idx);
+                        if self.file_man_dlg.file_cursor >= self.file_man_dlg.file_scroll + 13 {
+                            self.file_man_dlg.file_scroll =
+                                self.file_man_dlg.file_cursor.saturating_sub(12);
+                        }
+                        return;
+                    }
+                    Key::Named(NamedKey::Space) | Key::Named(NamedKey::Insert) => {
+                        let cur = self.file_man_dlg.file_cursor;
+                        if let Some(f) = self.file_man_dlg.files.get_mut(cur) {
+                            f.selected = !f.selected;
+                        }
+                        self.file_man_dlg.sync_target_edit();
+                        return;
+                    }
+                    Key::Character(ch)
+                        if self.modifiers.state().control_key()
+                            && !self.modifiers.state().alt_key()
+                            && ch.eq_ignore_ascii_case("a") =>
+                    {
+                        for f in &mut self.file_man_dlg.files {
+                            f.selected = true;
+                        }
+                        self.file_man_dlg.sync_target_edit();
+                        return;
+                    }
+                    Key::Character(ch) if self.modifiers.state().alt_key() => {
+                        let c = ch.chars().next().unwrap_or('\0').to_ascii_uppercase();
+                        match c {
+                            'O' => self.execute_file_manager_ok(),
+                            'C' | 'Q' => self.close_window(WindowKind::FileManager),
+                            'T' => self.file_man_dlg.editing_target = true,
+                            _ => {}
+                        }
+                        return;
+                    }
+                    _ => return,
                 }
             }
         }
@@ -1071,6 +1308,68 @@ impl Mod4WinApp {
             }
         }
 
+        // 0e2. Wenn der Setup-Dialog (`SetupDialog`, ohne fokussiertes Edit-Feld) offen ist (strikt modal):
+        if self.kind_to_id.contains_key(&WindowKind::SetupDialog) {
+            match &event.logical_key {
+                Key::Named(NamedKey::Escape) => {
+                    self.cancel_setup_dialog();
+                    return;
+                }
+                Key::Named(NamedKey::Enter) => {
+                    self.commit_setup_dialog(false);
+                    return;
+                }
+                Key::Named(NamedKey::Tab) => {
+                    let is_mod = {
+                        let st = self.shared_state.lock().unwrap();
+                        self.is_modern_skin(&st)
+                    };
+                    if !is_mod {
+                        self.setup_edit_focus = SetupEditFocus::RecPath;
+                    }
+                    return;
+                }
+                Key::Character(ch) if self.modifiers.state().alt_key() => {
+                    let c = ch.chars().next().unwrap_or('\0').to_ascii_uppercase();
+                    match c {
+                        'O' => self.commit_setup_dialog(false),
+                        'S' => self.commit_setup_dialog(true),
+                        'C' | 'Q' => self.cancel_setup_dialog(),
+                        'H' => self.open_help_topic(event_loop, "SetupDlg"),
+                        'K' => self.open_window(event_loop, WindowKind::HotkeyEditor),
+                        'A' | 'P' => self.open_window(event_loop, WindowKind::ArchiveSetup),
+                        _ => {}
+                    }
+                    return;
+                }
+                _ => return,
+            }
+        }
+
+        // 0e3. Wenn das About-Fenster (`About`) offen ist (modal: Escape/Enter/Space schließt):
+        if self.kind_to_id.contains_key(&WindowKind::About) {
+            if !event.repeat
+                && matches!(
+                    &event.logical_key,
+                    Key::Named(NamedKey::Escape)
+                        | Key::Named(NamedKey::Enter)
+                        | Key::Named(NamedKey::Space)
+                )
+            {
+                self.close_window(WindowKind::About);
+            }
+            return;
+        }
+
+        // 0e4. Wenn `EffectsHelp` aktiv ist: Escape schließt
+        if self.kind_to_id.contains_key(&WindowKind::EffectsHelp)
+            && !event.repeat
+            && matches!(&event.logical_key, Key::Named(NamedKey::Escape))
+        {
+            self.close_window(WindowKind::EffectsHelp);
+            return;
+        }
+
         // Wenn im Open-Dialog gerade der .MOL-Dateiname oder die Wildcard-Auswahl-Maske getippt wird:
         if self.kind_to_id.contains_key(&WindowKind::OpenDialog)
             && (self.open_dlg.saving_mol
@@ -1158,25 +1457,107 @@ impl Mod4WinApp {
         let shift = self.modifiers.state().shift_key();
         let ctrl = self.modifiers.state().control_key();
         let alt = self.modifiers.state().alt_key();
-        let classic_input = self.shared_state.lock().unwrap().classic_input;
+        let (classic_input, is_modern) = {
+            let st = self.shared_state.lock().unwrap();
+            (st.classic_input, self.is_modern_skin(&st))
+        };
 
-        // Im Classic Open-Dialog öffnen `+` und `-` die `Sel? *.*`-Wildcard-Maske (links `Filelist`, rechts `Playlist`),
-        // und `*` invertiert die Auswahl (`newopen.pas`).
-        if self.kind_to_id.contains_key(&WindowKind::OpenDialog) && !ctrl && !alt {
-            let is_modern = {
-                let st = self.shared_state.lock().unwrap();
-                self.is_modern_skin(&st)
-            };
-            if !is_modern
-                && let Key::Character(ch) = &event.logical_key {
-                    let right_list = self.open_dlg.active_list == 2;
-                    if ch == "+" {
+        // 0_open. Classic Open-Dialog (`newopen.pas`): strikt modal mit vollständiger Original-Tastatursteuerung!
+        if self.kind_to_id.contains_key(&WindowKind::OpenDialog) && !is_modern {
+            if !classic_input
+                && ctrl
+                && !shift
+                && !alt
+                && let Key::Character(ch) = &event.logical_key
+                && ch.eq_ignore_ascii_case("a")
+            {
+                if self.open_dlg.active_list == 2 {
+                    for p in &mut self.open_dlg.right_playlist {
+                        p.selected = true;
+                    }
+                    self.open_dlg.status_msg = format!(
+                        "Selected all {} entries in Playlist.",
+                        self.open_dlg.right_playlist.len()
+                    );
+                } else {
+                    for f in &mut self.open_dlg.left_files {
+                        f.selected = true;
+                    }
+                    self.open_dlg.status_msg = format!(
+                        "Selected all {} files in Filelist.",
+                        self.open_dlg.left_files.len()
+                    );
+                }
+                return;
+            }
+
+            // Alt-Mnemonics & Alt+F1/F2/F3 (`newopen.pas` Zeilen 2036-2065)
+            if alt && !ctrl {
+                match &event.logical_key {
+                    Key::Named(NamedKey::F1) => {
+                        self.open_dlg.active_list = 0;
+                        self.open_dlg.open_selection_mask(false, false);
+                        return;
+                    }
+                    Key::Named(NamedKey::F2) => {
+                        self.open_dlg.focus_current_drive();
+                        return;
+                    }
+                    Key::Named(NamedKey::F3) => {
+                        self.open_dlg.active_list = 2;
+                        self.open_dlg.open_selection_mask(true, false);
+                        return;
+                    }
+                    Key::Character(ch) => {
+                        let c = ch.chars().next().unwrap_or('\0').to_ascii_uppercase();
+                        match c {
+                            'F' => self.open_dlg.active_list = 0,
+                            'D' => self.open_dlg.active_list = 1,
+                            'P' => self.open_dlg.active_list = 2,
+                            'O' => {
+                                if self.open_dlg.right_playlist.is_empty()
+                                    && self.open_dlg.active_list == 0
+                                    && !self.open_dlg.left_files.is_empty()
+                                {
+                                    self.open_dlg.add_selected_to_playlist();
+                                }
+                                self.commit_open_dialog_ok();
+                            }
+                            'S' => {
+                                self.open_dlg.saving_mol = true;
+                                self.open_dlg.editing_filter = false;
+                                self.open_dlg.editing_right_filter = false;
+                            }
+                            'C' | 'Q' => {
+                                self.open_dlg.saving_mol = false;
+                                self.open_dlg.editing_filter = false;
+                                self.open_dlg.editing_right_filter = false;
+                                self.close_window(WindowKind::OpenDialog);
+                            }
+                            'H' => self.open_help_topic(event_loop, "OpenDlg"),
+                            _ => {}
+                        }
+                        return;
+                    }
+                    _ => return,
+                }
+            }
+
+            // Numpad `+` / `-` / `*` für Auswahlmaske / Invertieren
+            if !ctrl && !alt
+                && let PhysicalKey::Code(code) = event.physical_key
+            {
+                let right_list = self.open_dlg.active_list == 2;
+                match code {
+                    KeyCode::NumpadAdd => {
                         self.open_dlg.open_selection_mask(right_list, false);
                         return;
-                    } else if ch == "-" {
+                    }
+                    KeyCode::NumpadSubtract => {
                         self.open_dlg.open_selection_mask(right_list, true);
                         return;
-                    } else if ch == "*" {
+                    }
+                    KeyCode::NumpadMultiply => {
                         if right_list {
                             for p in &mut self.open_dlg.right_playlist {
                                 p.selected = !p.selected;
@@ -1188,76 +1569,412 @@ impl Mod4WinApp {
                         }
                         return;
                     }
+                    _ => {}
                 }
-        }
+            }
 
-        // Modernes `Strg + A` zum Auswählen aller Einträge der aktiven Liste (Playlist-Dock, QuickSelect, Open-Dialog & File-Manager):
-        let is_modern_playlist_open = {
-            let st = self.shared_state.lock().unwrap();
-            self.is_modern_skin(&st)
-                && (self.kind_to_id.contains_key(&WindowKind::QuickSelect)
-                    || self.kind_to_id.contains_key(&WindowKind::OpenDialog))
-        };
-        if !classic_input && ctrl && !shift && !alt
-            && let Key::Character(ch) = &event.logical_key
-                && ch.eq_ignore_ascii_case("a") {
-                    if self.kind_to_id.contains_key(&WindowKind::FileManager)
-                        && self.active_window_kind == WindowKind::FileManager
-                    {
-                        for f in &mut self.file_man_dlg.files {
-                            f.selected = true;
-                        }
-                        self.file_man_dlg.sync_target_edit();
-                        self.file_man_dlg.status_msg = format!(
-                            "Selected all {} file(s).",
-                            self.file_man_dlg.files.len()
-                        );
-                        return;
-                    } else if is_modern_playlist_open
-                        || self.kind_to_id.contains_key(&WindowKind::QuickSelect)
-                    {
-                        let has_items = !self.shared_state.lock().unwrap().playlist.is_empty();
-                        self.quick_select_all_selected = has_items;
-                        return;
-                    } else if self.kind_to_id.contains_key(&WindowKind::OpenDialog) {
-                        if self.open_dlg.active_list == 2 {
-                            for p in &mut self.open_dlg.right_playlist {
-                                p.selected = true;
-                            }
-                            self.open_dlg.status_msg = format!(
-                                "Selected all {} entries in Playlist.",
-                                self.open_dlg.right_playlist.len()
-                            );
-                        } else {
-                            for f in &mut self.open_dlg.left_files {
-                                f.selected = true;
-                            }
-                            self.open_dlg.status_msg = format!(
-                                "Selected all {} files in Filelist.",
-                                self.open_dlg.left_files.len()
-                            );
-                        }
-                        return;
-                    } else if self.kind_to_id.contains_key(&WindowKind::FileManager) {
-                        for f in &mut self.file_man_dlg.files {
-                            f.selected = true;
-                        }
-                        self.file_man_dlg.sync_target_edit();
-                        self.file_man_dlg.status_msg = format!(
-                            "Selected all {} file(s).",
-                            self.file_man_dlg.files.len()
-                        );
-                        return;
-                    }
-                    // `Strg + A` ist systemweit reserviert und darf niemals das About-Fenster (`A`) öffnen!
+            match &event.logical_key {
+                Key::Named(NamedKey::Escape) => {
+                    self.open_dlg.saving_mol = false;
+                    self.open_dlg.editing_filter = false;
+                    self.open_dlg.editing_right_filter = false;
+                    self.close_window(WindowKind::OpenDialog);
                     return;
                 }
-
-        // Wenn die Quick Selection (`QuickSelect`) oder im Modern Skin das Playlist-Dock (`OpenDialog`) offen ist:
-        // Enter startet den markierten Song, Entf (`Delete`) entfernt ihn (bzw. leert nach `Strg+A` die Playlist), Escape schließt
-        if self.kind_to_id.contains_key(&WindowKind::QuickSelect) || is_modern_playlist_open {
-            match &event.logical_key {
+                Key::Named(NamedKey::Tab) => {
+                    if shift {
+                        self.open_dlg.active_list = match self.open_dlg.active_list {
+                            0 => 2,
+                            1 => 0,
+                            _ => 1,
+                        };
+                    } else {
+                        self.open_dlg.active_list = (self.open_dlg.active_list + 1) % 3;
+                    }
+                    return;
+                }
+                Key::Named(NamedKey::Enter) => {
+                    if self.open_dlg.active_list == 1 {
+                        let idx = self.open_dlg.mid_cursor;
+                        self.navigate_open_dir_item(idx);
+                    } else {
+                        if self.open_dlg.right_playlist.is_empty()
+                            && self.open_dlg.active_list == 0
+                            && !self.open_dlg.left_files.is_empty()
+                        {
+                            self.open_dlg.add_selected_to_playlist();
+                        }
+                        self.commit_open_dialog_ok();
+                    }
+                    return;
+                }
+                Key::Named(NamedKey::Backspace) => {
+                    self.open_dlg.navigate_parent_dir();
+                    return;
+                }
+                Key::Named(NamedKey::F5) => {
+                    match self.open_dlg.active_list {
+                        0 => self.open_dlg.add_selected_to_playlist(),
+                        1 => self.open_dlg.append_highlighted_dir_to_playlist(),
+                        _ => self.open_dlg.remove_selected_from_playlist(),
+                    }
+                    return;
+                }
+                Key::Named(NamedKey::ArrowRight) => {
+                    if ctrl {
+                        self.open_dlg.add_all_to_playlist();
+                    } else {
+                        self.open_dlg.add_selected_to_playlist();
+                    }
+                    return;
+                }
+                Key::Named(NamedKey::ArrowLeft) => {
+                    if ctrl {
+                        self.open_dlg.clear_right_playlist();
+                    } else {
+                        self.open_dlg.remove_selected_from_playlist();
+                    }
+                    return;
+                }
                 Key::Named(NamedKey::Delete) => {
+                    if self.open_dlg.active_list == 2 {
+                        self.open_dlg.remove_selected_from_playlist();
+                    }
+                    return;
+                }
+                Key::Named(NamedKey::Space) | Key::Named(NamedKey::Insert) => {
+                    match self.open_dlg.active_list {
+                        0 => {
+                            let len = self.open_dlg.left_files.len();
+                            if len > 0 {
+                                let cur = self.open_dlg.left_cursor.min(len - 1);
+                                self.open_dlg.left_files[cur].selected =
+                                    !self.open_dlg.left_files[cur].selected;
+                                self.open_dlg.left_anchor = cur;
+                                if cur + 1 < len {
+                                    self.open_dlg.left_cursor = cur + 1;
+                                    if self.open_dlg.left_cursor >= self.open_dlg.left_scroll + 20 {
+                                        self.open_dlg.left_scroll =
+                                            self.open_dlg.left_cursor.saturating_sub(19);
+                                    }
+                                }
+                            }
+                        }
+                        2 => {
+                            let len = self.open_dlg.right_playlist.len();
+                            if len > 0 {
+                                let cur = self.open_dlg.right_cursor.min(len - 1);
+                                self.open_dlg.right_playlist[cur].selected =
+                                    !self.open_dlg.right_playlist[cur].selected;
+                                self.open_dlg.right_anchor = cur;
+                                if cur + 1 < len {
+                                    self.open_dlg.right_cursor = cur + 1;
+                                    if self.open_dlg.right_cursor
+                                        >= self.open_dlg.right_scroll + 20
+                                    {
+                                        self.open_dlg.right_scroll =
+                                            self.open_dlg.right_cursor.saturating_sub(19);
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                    return;
+                }
+                Key::Named(NamedKey::ArrowUp) => {
+                    match self.open_dlg.active_list {
+                        0 => {
+                            let next = self.open_dlg.left_cursor.saturating_sub(1);
+                            self.open_dlg.left_cursor = next;
+                            if shift
+                                && let Some(f) = self.open_dlg.left_files.get_mut(next)
+                            {
+                                f.selected = true;
+                            }
+                            if next < self.open_dlg.left_scroll {
+                                self.open_dlg.left_scroll = next;
+                            }
+                        }
+                        1 => {
+                            let next = self.open_dlg.mid_cursor.saturating_sub(1);
+                            self.open_dlg.mid_cursor = next;
+                            if next < self.open_dlg.mid_scroll {
+                                self.open_dlg.mid_scroll = next;
+                            }
+                        }
+                        _ => {
+                            let next = self.open_dlg.right_cursor.saturating_sub(1);
+                            self.open_dlg.right_cursor = next;
+                            if shift
+                                && let Some(p) = self.open_dlg.right_playlist.get_mut(next)
+                            {
+                                p.selected = true;
+                            }
+                            if next < self.open_dlg.right_scroll {
+                                self.open_dlg.right_scroll = next;
+                            }
+                        }
+                    }
+                    return;
+                }
+                Key::Named(NamedKey::ArrowDown) => {
+                    match self.open_dlg.active_list {
+                        0 => {
+                            let max_idx = self.open_dlg.left_files.len().saturating_sub(1);
+                            let next = (self.open_dlg.left_cursor + 1).min(max_idx);
+                            self.open_dlg.left_cursor = next;
+                            if shift
+                                && let Some(f) = self.open_dlg.left_files.get_mut(next)
+                            {
+                                f.selected = true;
+                            }
+                            if next >= self.open_dlg.left_scroll + 20 {
+                                self.open_dlg.left_scroll = next.saturating_sub(19);
+                            }
+                        }
+                        1 => {
+                            let max_idx = self.open_dlg.mid_dirs.len().saturating_sub(1);
+                            let next = (self.open_dlg.mid_cursor + 1).min(max_idx);
+                            self.open_dlg.mid_cursor = next;
+                            if next >= self.open_dlg.mid_scroll + 13 {
+                                self.open_dlg.mid_scroll = next.saturating_sub(12);
+                            }
+                        }
+                        _ => {
+                            let max_idx = self.open_dlg.right_playlist.len().saturating_sub(1);
+                            let next = (self.open_dlg.right_cursor + 1).min(max_idx);
+                            self.open_dlg.right_cursor = next;
+                            if shift
+                                && let Some(p) = self.open_dlg.right_playlist.get_mut(next)
+                            {
+                                p.selected = true;
+                            }
+                            if next >= self.open_dlg.right_scroll + 20 {
+                                self.open_dlg.right_scroll = next.saturating_sub(19);
+                            }
+                        }
+                    }
+                    return;
+                }
+                Key::Named(NamedKey::PageUp) => {
+                    if ctrl {
+                        self.open_dlg.navigate_parent_dir();
+                        return;
+                    }
+                    match self.open_dlg.active_list {
+                        0 => {
+                            let next = self.open_dlg.left_cursor.saturating_sub(19);
+                            self.open_dlg.left_cursor = next;
+                            self.open_dlg.left_scroll =
+                                self.open_dlg.left_scroll.saturating_sub(19).min(next);
+                        }
+                        1 => {
+                            let next = self.open_dlg.mid_cursor.saturating_sub(12);
+                            self.open_dlg.mid_cursor = next;
+                            self.open_dlg.mid_scroll =
+                                self.open_dlg.mid_scroll.saturating_sub(12).min(next);
+                        }
+                        _ => {
+                            let next = self.open_dlg.right_cursor.saturating_sub(19);
+                            self.open_dlg.right_cursor = next;
+                            self.open_dlg.right_scroll =
+                                self.open_dlg.right_scroll.saturating_sub(19).min(next);
+                        }
+                    }
+                    return;
+                }
+                Key::Named(NamedKey::PageDown) => {
+                    if ctrl {
+                        if self.open_dlg.active_list == 1 {
+                            let idx = self.open_dlg.mid_cursor;
+                            self.navigate_open_dir_item(idx);
+                        }
+                        return;
+                    }
+                    match self.open_dlg.active_list {
+                        0 => {
+                            let max_idx = self.open_dlg.left_files.len().saturating_sub(1);
+                            let next = (self.open_dlg.left_cursor + 19).min(max_idx);
+                            self.open_dlg.left_cursor = next;
+                            let max_s = self.open_dlg.left_files.len().saturating_sub(20);
+                            self.open_dlg.left_scroll =
+                                (self.open_dlg.left_scroll + 19).min(max_s);
+                            if next >= self.open_dlg.left_scroll + 20 {
+                                self.open_dlg.left_scroll = next.saturating_sub(19);
+                            }
+                        }
+                        1 => {
+                            let max_idx = self.open_dlg.mid_dirs.len().saturating_sub(1);
+                            let next = (self.open_dlg.mid_cursor + 12).min(max_idx);
+                            self.open_dlg.mid_cursor = next;
+                            let max_s = self.open_dlg.mid_dirs.len().saturating_sub(13);
+                            self.open_dlg.mid_scroll = (self.open_dlg.mid_scroll + 12).min(max_s);
+                            if next >= self.open_dlg.mid_scroll + 13 {
+                                self.open_dlg.mid_scroll = next.saturating_sub(12);
+                            }
+                        }
+                        _ => {
+                            let max_idx = self.open_dlg.right_playlist.len().saturating_sub(1);
+                            let next = (self.open_dlg.right_cursor + 19).min(max_idx);
+                            self.open_dlg.right_cursor = next;
+                            let max_s = self.open_dlg.right_playlist.len().saturating_sub(20);
+                            self.open_dlg.right_scroll =
+                                (self.open_dlg.right_scroll + 19).min(max_s);
+                            if next >= self.open_dlg.right_scroll + 20 {
+                                self.open_dlg.right_scroll = next.saturating_sub(19);
+                            }
+                        }
+                    }
+                    return;
+                }
+                Key::Named(NamedKey::Home) => {
+                    match self.open_dlg.active_list {
+                        0 => {
+                            self.open_dlg.left_cursor = 0;
+                            self.open_dlg.left_scroll = 0;
+                        }
+                        1 => {
+                            self.open_dlg.mid_cursor = 0;
+                            self.open_dlg.mid_scroll = 0;
+                        }
+                        _ => {
+                            self.open_dlg.right_cursor = 0;
+                            self.open_dlg.right_scroll = 0;
+                        }
+                    }
+                    return;
+                }
+                Key::Named(NamedKey::End) => {
+                    match self.open_dlg.active_list {
+                        0 => {
+                            let len = self.open_dlg.left_files.len();
+                            if len > 0 {
+                                self.open_dlg.left_cursor = len - 1;
+                                self.open_dlg.left_scroll = len.saturating_sub(20);
+                            }
+                        }
+                        1 => {
+                            let len = self.open_dlg.mid_dirs.len();
+                            if len > 0 {
+                                self.open_dlg.mid_cursor = len - 1;
+                                self.open_dlg.mid_scroll = len.saturating_sub(13);
+                            }
+                        }
+                        _ => {
+                            let len = self.open_dlg.right_playlist.len();
+                            if len > 0 {
+                                self.open_dlg.right_cursor = len - 1;
+                                self.open_dlg.right_scroll = len.saturating_sub(20);
+                            }
+                        }
+                    }
+                    return;
+                }
+                Key::Character(ch) => {
+                    if ctrl && ch == "\\" {
+                        self.open_dlg.navigate_root_dir();
+                        return;
+                    }
+                    if !ctrl && !alt {
+                        let right_list = self.open_dlg.active_list == 2;
+                        if ch == "+" {
+                            self.open_dlg.open_selection_mask(right_list, false);
+                            return;
+                        } else if ch == "-" {
+                            self.open_dlg.open_selection_mask(right_list, true);
+                            return;
+                        } else if ch == "*" {
+                            if right_list {
+                                for p in &mut self.open_dlg.right_playlist {
+                                    p.selected = !p.selected;
+                                }
+                            } else {
+                                for f in &mut self.open_dlg.left_files {
+                                    f.selected = !f.selected;
+                                }
+                            }
+                            return;
+                        }
+                        if let Some(c) = ch.chars().next()
+                            && !c.is_control()
+                        {
+                            self.open_dlg.type_ahead_jump(c);
+                        }
+                    }
+                    return;
+                }
+                _ => return,
+            }
+        }
+
+        // Modernes `Strg + A` zum Auswählen aller Einträge im Playlist-Dock / QuickSelect:
+        let is_modern_playlist_open = is_modern
+            && (self.kind_to_id.contains_key(&WindowKind::QuickSelect)
+                || self.kind_to_id.contains_key(&WindowKind::OpenDialog));
+        let is_modern_playlist_focused = is_modern_playlist_open
+            && matches!(
+                self.active_window_kind,
+                WindowKind::QuickSelect | WindowKind::OpenDialog
+            );
+        let is_classic_quick_select =
+            !is_modern && self.kind_to_id.contains_key(&WindowKind::QuickSelect);
+
+        if !classic_input && ctrl && !shift && !alt
+            && let Key::Character(ch) = &event.logical_key
+            && ch.eq_ignore_ascii_case("a")
+        {
+            if is_modern_playlist_open || is_classic_quick_select {
+                let len = self.shared_state.lock().unwrap().playlist.len();
+                let has_items = len > 0;
+                self.quick_select_all_selected = has_items;
+                if is_modern_playlist_open {
+                    self.playlist_selected = (0..len).collect();
+                }
+            }
+            // `Strg + A` ist systemweit reserviert und darf niemals das About-Fenster (`A`) öffnen!
+            return;
+        }
+
+        // Classic Quick Selection (`MULBOX.PAS`, modal!) oder fokussiertes Modern Playlist-Dock:
+        if is_classic_quick_select || is_modern_playlist_focused {
+            let sync_qs_pos = |app: &mut Self, new_vis_pos: usize, total_len: usize| {
+                if is_modern_playlist_focused {
+                    let max_vis = app.modern_playlist_rows.clamp(5, 36);
+                    let max_scroll = total_len.saturating_sub(max_vis);
+                    if app.quick_select_scroll > max_scroll {
+                        app.quick_select_scroll = max_scroll;
+                    }
+                    if new_vis_pos < app.quick_select_scroll {
+                        app.quick_select_scroll = new_vis_pos;
+                    } else if new_vis_pos >= app.quick_select_scroll + max_vis {
+                        app.quick_select_scroll = new_vis_pos + 1 - max_vis;
+                    }
+                } else {
+                    app.ensure_classic_quick_select_visible(new_vis_pos, total_len);
+                }
+            };
+
+            // Alt-Mnemonics für Sortierung (`MULBOX.PAS` Zeilen 332-354: Alt+N / Alt+O = Order, Alt+A = Name, Alt+E = Ext)
+            if alt && !ctrl
+                && let Key::Character(ch) = &event.logical_key
+            {
+                let c = ch.chars().next().unwrap_or('\0').to_ascii_uppercase();
+                match c {
+                    'N' | 'O' => self.quick_select_sort = 0,
+                    'A' => self.quick_select_sort = 1,
+                    'E' => self.quick_select_sort = 2,
+                    _ => {}
+                }
+                return;
+            }
+
+            match &event.logical_key {
+                Key::Named(NamedKey::Delete) | Key::Named(NamedKey::F7) => {
+                    if is_modern_playlist_focused {
+                        self.remove_selected_modern_playlist_items();
+                        return;
+                    }
                     if self.quick_select_all_selected {
                         {
                             let mut st = self.shared_state.lock().unwrap();
@@ -1272,11 +1989,34 @@ impl Mod4WinApp {
                     } else {
                         self.remove_playlist_item_and_update_cursor(self.quick_select_cursor);
                     }
+                    if is_classic_quick_select {
+                        let new_len = self.shared_state.lock().unwrap().playlist.len();
+                        let (qw, qh, ..) = self.classic_quick_select_layout(new_len);
+                        let scale = self.scale_factor;
+                        if let Some(&win_id) = self.kind_to_id.get(&WindowKind::QuickSelect)
+                            && let Some(surf) = self.windows.get_mut(&win_id)
+                        {
+                            surf.width = qw;
+                            surf.height = qh;
+                            let phys_w = ((qw as f64) * scale).round().max(1.0) as u32;
+                            let phys_h = ((qh as f64) * scale).round().max(1.0) as u32;
+                            let _ = surf.pixels.resize_buffer(qw, qh);
+                            let _ = surf.pixels.resize_surface(phys_w, phys_h);
+                            let _ = surf.window.request_inner_size(
+                                super::winit::dpi::PhysicalSize::new(phys_w, phys_h),
+                            );
+                        }
+                    }
                     return;
                 }
                 Key::Named(NamedKey::Enter) => {
                     self.quick_select_all_selected = false;
                     let orig_idx = self.quick_select_cursor;
+                    if is_modern_playlist_focused {
+                        self.playlist_selected.clear();
+                        self.playlist_selected.insert(orig_idx);
+                        self.playlist_anchor = orig_idx;
+                    }
                     {
                         let mut state = self.shared_state.lock().unwrap();
                         if orig_idx < state.playlist.len() {
@@ -1292,191 +2032,140 @@ impl Mod4WinApp {
                             state.is_paused = false;
                         }
                     }
-                    if !is_modern_playlist_open {
+                    if is_classic_quick_select {
                         self.close_window(WindowKind::QuickSelect);
                     }
                     return;
                 }
                 Key::Named(NamedKey::Escape) => {
                     self.quick_select_all_selected = false;
+                    self.playlist_selected.clear();
+                    self.playlist_reorder_drag = None;
                     self.close_window(WindowKind::QuickSelect);
-                    if is_modern_playlist_open {
+                    if is_modern_playlist_focused {
                         self.close_window(WindowKind::OpenDialog);
                     }
                     return;
                 }
-                Key::Named(NamedKey::ArrowUp) => {
+                Key::Named(NamedKey::ArrowUp)
+                | Key::Named(NamedKey::ArrowDown)
+                | Key::Named(NamedKey::ArrowLeft)
+                | Key::Named(NamedKey::ArrowRight)
+                | Key::Named(NamedKey::PageUp)
+                | Key::Named(NamedKey::PageDown)
+                | Key::Named(NamedKey::Home)
+                | Key::Named(NamedKey::End) => {
                     self.quick_select_all_selected = false;
-                    if self.quick_select_sort == 0 {
-                        let len = self.shared_state.lock().unwrap().playlist.len();
-                        if len > 0 {
-                            let new_pos = self.quick_select_cursor.min(len - 1).saturating_sub(1);
-                            self.quick_select_cursor = new_pos;
-                            if new_pos < self.quick_select_scroll {
-                                self.quick_select_scroll = new_pos;
+                    let items = {
+                        let st = self.shared_state.lock().unwrap();
+                        self.sorted_quick_select_items(&st)
+                    };
+                    if items.is_empty() {
+                        return;
+                    }
+                    let total_len = items.len();
+                    let cur_pos = items
+                        .iter()
+                        .position(|(orig_idx, _)| *orig_idx == self.quick_select_cursor)
+                        .unwrap_or(0);
+                    let col_step = if is_modern_playlist_focused {
+                        self.modern_playlist_rows.clamp(5, 36)
+                    } else {
+                        let (_, _, vis_rows, vis_cols, ..) =
+                            self.classic_quick_select_layout(total_len);
+                        match &event.logical_key {
+                            Key::Named(NamedKey::PageUp) | Key::Named(NamedKey::PageDown) => {
+                                (vis_rows * vis_cols).max(1)
                             }
+                            _ => vis_rows.max(1),
                         }
-                        return;
-                    }
-                    let st = self.shared_state.lock().unwrap();
-                    let items = self.sorted_quick_select_items(&st);
-                    if !items.is_empty() {
-                        let pos = items
-                            .iter()
-                            .position(|(orig_idx, _)| *orig_idx == self.quick_select_cursor)
-                            .unwrap_or(0);
-                        let new_pos = pos.saturating_sub(1);
-                        self.quick_select_cursor = items[new_pos].0;
-                        if new_pos < self.quick_select_scroll {
-                            self.quick_select_scroll = new_pos;
-                        }
-                    }
-                    return;
-                }
-                Key::Named(NamedKey::ArrowDown) => {
-                    self.quick_select_all_selected = false;
-                    let max_vis = if is_modern_playlist_open {
-                        self.modern_playlist_rows.clamp(5, 36)
-                    } else {
-                        13
                     };
-                    if self.quick_select_sort == 0 {
-                        let len = self.shared_state.lock().unwrap().playlist.len();
-                        if len > 0 {
-                            let new_pos = (self.quick_select_cursor + 1).min(len - 1);
-                            self.quick_select_cursor = new_pos;
-                            if new_pos >= self.quick_select_scroll + max_vis {
-                                self.quick_select_scroll = new_pos + 1 - max_vis;
-                            }
+                    let new_pos = match &event.logical_key {
+                        Key::Named(NamedKey::ArrowUp) => cur_pos.saturating_sub(1),
+                        Key::Named(NamedKey::ArrowDown) => (cur_pos + 1).min(total_len - 1),
+                        Key::Named(NamedKey::ArrowLeft) if is_classic_quick_select => {
+                            cur_pos.saturating_sub(col_step)
                         }
-                        return;
-                    }
-                    let st = self.shared_state.lock().unwrap();
-                    let items = self.sorted_quick_select_items(&st);
-                    if !items.is_empty() {
-                        let pos = items
-                            .iter()
-                            .position(|(orig_idx, _)| *orig_idx == self.quick_select_cursor)
-                            .unwrap_or(0);
-                        let new_pos = (pos + 1).min(items.len().saturating_sub(1));
-                        self.quick_select_cursor = items[new_pos].0;
-                        if new_pos >= self.quick_select_scroll + max_vis {
-                            self.quick_select_scroll = new_pos + 1 - max_vis;
+                        Key::Named(NamedKey::ArrowRight) if is_classic_quick_select => {
+                            (cur_pos + col_step).min(total_len - 1)
                         }
-                    }
-                    return;
-                }
-                Key::Named(NamedKey::PageUp) => {
-                    self.quick_select_all_selected = false;
-                    let max_vis = if is_modern_playlist_open {
-                        self.modern_playlist_rows.clamp(5, 36)
-                    } else {
-                        13
+                        Key::Named(NamedKey::ArrowLeft) | Key::Named(NamedKey::ArrowRight) => {
+                            cur_pos
+                        }
+                        Key::Named(NamedKey::PageUp) => cur_pos.saturating_sub(col_step),
+                        Key::Named(NamedKey::PageDown) => (cur_pos + col_step).min(total_len - 1),
+                        Key::Named(NamedKey::Home) => 0,
+                        Key::Named(NamedKey::End) => total_len - 1,
+                        _ => cur_pos,
                     };
-                    if self.quick_select_sort == 0 {
-                        let len = self.shared_state.lock().unwrap().playlist.len();
-                        if len > 0 {
-                            let new_pos =
-                                self.quick_select_cursor.min(len - 1).saturating_sub(max_vis);
-                            self.quick_select_cursor = new_pos;
-                            self.quick_select_scroll =
-                                self.quick_select_scroll.saturating_sub(max_vis).min(new_pos);
-                        }
-                        return;
-                    }
-                    let st = self.shared_state.lock().unwrap();
-                    let items = self.sorted_quick_select_items(&st);
-                    if !items.is_empty() {
-                        let pos = items
-                            .iter()
-                            .position(|(orig_idx, _)| *orig_idx == self.quick_select_cursor)
-                            .unwrap_or(0);
-                        let new_pos = pos.saturating_sub(max_vis);
-                        self.quick_select_cursor = items[new_pos].0;
-                        self.quick_select_scroll =
-                            self.quick_select_scroll.saturating_sub(max_vis).min(new_pos);
-                    }
-                    return;
-                }
-                Key::Named(NamedKey::PageDown) => {
-                    self.quick_select_all_selected = false;
-                    let max_vis = if is_modern_playlist_open {
-                        self.modern_playlist_rows.clamp(5, 36)
+                    if is_modern_playlist_focused
+                        && matches!(
+                            &event.logical_key,
+                            Key::Named(NamedKey::ArrowLeft) | Key::Named(NamedKey::ArrowRight)
+                        )
+                    {
+                        // Lass Links/Rechts im Modern Playlist-Dock zum Player-Seek durch!
                     } else {
-                        13
-                    };
-                    if self.quick_select_sort == 0 {
-                        let len = self.shared_state.lock().unwrap().playlist.len();
-                        if len > 0 {
-                            let new_pos = (self.quick_select_cursor + max_vis).min(len - 1);
-                            self.quick_select_cursor = new_pos;
-                            let max_scroll = len.saturating_sub(max_vis);
-                            let next_scroll = (self.quick_select_scroll + max_vis).min(max_scroll);
-                            if new_pos >= next_scroll + max_vis {
-                                self.quick_select_scroll = new_pos + 1 - max_vis;
+                        let new_orig = items[new_pos].0;
+                        self.quick_select_cursor = new_orig;
+                        if is_modern_playlist_focused {
+                            if shift {
+                                let anchor_pos = items
+                                    .iter()
+                                    .position(|(idx, _)| *idx == self.playlist_anchor)
+                                    .unwrap_or(cur_pos);
+                                self.playlist_selected.clear();
+                                let a = anchor_pos.min(new_pos);
+                                let b = anchor_pos.max(new_pos);
+                                for i in a..=b {
+                                    self.playlist_selected.insert(items[i].0);
+                                }
                             } else {
-                                self.quick_select_scroll = next_scroll;
+                                self.playlist_selected.clear();
+                                self.playlist_selected.insert(new_orig);
+                                self.playlist_anchor = new_orig;
                             }
                         }
+                        sync_qs_pos(self, new_pos, total_len);
                         return;
                     }
-                    let st = self.shared_state.lock().unwrap();
-                    let items = self.sorted_quick_select_items(&st);
-                    if !items.is_empty() {
-                        let pos = items
-                            .iter()
-                            .position(|(orig_idx, _)| *orig_idx == self.quick_select_cursor)
-                            .unwrap_or(0);
-                        let new_pos = (pos + max_vis).min(items.len().saturating_sub(1));
-                        self.quick_select_cursor = items[new_pos].0;
-                        let max_scroll = items.len().saturating_sub(max_vis);
-                        let next_scroll = (self.quick_select_scroll + max_vis).min(max_scroll);
-                        if new_pos >= next_scroll + max_vis {
-                            self.quick_select_scroll = new_pos + 1 - max_vis;
-                        } else {
-                            self.quick_select_scroll = next_scroll;
+                }
+                Key::Character(ch) if !ctrl && !alt => {
+                    if let Some(c) = ch.chars().next()
+                        && c.is_ascii_alphanumeric()
+                    {
+                        let target_ch = c.to_ascii_uppercase();
+                        let items = {
+                            let st = self.shared_state.lock().unwrap();
+                            self.sorted_quick_select_items(&st)
+                        };
+                        if !items.is_empty() {
+                            let cur_pos = items
+                                .iter()
+                                .position(|(orig_idx, _)| *orig_idx == self.quick_select_cursor)
+                                .unwrap_or(0);
+                            let start = (cur_pos + 1) % items.len();
+                            if let Some(found_pos) = (0..items.len()).find_map(|off| {
+                                let i = (start + off) % items.len();
+                                let fname = items[i].1.to_ascii_uppercase();
+                                fname.starts_with(target_ch).then_some(i)
+                            }) {
+                                self.quick_select_all_selected = false;
+                                self.quick_select_cursor = items[found_pos].0;
+                                sync_qs_pos(self, found_pos, items.len());
+                                return;
+                            }
                         }
                     }
-                    return;
-                }
-                Key::Named(NamedKey::Home) => {
-                    self.quick_select_all_selected = false;
-                    if self.quick_select_sort == 0 {
-                        let len = self.shared_state.lock().unwrap().playlist.len();
-                        if len > 0 {
-                            self.quick_select_cursor = 0;
-                            self.quick_select_scroll = 0;
-                        }
+                    if is_classic_quick_select {
                         return;
                     }
-                    let st = self.shared_state.lock().unwrap();
-                    let items = self.sorted_quick_select_items(&st);
-                    if let Some((first_orig, _)) = items.first() {
-                        self.quick_select_cursor = *first_orig;
-                        self.quick_select_scroll = 0;
-                    }
-                    return;
                 }
-                Key::Named(NamedKey::End) => {
-                    self.quick_select_all_selected = false;
-                    let max_vis = if is_modern_playlist_open { 9 } else { 13 };
-                    if self.quick_select_sort == 0 {
-                        let len = self.shared_state.lock().unwrap().playlist.len();
-                        if len > 0 {
-                            self.quick_select_cursor = len - 1;
-                            self.quick_select_scroll = len.saturating_sub(max_vis);
-                        }
+                _ => {
+                    if is_classic_quick_select {
                         return;
                     }
-                    let st = self.shared_state.lock().unwrap();
-                    let items = self.sorted_quick_select_items(&st);
-                    if let Some((last_orig, _)) = items.last() {
-                        self.quick_select_cursor = *last_orig;
-                        self.quick_select_scroll = items.len().saturating_sub(max_vis);
-                    }
-                    return;
                 }
-                _ => {}
             }
         }
 
@@ -1795,8 +2484,12 @@ impl Mod4WinApp {
                     'P' => {
                         let _ = self.execute_hotkey_event(event_loop, 3);
                     }
-                    'O' => self.toggle_window(event_loop, WindowKind::OpenDialog),
-                    'L' => self.toggle_window(event_loop, WindowKind::QuickSelect),
+                    'O' => {
+                        let _ = self.execute_hotkey_event(event_loop, 10);
+                    }
+                    'L' => {
+                        let _ = self.execute_hotkey_event(event_loop, 11);
+                    }
                     'F' => {
                         let _ = self.execute_hotkey_event(event_loop, 12);
                     }
@@ -1804,7 +2497,9 @@ impl Mod4WinApp {
                     'E' => self.toggle_window(event_loop, WindowKind::Effects),
                     'S' => self.toggle_window(event_loop, WindowKind::SetupDialog),
                     'M' => self.spawn_external_mixer(),
-                    'A' => self.toggle_window(event_loop, WindowKind::About),
+                    'A' => {
+                        let _ = self.execute_hotkey_event(event_loop, 43);
+                    }
                     'T' => {
                         let _ = self.execute_hotkey_event(event_loop, 15);
                     }

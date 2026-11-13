@@ -653,20 +653,45 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let is_diff_suite_active = false;
 
     let mut restored_from_state_saver = false;
-    if file_arg.is_none() && !no_gui && !is_diff_suite_active && ini_cfg.state_saver
-        && !ini_cfg.saved_playlist.is_empty() {
-            let idx = ini_cfg
-                .saved_playlist_idx
-                .min(ini_cfg.saved_playlist.len().saturating_sub(1));
-            let candidate = &ini_cfg.saved_playlist[idx];
-            if candidate.exists() || mod4win_rs::ui::parse_zip_virtual_path(candidate).is_some() {
-                file_arg = Some(candidate.to_string_lossy().into_owned());
-                restored_from_state_saver = true;
-                if seek_pattern.is_none() && ini_cfg.saved_order_pos > 1 {
-                    seek_pattern = Some(ini_cfg.saved_order_pos as u16);
-                }
+    let mut cli_mol_playlist: Option<Vec<std::path::PathBuf>> = None;
+    if let Some(ref f_arg) = file_arg {
+        let p = Path::new(f_arg);
+        if !no_gui
+            && !is_diff_suite_active
+            && p.extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.eq_ignore_ascii_case("mol"))
+                .unwrap_or(false)
+        {
+            let loaded_mol = UiSharedState::dedup_playlist_vec(mod4win_rs::ui::load_mol_file(p));
+            if let Some(parent) = p.parent()
+                && !parent.as_os_str().is_empty()
+            {
+                ini_cfg.last_playlist_dir = parent.to_string_lossy().into_owned();
+            }
+            if let Some(first) = loaded_mol.first() {
+                file_arg = Some(first.to_string_lossy().into_owned());
+            } else {
+                file_arg = None;
+            }
+            cli_mol_playlist = Some(loaded_mol);
+        }
+    } else if !no_gui && !is_diff_suite_active && ini_cfg.state_saver
+        && !ini_cfg.saved_playlist.is_empty()
+    {
+        ini_cfg.saved_playlist = UiSharedState::dedup_playlist_vec(ini_cfg.saved_playlist);
+        let idx = ini_cfg
+            .saved_playlist_idx
+            .min(ini_cfg.saved_playlist.len().saturating_sub(1));
+        let candidate = &ini_cfg.saved_playlist[idx];
+        restored_from_state_saver = true;
+        if candidate.exists() || mod4win_rs::ui::parse_zip_virtual_path(candidate).is_some() {
+            file_arg = Some(candidate.to_string_lossy().into_owned());
+            if seek_pattern.is_none() && ini_cfg.saved_order_pos > 1 {
+                seek_pattern = Some(ini_cfg.saved_order_pos as u16);
             }
         }
+    }
 
     if file_arg.is_none() && no_gui {
         eprintln!(
@@ -902,8 +927,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     init_ui_state.sound_settings = settings;
 
-    if let Some(ref f_arg) = file_arg {
-        let file_path = Path::new(f_arg);
+    if let Some(mol_list) = cli_mol_playlist {
+        init_ui_state.playlist = mol_list;
+        init_ui_state.playlist_idx = 0;
+        init_ui_state.playing_track_detached = false;
+        if let Some(ref f_arg) = file_arg {
+            let file_path = Path::new(f_arg);
+            init_ui_state.filename = file_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_uppercase();
+            init_ui_state.current_file_path = Some(file_path.to_path_buf());
+        }
+        init_ui_state.rebuild_number_list();
+    } else if let Some(ref f_arg) = file_arg {
+        let resolved_arg = mod4win_rs::ui::resolve_path_case_insensitive(Path::new(f_arg));
+        let file_path = resolved_arg.as_path();
         init_ui_state.filename = file_path
             .file_name()
             .and_then(|n| n.to_str())
@@ -912,26 +952,52 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         init_ui_state.current_file_path = Some(file_path.to_path_buf());
 
         if restored_from_state_saver && !init_ui_state.ini_config.saved_playlist.is_empty() {
-            init_ui_state.playlist = init_ui_state.ini_config.saved_playlist.clone();
+            init_ui_state.playlist =
+                UiSharedState::dedup_playlist_vec(init_ui_state.ini_config.saved_playlist.clone());
             init_ui_state.playlist_idx = init_ui_state
                 .ini_config
                 .saved_playlist_idx
                 .min(init_ui_state.playlist.len().saturating_sub(1));
+        } else if !no_gui
+            && !is_diff_suite_active
+            && !init_ui_state.ini_config.saved_playlist.is_empty()
+        {
+            // Direktes Öffnen einer einzelnen Moduldatei per Explorer/CLI:
+            // Bestehende Ad-Hoc-Playlist überlebt unverändert!
+            init_ui_state.playlist =
+                UiSharedState::dedup_playlist_vec(init_ui_state.ini_config.saved_playlist.clone());
+            let target_key = UiSharedState::playlist_path_key(file_path);
+            if let Some(pos) = init_ui_state
+                .playlist
+                .iter()
+                .position(|p| UiSharedState::playlist_path_key(p) == target_key)
+            {
+                init_ui_state.playlist_idx = pos;
+                init_ui_state.playing_track_detached = false;
+            } else {
+                init_ui_state.playlist_idx = init_ui_state
+                    .ini_config
+                    .saved_playlist_idx
+                    .min(init_ui_state.playlist.len().saturating_sub(1));
+                init_ui_state.playing_track_detached = true;
+            }
         } else if let Some(raw_parent) = file_path.parent() {
             let parent_dir = if raw_parent.as_os_str().is_empty() {
                 Path::new(".")
             } else {
                 raw_parent
             };
-            // Playlist aus dem aktuellen Verzeichnis aufbauen
+            // Playlist aus dem aktuellen Verzeichnis aufbauen (nur wenn keine Ad-Hoc-Playlist gespeichert war)
             if let Ok(entries) = std::fs::read_dir(parent_dir) {
                 let mut list: Vec<std::path::PathBuf> = entries
                     .filter_map(|e| e.ok().map(|d| d.path()))
                     .filter(|p| UiSharedState::is_tracker_file(p))
                     .collect();
                 list.sort();
+                let list = UiSharedState::dedup_playlist_vec(list);
+                let target_key = UiSharedState::playlist_path_key(file_path);
                 if let Some(pos) = list.iter().position(|p| {
-                    p == file_path
+                    UiSharedState::playlist_path_key(p) == target_key
                         || (raw_parent.as_os_str().is_empty()
                             && p.file_name() == file_path.file_name())
                 }) {
@@ -943,6 +1009,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if init_ui_state.playlist.is_empty() {
             init_ui_state.playlist.push(file_path.to_path_buf());
         }
+        init_ui_state.rebuild_number_list();
+    } else if restored_from_state_saver && !init_ui_state.ini_config.saved_playlist.is_empty() {
+        // StateSaver war aktiv, aber der zuletzt gespielte Track existiert z. B. auf einem ausgehängten Laufwerk nicht:
+        // Gespeicherte Ad-Hoc-Playlist trotzdem wiederherstellen statt zu leeren!
+        init_ui_state.playlist =
+            UiSharedState::dedup_playlist_vec(init_ui_state.ini_config.saved_playlist.clone());
+        init_ui_state.playlist_idx = init_ui_state
+            .ini_config
+            .saved_playlist_idx
+            .min(init_ui_state.playlist.len().saturating_sub(1));
         init_ui_state.rebuild_number_list();
     }
 

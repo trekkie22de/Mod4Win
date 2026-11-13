@@ -128,6 +128,7 @@ pub struct Mod4WinIniConfig {
     pub mixer_path: String,
     pub hd_path: String,
     pub last_dir: String,
+    pub last_playlist_dir: String,
     pub last_fm_dir: String,
 
     // [State] / StateSaver-Wiedergabezustand (wie `MOD4WIN.STA`)
@@ -238,6 +239,7 @@ impl Default for Mod4WinIniConfig {
             mixer_path: default_mixer,
             hd_path: default_hd_path,
             last_dir: cwd.clone(),
+            last_playlist_dir: String::new(),
             last_fm_dir: cwd,
             saved_playlist: Vec::new(),
             saved_playlist_idx: 0,
@@ -492,6 +494,18 @@ impl Mod4WinIniConfig {
                             }
                         }
                     }
+                    "LASTPLAYLISTDIR" => {
+                        if !val.is_empty() {
+                            #[cfg(not(target_os = "windows"))]
+                            if !(val.len() >= 2 && val.as_bytes()[1] == b':') {
+                                cfg.last_playlist_dir = val.replace('\\', "/");
+                            }
+                            #[cfg(target_os = "windows")]
+                            {
+                                cfg.last_playlist_dir = val.to_string();
+                            }
+                        }
+                    }
                     "LASTFMDIR" => {
                         if !val.is_empty() {
                             #[cfg(not(target_os = "windows"))]
@@ -696,6 +710,7 @@ impl Mod4WinIniConfig {
         out.push_str(&format!("MixerPath={}\r\n", self.mixer_path));
         out.push_str(&format!("HDPath={}\r\n", self.hd_path));
         out.push_str(&format!("LastDir={}\r\n", self.last_dir));
+        out.push_str(&format!("LastPlaylistDir={}\r\n", self.last_playlist_dir));
         out.push_str(&format!("LastFMDir={}\r\n", self.last_fm_dir));
         out.push_str(&format!("SavedPlaylistIndex={}\r\n", self.saved_playlist_idx));
         out.push_str(&format!("SavedOrderPos={}\r\n", self.saved_order_pos));
@@ -1095,6 +1110,8 @@ mod tests {
         cfg.saved_playlist_idx = 0;
         cfg.saved_order_pos = 3;
         cfg.modern_playlist_rows = 18;
+        cfg.last_dir = "/tmp/mods_folder".to_string();
+        cfg.last_playlist_dir = "/tmp/playlists_folder".to_string();
         cfg.saved_open_windows = vec!["EFFECTS".to_string(), "QUICK_SELECT".to_string()];
         cfg.store_peak(123456, "Pahgiana", 27, &pks_path);
         cfg.save_to_file(&ini_path).unwrap();
@@ -1110,6 +1127,8 @@ mod tests {
         assert_eq!(loaded.saved_playlist.len(), 1);
         assert_eq!(loaded.saved_order_pos, 3);
         assert_eq!(loaded.modern_playlist_rows, 18);
+        assert_eq!(loaded.last_dir, "/tmp/mods_folder");
+        assert_eq!(loaded.last_playlist_dir, "/tmp/playlists_folder");
         assert_eq!(
             loaded.saved_open_windows,
             vec!["EFFECTS".to_string(), "QUICK_SELECT".to_string()]

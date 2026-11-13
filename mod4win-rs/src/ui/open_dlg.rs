@@ -3,6 +3,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 use super::winit::event_loop::ActiveEventLoop;
 use super::winit::window::Window;
 
@@ -13,7 +14,7 @@ use super::archive_mol::{
 };
 use super::widgets::{
     draw_3d_frame_only, draw_3d_panel, draw_bmp_button_2state, draw_oem_text,
-    draw_oem_text_centered, draw_oem_text_mnemonic, fill_rect,
+    draw_oem_text_centered, draw_oem_text_mnemonic, draw_rect_outline, fill_rect,
 };
 
 /// Virtueller oder physischer Navigationskontext im linken Browser des Open-Dialogs (`newopen.pas`).
@@ -121,6 +122,9 @@ pub struct OpenDialogState {
     pub save_mol_name: String,
     /// Statuszeile unten (`12, 330, 532, 16`)
     pub status_msg: String,
+    /// Inkrementeller Type-Ahead-Suchpuffer (`newopen.pas`: Tippen von Buchstaben/Ziffern in der aktiven Spalte)
+    pub type_ahead_buf: String,
+    pub type_ahead_time: Option<Instant>,
 }
 
 impl OpenDialogState {
@@ -157,6 +161,8 @@ impl OpenDialogState {
             saving_mol: false,
             save_mol_name: "PLAYLIST.MOL".to_string(),
             status_msg: String::new(),
+            type_ahead_buf: String::new(),
+            type_ahead_time: None,
         }
     }
 
@@ -435,34 +441,101 @@ impl OpenDialogState {
         }
     }
 
-    /// Fügt alle links markierten Dateien (oder falls keine markiert ist, die aktuell fokussierte Datei) zur rechten Playlist hinzu.
+    /// Fügt einen einzelnen Pfad dedupliziert zur rechten Arbeits-Playlist hinzu und gibt `true` zurück, wenn er neu war.
+    pub fn push_unique_playlist_path(
+        &mut self,
+        seen: &mut std::collections::HashSet<String>,
+        path: PathBuf,
+        display_name: String,
+        ext: String,
+    ) -> bool {
+        if seen.insert(UiSharedState::playlist_path_key(&path)) {
+            self.right_playlist.push(OpenPlaylistItem {
+                path,
+                display_name,
+                ext,
+                selected: false,
+            });
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Fügt per Drag & Drop übergebene Dateien/Ordner/.MOL/.ZIP dedupliziert zur rechten Arbeits-Playlist hinzu.
+    pub fn append_dropped_path(&mut self, dropped_path: &std::path::Path) -> usize {
+        let mut found = Vec::new();
+        UiSharedState::collect_tracker_files(dropped_path, &mut found);
+        if found.is_empty() {
+            return 0;
+        }
+        let mut seen: std::collections::HashSet<String> = self
+            .right_playlist
+            .iter()
+            .map(|p| UiSharedState::playlist_path_key(&p.path))
+            .collect();
+        let mut added = 0usize;
+        for p in found {
+            let raw = p.to_string_lossy();
+            let base = raw.rsplit("::").next().unwrap_or(&raw);
+            let bp = std::path::Path::new(base);
+            let display_name = bp
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("MODULE")
+                .to_uppercase();
+            let ext = bp
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_uppercase();
+            if self.push_unique_playlist_path(&mut seen, p, display_name, ext) {
+                added += 1;
+            }
+        }
+        self.status_msg = format!("Added {} module(s) to playlist.", added);
+        added
+    }
+
+    /// Fügt alle links markierten Dateien (oder falls keine markiert ist, die aktuell fokussierte Datei) dedupliziert zur rechten Playlist hinzu.
     pub fn add_selected_to_playlist(&mut self) {
         let any_selected = self.left_files.iter().any(|f| f.selected);
+        let mut seen: std::collections::HashSet<String> = self
+            .right_playlist
+            .iter()
+            .map(|p| UiSharedState::playlist_path_key(&p.path))
+            .collect();
         let mut added = 0usize;
+        let mut skipped_dups = 0usize;
         if any_selected {
-            for f in &mut self.left_files {
-                if f.selected {
-                    if let Some(p) = f.resolve_to_path() {
-                        self.right_playlist.push(OpenPlaylistItem {
-                            path: p,
-                            display_name: f.display_name.clone(),
-                            ext: f.ext.clone(),
-                            selected: false,
-                        });
-                        added += 1;
+            let items: Vec<(Option<PathBuf>, String, String)> = self
+                .left_files
+                .iter_mut()
+                .filter_map(|f| {
+                    if f.selected {
+                        f.selected = false;
+                        Some((f.resolve_to_path(), f.display_name.clone(), f.ext.clone()))
+                    } else {
+                        None
                     }
-                    f.selected = false;
+                })
+                .collect();
+            for (p_opt, disp, ext) in items {
+                if let Some(p) = p_opt {
+                    if self.push_unique_playlist_path(&mut seen, p, disp, ext) {
+                        added += 1;
+                    } else {
+                        skipped_dups += 1;
+                    }
                 }
             }
         } else if let Some(f) = self.left_files.get(self.left_cursor).cloned() {
             if let Some(p) = f.resolve_to_path() {
-                self.right_playlist.push(OpenPlaylistItem {
-                    path: p,
-                    display_name: f.display_name,
-                    ext: f.ext,
-                    selected: false,
-                });
-                added += 1;
+                if self.push_unique_playlist_path(&mut seen, p, f.display_name, f.ext) {
+                    added += 1;
+                } else {
+                    skipped_dups += 1;
+                }
             }
             if self.left_cursor + 1 < self.left_files.len() {
                 self.left_cursor += 1;
@@ -471,7 +544,243 @@ impl OpenDialogState {
                 }
             }
         }
+        if skipped_dups > 0 && added == 0 {
+            self.status_msg = "Already in playlist (duplicate skipped).".to_string();
+        } else {
+            self.status_msg = format!("Added {} module(s) to playlist.", added);
+        }
+    }
+
+    /// Fügt ALLE Einträge der linken Dateiliste dedupliziert zur rechten Arbeits-Playlist hinzu (`Ctrl+CursorRight` in `newopen.pas`).
+    pub fn add_all_to_playlist(&mut self) {
+        let mut seen: std::collections::HashSet<String> = self
+            .right_playlist
+            .iter()
+            .map(|p| UiSharedState::playlist_path_key(&p.path))
+            .collect();
+        let mut added = 0usize;
+        let items: Vec<(Option<PathBuf>, String, String)> = self
+            .left_files
+            .iter_mut()
+            .map(|f| {
+                f.selected = false;
+                (f.resolve_to_path(), f.display_name.clone(), f.ext.clone())
+            })
+            .collect();
+        for (p_opt, disp, ext) in items {
+            if let Some(p) = p_opt
+                && self.push_unique_playlist_path(&mut seen, p, disp, ext)
+            {
+                added += 1;
+            }
+        }
         self.status_msg = format!("Added {} module(s) to playlist.", added);
+    }
+
+    /// Leert die rechte Arbeits-Playlist komplett (`Ctrl+CursorLeft` in `newopen.pas`).
+    pub fn clear_right_playlist(&mut self) {
+        let count = self.right_playlist.len();
+        self.right_playlist.clear();
+        self.right_cursor = 0;
+        self.right_scroll = 0;
+        self.right_anchor = 0;
+        self.status_msg = format!("Cleared {} module(s) from playlist.", count);
+    }
+
+    /// Fügt per `F5` auf `Directories` den markierten Ordner / `.MOL` / `.ZIP` / Laufwerk rekursiv zur rechten Playlist hinzu (`newopen.pas`).
+    pub fn append_highlighted_dir_to_playlist(&mut self) {
+        let Some(item) = self.mid_dirs.get(self.mid_cursor).cloned() else {
+            return;
+        };
+        let target_path = match item.kind {
+            OpenDirKind::Parent(_) => return,
+            OpenDirKind::Subdir(p) | OpenDirKind::MolFile(p) | OpenDirKind::ZipFile(p) => p,
+            OpenDirKind::Drive(drv) => PathBuf::from(format!("{}:\\", drv)),
+        };
+        let added = self.append_dropped_path(&target_path);
+        self.status_msg = format!("Added {} module(s) from {} to playlist.", added, item.label);
+    }
+
+    /// Wechselt in das übergeordnete Verzeichnis (`Backspace` / `Ctrl+PageUp` in `newopen.pas`).
+    pub fn navigate_parent_dir(&mut self) -> bool {
+        match &self.context {
+            OpenBrowseContext::MolPlaylist { parent_dir, .. }
+            | OpenBrowseContext::ZipArchive { parent_dir, .. } => {
+                self.context = OpenBrowseContext::Directory(parent_dir.clone());
+                self.refresh_browser();
+                self.status_msg.clear();
+                true
+            }
+            OpenBrowseContext::Directory(d) => {
+                if let Some(parent) = d.parent().map(|p| p.to_path_buf())
+                    && parent != *d
+                {
+                    self.context = OpenBrowseContext::Directory(parent);
+                    self.refresh_browser();
+                    self.status_msg.clear();
+                    true
+                } else {
+                    false
+                }
+            }
+        }
+    }
+
+    /// Wechselt in das Wurzelverzeichnis des aktuellen Laufwerks (`Ctrl+\` in `newopen.pas`).
+    pub fn navigate_root_dir(&mut self) {
+        let cur = self.current_dir_path();
+        let root = cur
+            .ancestors()
+            .last()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| PathBuf::from("/"));
+        self.context = OpenBrowseContext::Directory(root);
+        self.refresh_browser();
+        self.status_msg.clear();
+    }
+
+    /// Fokussiert in der mittleren `Directories`-Spalte das aktuelle Laufwerk (`Alt+F2` in `newopen.pas`).
+    pub fn focus_current_drive(&mut self) {
+        self.active_list = 1;
+        let cur_str = self.current_dir_path().to_string_lossy().to_uppercase();
+        let cur_drv = cur_str.chars().next();
+        if let Some(pos) = self.mid_dirs.iter().position(|d| match d.kind {
+            OpenDirKind::Drive(drv) => Some(drv.to_ascii_uppercase()) == cur_drv,
+            _ => false,
+        }) {
+            self.mid_cursor = pos;
+            if self.mid_cursor < self.mid_scroll {
+                self.mid_scroll = self.mid_cursor;
+            } else if self.mid_cursor >= self.mid_scroll + 13 {
+                self.mid_scroll = self.mid_cursor.saturating_sub(12);
+            }
+        } else if let Some(first_drv) = self
+            .mid_dirs
+            .iter()
+            .position(|d| matches!(d.kind, OpenDirKind::Drive(_)))
+        {
+            self.mid_cursor = first_drv;
+            if self.mid_cursor < self.mid_scroll {
+                self.mid_scroll = self.mid_cursor;
+            } else if self.mid_cursor >= self.mid_scroll + 13 {
+                self.mid_scroll = self.mid_cursor.saturating_sub(12);
+            }
+        }
+    }
+
+    /// Inkrementelle Type-Ahead-Suche in der aktiven Spalte (`Filelist`, `Directories` oder `Playlist`).
+    pub fn type_ahead_jump(&mut self, ch: char) {
+        let now = Instant::now();
+        let expired = self
+            .type_ahead_time
+            .map(|t| now.duration_since(t).as_millis() > 900)
+            .unwrap_or(true);
+        if expired {
+            self.type_ahead_buf.clear();
+        }
+        self.type_ahead_time = Some(now);
+        self.type_ahead_buf.push(ch.to_ascii_uppercase());
+        let prefix = self.type_ahead_buf.clone();
+
+        match self.active_list {
+            0 => {
+                let found = self
+                    .left_files
+                    .iter()
+                    .position(|f| f.display_name.to_ascii_uppercase().starts_with(&prefix))
+                    .or_else(|| {
+                        if prefix.len() > 1 {
+                            let single = ch.to_ascii_uppercase().to_string();
+                            self.type_ahead_buf = single.clone();
+                            let start = (self.left_cursor + 1) % self.left_files.len().max(1);
+                            (0..self.left_files.len()).find_map(|off| {
+                                let i = (start + off) % self.left_files.len();
+                                self.left_files[i]
+                                    .display_name
+                                    .to_ascii_uppercase()
+                                    .starts_with(&single)
+                                    .then_some(i)
+                            })
+                        } else {
+                            None
+                        }
+                    });
+                if let Some(idx) = found {
+                    self.left_cursor = idx;
+                    self.left_anchor = idx;
+                    if idx < self.left_scroll {
+                        self.left_scroll = idx;
+                    } else if idx >= self.left_scroll + 20 {
+                        self.left_scroll = idx.saturating_sub(19);
+                    }
+                }
+            }
+            1 => {
+                let strip_dir_lbl = |s: &str| -> String {
+                    s.trim_matches(|c: char| matches!(c, '[' | ']' | '<' | '>' | '-'))
+                        .to_ascii_uppercase()
+                };
+                let found = self
+                    .mid_dirs
+                    .iter()
+                    .position(|d| strip_dir_lbl(&d.label).starts_with(&prefix))
+                    .or_else(|| {
+                        if prefix.len() > 1 {
+                            let single = ch.to_ascii_uppercase().to_string();
+                            self.type_ahead_buf = single.clone();
+                            let start = (self.mid_cursor + 1) % self.mid_dirs.len().max(1);
+                            (0..self.mid_dirs.len()).find_map(|off| {
+                                let i = (start + off) % self.mid_dirs.len();
+                                strip_dir_lbl(&self.mid_dirs[i].label)
+                                    .starts_with(&single)
+                                    .then_some(i)
+                            })
+                        } else {
+                            None
+                        }
+                    });
+                if let Some(idx) = found {
+                    self.mid_cursor = idx;
+                    if idx < self.mid_scroll {
+                        self.mid_scroll = idx;
+                    } else if idx >= self.mid_scroll + 13 {
+                        self.mid_scroll = idx.saturating_sub(12);
+                    }
+                }
+            }
+            _ => {
+                let found = self
+                    .right_playlist
+                    .iter()
+                    .position(|p| p.display_name.to_ascii_uppercase().starts_with(&prefix))
+                    .or_else(|| {
+                        if prefix.len() > 1 {
+                            let single = ch.to_ascii_uppercase().to_string();
+                            self.type_ahead_buf = single.clone();
+                            let start = (self.right_cursor + 1) % self.right_playlist.len().max(1);
+                            (0..self.right_playlist.len()).find_map(|off| {
+                                let i = (start + off) % self.right_playlist.len();
+                                self.right_playlist[i]
+                                    .display_name
+                                    .to_ascii_uppercase()
+                                    .starts_with(&single)
+                                    .then_some(i)
+                            })
+                        } else {
+                            None
+                        }
+                    });
+                if let Some(idx) = found {
+                    self.right_cursor = idx;
+                    self.right_anchor = idx;
+                    if idx < self.right_scroll {
+                        self.right_scroll = idx;
+                    } else if idx >= self.right_scroll + 20 {
+                        self.right_scroll = idx.saturating_sub(19);
+                    }
+                }
+            }
+        }
     }
 
     /// Entfernt alle rechts markierten Einträge (oder den aktuellen Cursor-Eintrag) aus der Arbeits-Playlist.
@@ -552,9 +861,42 @@ impl Mod4WinApp {
         }
 
         // 3. Spaltenüberschriften ("&Filelist:", "&Directories:", "&Playlist:") direkt auf Grau bei y = 46
-        draw_oem_text_mnemonic(frame, dw, dh, 10, 46, "&Filelist:", col_black);
-        draw_oem_text_mnemonic(frame, dw, dh, 194, 46, "&Directories:", col_black);
-        draw_oem_text_mnemonic(frame, dw, dh, 374, 46, "&Playlist:", col_black);
+        //    Aktive Spalte (`active_list = 0 / 1 / 2`) wird zur sofortigen Tastatur-Orientierung dezent markiert!
+        let col_active_hdr = [0, 0, 128, 255];
+        if self.open_dlg.active_list == 0 {
+            fill_rect(frame, dw, dh, 10, 58, 72, 1, col_active_hdr);
+        } else if self.open_dlg.active_list == 1 {
+            fill_rect(frame, dw, dh, 194, 58, 96, 1, col_active_hdr);
+        } else {
+            fill_rect(frame, dw, dh, 374, 58, 72, 1, col_active_hdr);
+        }
+        draw_oem_text_mnemonic(
+            frame,
+            dw,
+            dh,
+            10,
+            46,
+            "&Filelist:",
+            if self.open_dlg.active_list == 0 { col_active_hdr } else { col_black },
+        );
+        draw_oem_text_mnemonic(
+            frame,
+            dw,
+            dh,
+            194,
+            46,
+            "&Directories:",
+            if self.open_dlg.active_list == 1 { col_active_hdr } else { col_black },
+        );
+        draw_oem_text_mnemonic(
+            frame,
+            dw,
+            dh,
+            374,
+            46,
+            "&Playlist:",
+            if self.open_dlg.active_list == 2 { col_active_hdr } else { col_black },
+        );
 
         // 4. Linke Spalte: Filelist (12, 62, 156, 240; 20 Zeilen à 12px) + Scrollbar (168, 62, 14, 240)
         draw_3d_frame_only(frame, dw, dh, 10, 60, 174, 244, true);
@@ -563,7 +905,7 @@ impl Mod4WinApp {
         let left_scroll = self.open_dlg.left_scroll.min(left_max_scroll);
         let in_zip = matches!(self.open_dlg.context, OpenBrowseContext::ZipArchive { .. });
 
-        for (row, (_idx, item)) in self
+        for (row, (idx, item)) in self
             .open_dlg
             .left_files
             .iter()
@@ -574,8 +916,11 @@ impl Mod4WinApp {
         {
             let ry = 62 + (row as i32) * 12;
             let hi = item.selected;
+            let is_cur = idx == self.open_dlg.left_cursor;
             if hi {
                 fill_rect(frame, dw, dh, 12, ry, 156, 12, col_green);
+            } else if is_cur && self.open_dlg.active_list == 0 {
+                fill_rect(frame, dw, dh, 12, ry, 156, 12, [0, 68, 0, 255]);
             }
             let tcol = if hi { col_black } else { col_green };
             self.assets
@@ -588,6 +933,14 @@ impl Mod4WinApp {
             }
             let disp_name: String = item.display_name.to_lowercase().chars().take(14).collect();
             draw_oem_text(frame, dw, dh, 51, ry, &disp_name, tcol);
+            if is_cur {
+                let frame_col = if self.open_dlg.active_list == 0 {
+                    col_white
+                } else {
+                    [0, 140, 0, 255]
+                };
+                draw_rect_outline(frame, dw, dh, 12, ry, 156, 12, frame_col);
+            }
         }
         Self::draw_vertical_scrollbar(
             frame,
@@ -793,8 +1146,11 @@ impl Mod4WinApp {
         {
             let ry = 62 + (row as i32) * 12;
             let hi = item.selected;
+            let is_cur = idx == self.open_dlg.right_cursor;
             if hi {
                 fill_rect(frame, dw, dh, 374, ry, 156, 12, col_green);
+            } else if is_cur && self.open_dlg.active_list == 2 {
+                fill_rect(frame, dw, dh, 374, ry, 156, 12, [0, 68, 0, 255]);
             }
             let tcol = if hi { col_black } else { col_green };
             self.assets
@@ -813,6 +1169,14 @@ impl Mod4WinApp {
                 .take(14)
                 .collect();
             draw_oem_text(frame, dw, dh, 415, ry, &disp_str, tcol);
+            if is_cur {
+                let frame_col = if self.open_dlg.active_list == 2 {
+                    col_white
+                } else {
+                    [0, 140, 0, 255]
+                };
+                draw_rect_outline(frame, dw, dh, 374, ry, 156, 12, frame_col);
+            }
         }
         Self::draw_vertical_scrollbar(
             frame,
@@ -1016,18 +1380,23 @@ impl Mod4WinApp {
     }
 
     pub(crate) fn commit_open_dialog_ok(&mut self) {
-        let new_paths: Vec<PathBuf> = self
-            .open_dlg
-            .right_playlist
-            .iter()
-            .map(|p| p.path.clone())
-            .collect();
+        let cur_dir_str = self.open_dlg.current_dir_path().to_string_lossy().into_owned();
+        let new_paths = UiSharedState::dedup_playlist_vec(
+            self.open_dlg
+                .right_playlist
+                .iter()
+                .map(|p| p.path.clone())
+                .collect(),
+        );
         if !new_paths.is_empty() {
             let sel_idx = self
                 .open_dlg
                 .right_cursor
                 .min(new_paths.len().saturating_sub(1));
             let mut state = self.shared_state.lock().unwrap();
+            if !cur_dir_str.is_empty() {
+                state.ini_config.last_dir = cur_dir_str;
+            }
             state.playlist = new_paths;
             state.playlist_idx = sel_idx;
             state.playing_track_detached = false;
@@ -1067,7 +1436,15 @@ impl Mod4WinApp {
         if !fname.to_ascii_uppercase().ends_with(".MOL") {
             fname.push_str(".MOL");
         }
-        let target_path = self.open_dlg.current_dir_path().join(&fname);
+        let base_dir = {
+            let st = self.shared_state.lock().unwrap();
+            if !st.ini_config.last_playlist_dir.is_empty() && !fname.contains('/') && !fname.contains('\\') {
+                PathBuf::from(&st.ini_config.last_playlist_dir)
+            } else {
+                self.open_dlg.current_dir_path()
+            }
+        };
+        let target_path = base_dir.join(&fname);
         let entries: Vec<PathBuf> = self
             .open_dlg
             .right_playlist
@@ -1076,6 +1453,14 @@ impl Mod4WinApp {
             .collect();
         match save_mol_file(&target_path, &entries) {
             Ok(()) => {
+                if let Some(parent) = target_path.parent()
+                    && let Ok(mut st) = self.shared_state.lock()
+                {
+                    st.ini_config.last_playlist_dir = parent.to_string_lossy().into_owned();
+                    let _ = st
+                        .ini_config
+                        .save_to_file(&super::ini_config::Mod4WinIniConfig::default_ini_path());
+                }
                 self.open_dlg.saving_mol = false;
                 self.open_dlg.refresh_browser();
                 self.open_dlg.status_msg = format!(
@@ -1125,20 +1510,42 @@ impl Mod4WinApp {
                 if idx < self.open_dlg.left_files.len() {
                     self.open_dlg.left_cursor = idx;
                     if is_double_click {
-                        // Doppelklick auf Datei links -> zur Playlist hinzufügen
+                        // Doppelklick auf Datei links -> dedupliziert zur Playlist hinzufügen
                         if let Some(f) = self.open_dlg.left_files.get(idx).cloned()
-                            && let Some(p) = f.resolve_to_path() {
-                                self.open_dlg.right_playlist.push(OpenPlaylistItem {
-                                    path: p,
-                                    display_name: f.display_name.clone(),
-                                    ext: f.ext,
-                                    selected: false,
-                                });
+                            && let Some(p) = f.resolve_to_path()
+                        {
+                            let mut seen: std::collections::HashSet<String> = self
+                                .open_dlg
+                                .right_playlist
+                                .iter()
+                                .map(|item| UiSharedState::playlist_path_key(&item.path))
+                                .collect();
+                            if self.open_dlg.push_unique_playlist_path(
+                                &mut seen,
+                                p.clone(),
+                                f.display_name.clone(),
+                                f.ext,
+                            ) {
                                 self.open_dlg.right_cursor =
                                     self.open_dlg.right_playlist.len().saturating_sub(1);
                                 self.open_dlg.status_msg =
                                     format!("Added {} to playlist.", f.display_name);
+                            } else {
+                                if let Some(existing_idx) = self
+                                    .open_dlg
+                                    .right_playlist
+                                    .iter()
+                                    .position(|item| {
+                                        UiSharedState::playlist_path_key(&item.path)
+                                            == UiSharedState::playlist_path_key(&p)
+                                    })
+                                {
+                                    self.open_dlg.right_cursor = existing_idx;
+                                }
+                                self.open_dlg.status_msg =
+                                    format!("{} is already in playlist.", f.display_name);
                             }
+                        }
                     } else if classic_input {
                         // 1995er Verhalten (`--classic-input`): Klick toggelt die Auswahl
                         self.open_dlg.left_files[idx].selected =

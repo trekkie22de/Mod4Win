@@ -754,6 +754,48 @@ pub fn load_and_prepare_module_isolated(
     })
 }
 
+/// Scannt im Hintergrund (ohne PCM-Mixing) Titel, Kurz-Format-Tag, Kanalzahl und Gesamtlänge eines Playlist-Eintrags.
+pub fn scan_playlist_track_metadata(path: &Path) -> Option<super::app::PlaylistTrackMeta> {
+    let (file_data, ext_opt) = read_module_bytes_universal(path).ok()?;
+    let new_mod = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        load_module_with_ext(&file_data, ext_opt.as_deref())
+    }))
+    .ok()?
+    .ok()?;
+
+    let mod_name_len = new_mod.state.mi.mod_name_len as usize;
+    let title = decode_tracker_text(&new_mod.state.mi.mod_name[..mod_name_len.min(40)]);
+    let num_channels = new_mod.state.mi.num_tracks.clamp(1, 64) as u8;
+    let short_fmt = match new_mod.state.mi.file_type {
+        ModType::ProTr | ModType::NoiseTr | ModType::StarTr | ModType::Ftrk | ModType::WOW => "MOD",
+        ModType::FT2 => "XM",
+        ModType::S3M => "S3M",
+        ModType::IT => "IT",
+        ModType::MTM => "MTM",
+        ModType::F669 => "669",
+        ModType::STM => "STM",
+        ModType::FFar => "FAR",
+        ModType::Oktalyz => "OKT",
+        ModType::ULT => "ULT",
+        _ => "MOD",
+    }
+    .to_string();
+
+    let duration_secs = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut temp_seq = Sequencer::new(new_mod, SoundSettings::default());
+        let ms = compute_module_total_time_ms_on_seq(&mut temp_seq);
+        ((ms.max(0) as u32) + 500) / 1000
+    }))
+    .unwrap_or(0);
+
+    Some(super::app::PlaylistTrackMeta {
+        title,
+        short_fmt,
+        num_channels,
+        duration_secs,
+    })
+}
+
 fn apply_ready_loaded_module(
     ui: &mut UiSharedState,
     seq: &mut Sequencer,

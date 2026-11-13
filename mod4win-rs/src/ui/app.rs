@@ -821,11 +821,21 @@ impl UiSharedState {
         self.ini_config.saved_minus_mode = self.minus_mode;
 
         if self.ini_config.state_saver {
+            let detached_external_only = self.playing_track_detached
+                && !self.playlist.is_empty()
+                && self.playlist == self.ini_config.saved_playlist
+                && self.playlist_idx == self.ini_config.saved_playlist_idx;
             self.ini_config.saved_playlist = self.playlist.clone();
             self.ini_config.saved_playlist_idx = self.playlist_idx;
-            self.ini_config.saved_order_pos = self.curr_pos.max(1);
-            self.ini_config.saved_playing = self.is_playing;
-            self.ini_config.saved_paused = self.is_paused;
+            if !detached_external_only {
+                self.ini_config.saved_order_pos = if self.playing_track_detached {
+                    1
+                } else {
+                    self.curr_pos.max(1)
+                };
+                self.ini_config.saved_playing = self.is_playing && !self.playing_track_detached;
+                self.ini_config.saved_paused = self.is_paused && !self.playing_track_detached;
+            }
         }
     }
 
@@ -1186,6 +1196,113 @@ impl UiSharedState {
         self.sync_runtime_to_ini();
     }
 
+    /// Entfernt eine Mehrfachauswahl von Einträgen (`selected_indices`) in absteigender Index-Reihenfolge,
+    /// ohne die laufende Wiedergabe abzubrechen, und hält `playlist_idx`, `playlist_pos` und `number_list` exakt konsistent.
+    pub fn remove_playlist_selection(
+        &mut self,
+        selected_indices: &std::collections::BTreeSet<usize>,
+    ) -> usize {
+        let len = self.playlist.len();
+        let valid: Vec<usize> = selected_indices
+            .iter()
+            .copied()
+            .filter(|&i| i < len)
+            .collect();
+        if valid.is_empty() {
+            return 0;
+        }
+        if valid.len() == len {
+            self.clear_playlist();
+            return len;
+        }
+        let mut removed = 0usize;
+        for &idx in valid.iter().rev() {
+            if self.remove_playlist_entry(idx) {
+                removed += 1;
+            }
+        }
+        removed
+    }
+
+    /// Verschiebt alle ausgewählten Playlist-Einträge (`selected_indices`, unter Beibehaltung ihrer relativen Reihenfolge)
+    /// per Drag & Drop vor die Einfügeposition `drop_slot` (`0..=playlist.len()`), passt `playlist_idx`,
+    /// `number_list` und `playlist_pos` unterbrechungsfrei an und gibt die neuen Indizes der verschobenen Einträge zurück.
+    pub fn reorder_playlist_selection(
+        &mut self,
+        selected_indices: &std::collections::BTreeSet<usize>,
+        drop_slot: usize,
+    ) -> std::collections::BTreeSet<usize> {
+        let n = self.playlist.len();
+        let moved: Vec<usize> = selected_indices
+            .iter()
+            .copied()
+            .filter(|&i| i < n)
+            .collect();
+        if moved.is_empty() || n <= 1 {
+            return moved.into_iter().collect();
+        }
+        let slot = drop_slot.min(n);
+        let mut before_unsel = Vec::with_capacity(slot);
+        let mut after_unsel = Vec::with_capacity(n.saturating_sub(slot));
+        for idx in 0..n {
+            if selected_indices.contains(&idx) {
+                continue;
+            }
+            if idx < slot {
+                before_unsel.push(idx);
+            } else {
+                after_unsel.push(idx);
+            }
+        }
+        let insert_start = before_unsel.len();
+        let mut new_to_old = Vec::with_capacity(n);
+        new_to_old.extend_from_slice(&before_unsel);
+        new_to_old.extend_from_slice(&moved);
+        new_to_old.extend_from_slice(&after_unsel);
+
+        let unchanged = new_to_old.iter().enumerate().all(|(ni, &oi)| ni == oi);
+        if !unchanged {
+            let mut old_to_new = vec![0usize; n];
+            let mut new_playlist = Vec::with_capacity(n);
+            for (new_idx, &old_idx) in new_to_old.iter().enumerate() {
+                old_to_new[old_idx] = new_idx;
+                new_playlist.push(self.playlist[old_idx].clone());
+            }
+            self.playlist = new_playlist;
+
+            if !self.playing_track_detached && self.playlist_idx < n {
+                self.playlist_idx = old_to_new[self.playlist_idx];
+            } else if self.playing_track_detached && self.playlist_idx < n {
+                self.playlist_idx = old_to_new[self.playlist_idx];
+            }
+
+            if self.number_list.len() == n {
+                if self.shuffle {
+                    for v in &mut self.number_list {
+                        if *v < n {
+                            *v = old_to_new[*v];
+                        }
+                    }
+                } else {
+                    self.number_list = (0..n).collect();
+                    if !self.playing_track_detached {
+                        self.playlist_pos = self.playlist_idx.min(n - 1);
+                    }
+                }
+            } else {
+                self.rebuild_number_list();
+                if !self.playing_track_detached
+                    && let Some(pos) = self.number_list.iter().position(|&i| i == self.playlist_idx)
+                {
+                    self.playlist_pos = pos;
+                }
+            }
+            self.sync_runtime_to_ini();
+        }
+
+        (insert_start..insert_start + moved.len()).collect()
+    }
+
     /// Wechselt um `delta` (`-1` = Prev, `+1` = Next) in der Playlist bzw. `number_list`.
     /// Gibt `true` zurück, wenn ein Song geladen/gewechselt wurde.
     pub fn step_song(&mut self, delta: i32, wrap: bool) -> bool {
@@ -1314,43 +1431,162 @@ impl UiSharedState {
         }
     }
 
-    /// Fügt per Drag-and-Drop übergebene Dateien/Ordner zur Playlist hinzu und startet die Wiedergabe.
+    /// Erzeugt einen kanonischen Vergleichsschlüssel für Playlist-Einträge ohne Disk-Syscalls
+    /// (normalisierte Pfadtrenner, Duplikatschutz inkl. `archiv.zip::member.mod`).
+    pub fn playlist_path_key(path: &std::path::Path) -> String {
+        let raw = path.to_string_lossy();
+        let norm = raw.replace('\\', "/");
+        let trimmed = norm.strip_prefix("./").unwrap_or(&norm);
+        let is_win_style = cfg!(target_os = "windows")
+            || (trimmed.len() >= 2 && trimmed.as_bytes()[1] == b':');
+        if is_win_style {
+            trimmed.to_lowercase()
+        } else if let Some((arc, member)) = trimmed.split_once("::") {
+            format!("{}::{}", arc, member.to_lowercase())
+        } else {
+            trimmed.to_string()
+        }
+    }
+
+    /// Entfernt Duplikate aus einer Playlist unter Beibehaltung der ersten Vorkommensposition.
+    pub fn dedup_playlist_vec(paths: Vec<PathBuf>) -> Vec<PathBuf> {
+        let mut seen = std::collections::HashSet::with_capacity(paths.len());
+        let mut out = Vec::with_capacity(paths.len());
+        for p in paths {
+            if seen.insert(Self::playlist_path_key(&p)) {
+                out.push(p);
+            }
+        }
+        out
+    }
+
+    /// Hängt nur noch nicht vorhandene Pfade an `dest` an und gibt die Anzahl neu hinzugefügter Einträge zurück.
+    pub fn append_unique_paths(
+        dest: &mut Vec<PathBuf>,
+        candidates: impl IntoIterator<Item = PathBuf>,
+    ) -> usize {
+        let mut seen: std::collections::HashSet<String> =
+            dest.iter().map(|p| Self::playlist_path_key(p)).collect();
+        let mut added = 0usize;
+        for p in candidates {
+            if seen.insert(Self::playlist_path_key(&p)) {
+                dest.push(p);
+                added += 1;
+            }
+        }
+        added
+    }
+
+    /// Fügt per Drag-and-Drop oder `+ Add` übergebene Dateien/Ordner dedupliziert zur Playlist hinzu.
     pub fn handle_dropped_paths(&mut self, paths: &[PathBuf], replace_playlist: bool) {
         let mut found = Vec::with_capacity(paths.len());
         for p in paths {
             Self::collect_tracker_files(p, &mut found);
         }
+        let found = Self::dedup_playlist_vec(found);
         if found.is_empty() {
             return;
         }
-        if replace_playlist || self.playlist.is_empty() {
+        let was_empty = self.playlist.is_empty();
+        if replace_playlist || was_empty {
             self.playlist = found;
             self.playlist_idx = 0;
+            self.playing_track_detached = false;
+            self.rebuild_number_list();
+            if let Some(pos) = self.number_list.iter().position(|&i| i == self.playlist_idx) {
+                self.playlist_pos = pos;
+            }
+            if (replace_playlist || (!self.is_playing && self.current_file_path.is_none() && self.ini_config.play_on_load))
+                && let Some(first_file) = self.playlist.get(self.playlist_idx).cloned()
+            {
+                self.pending_load_file = Some(first_file);
+                self.is_playing = true;
+                self.is_paused = false;
+            }
         } else {
-            let start_idx = self.playlist.len();
-            self.playlist.extend(found);
-            self.playlist_idx = start_idx;
-        }
-        self.playing_track_detached = false;
-        self.rebuild_number_list();
-        if let Some(pos) = self.number_list.iter().position(|&i| i == self.playlist_idx) {
-            self.playlist_pos = pos;
-        }
-        if let Some(first_file) = self.playlist.get(self.playlist_idx).cloned() {
-            self.pending_load_file = Some(first_file);
-            self.is_playing = true;
-            self.is_paused = false;
+            let old_len = self.playlist.len();
+            let added = Self::append_unique_paths(&mut self.playlist, found);
+            if added == 0 {
+                return;
+            }
+            let new_len = self.playlist.len();
+            if self.shuffle {
+                self.rebuild_number_list();
+                if !self.playing_track_detached
+                    && let Some(pos) = self.number_list.iter().position(|&i| i == self.playlist_idx)
+                {
+                    self.playlist_pos = pos;
+                }
+            } else {
+                self.number_list.extend(old_len..new_len);
+            }
+            if !self.is_playing && self.current_file_path.is_none() && self.ini_config.play_on_load {
+                self.playlist_idx = old_len;
+                self.playing_track_detached = false;
+                if let Some(pos) = self.number_list.iter().position(|&i| i == self.playlist_idx) {
+                    self.playlist_pos = pos;
+                }
+                if let Some(first_file) = self.playlist.get(self.playlist_idx).cloned() {
+                    self.pending_load_file = Some(first_file);
+                    self.is_playing = true;
+                    self.is_paused = false;
+                }
+            }
         }
         self.sync_runtime_to_ini();
     }
 
+    /// Hängt eine per Drag-and-Drop auf das Playlist-Fenster gezogene Datei/Ordner/Playlist dedupliziert hinten an,
+    /// ohne bestehende Einträge zu löschen oder einen laufenden Track abzubrechen.
+    pub fn append_dropped_to_playlist(&mut self, path: &Path) -> bool {
+        let mut found = Vec::new();
+        Self::collect_tracker_files(path, &mut found);
+        let found = Self::dedup_playlist_vec(found);
+        if found.is_empty() {
+            return false;
+        }
+        let was_empty = self.playlist.is_empty();
+        let old_len = self.playlist.len();
+        let added = Self::append_unique_paths(&mut self.playlist, found);
+        if added == 0 {
+            return true;
+        }
+        let new_len = self.playlist.len();
+        if was_empty || self.shuffle {
+            self.rebuild_number_list();
+            if !was_empty
+                && !self.playing_track_detached
+                && let Some(pos) = self.number_list.iter().position(|&i| i == self.playlist_idx)
+            {
+                self.playlist_pos = pos;
+            }
+        } else {
+            self.number_list.extend(old_len..new_len);
+        }
+        if !self.is_playing && self.current_file_path.is_none() && self.ini_config.play_on_load {
+            self.playlist_idx = old_len;
+            self.playing_track_detached = false;
+            if let Some(pos) = self.number_list.iter().position(|&i| i == self.playlist_idx) {
+                self.playlist_pos = pos;
+            }
+            if let Some(first_file) = self.playlist.get(self.playlist_idx).cloned() {
+                self.pending_load_file = Some(first_file);
+                self.is_playing = true;
+                self.is_paused = false;
+            }
+        }
+        self.sync_runtime_to_ini();
+        true
+    }
+
     /// Verarbeitet ein einzelnes `WindowEvent::DroppedFile`-Element innerhalb eines Explorer-Drop-Batches.
     /// Das erste gültige Element (`first_of_batch = true`) ersetzt die Playlist und startet Track 0;
-    /// alle weiteren Elemente desselben Batches hängen ihre Dateien lediglich hinten an, ohne `playlist_idx`
+    /// alle weiteren Elemente desselben Batches hängen ihre Dateien lediglich dedupliziert hinten an, ohne `playlist_idx`
     /// oder `pending_load_file` auf den letzten gedroppten Track umzusetzen.
     pub fn handle_dropped_batch_item(&mut self, path: &Path, first_of_batch: bool) -> bool {
         let mut found = Vec::new();
         Self::collect_tracker_files(path, &mut found);
+        let found = Self::dedup_playlist_vec(found);
         if found.is_empty() {
             return false;
         }
@@ -1369,15 +1605,17 @@ impl UiSharedState {
             }
         } else {
             let old_len = self.playlist.len();
-            self.playlist.extend(found);
-            let new_len = self.playlist.len();
-            if self.shuffle {
-                self.rebuild_number_list();
-                if let Some(pos) = self.number_list.iter().position(|&i| i == self.playlist_idx) {
-                    self.playlist_pos = pos;
+            let added = Self::append_unique_paths(&mut self.playlist, found);
+            if added > 0 {
+                let new_len = self.playlist.len();
+                if self.shuffle {
+                    self.rebuild_number_list();
+                    if let Some(pos) = self.number_list.iter().position(|&i| i == self.playlist_idx) {
+                        self.playlist_pos = pos;
+                    }
+                } else {
+                    self.number_list.extend(old_len..new_len);
                 }
-            } else {
-                self.number_list.extend(old_len..new_len);
             }
         }
         self.sync_runtime_to_ini();
@@ -1546,6 +1784,7 @@ pub(crate) struct WindowSurface {
     pub(crate) active_resize_dir: Option<ResizeDirection>,
     pub(crate) needs_aspect_snap: bool,
     pub(crate) last_outer_pos: Option<(i32, i32)>,
+    pub(crate) last_raw_outer_pos: Option<(i32, i32)>,
 }
 
 #[cfg(all(target_os = "windows", not(feature = "retro-win32")))]
@@ -1744,6 +1983,24 @@ fn cursor_for_resize_dir(dir: Option<ResizeDirection>) -> CursorIcon {
     }
 }
 
+/// Asynchron gescannte Kurz-Metadaten eines Playlist-Eintrags für das Modern-Playlist-Dock (Backlog #3).
+#[derive(Clone, Debug, Default)]
+pub struct PlaylistTrackMeta {
+    pub title: String,
+    pub short_fmt: String,
+    pub num_channels: u8,
+    pub duration_secs: u32,
+}
+
+/// Zustand einer laufenden Drag-&-Drop-Umsortierung im Modern-Playlist-Dock (Einzel- & Mehrfachauswahl).
+#[derive(Clone, Debug)]
+pub(crate) struct PlaylistReorderDrag {
+    pub press_vy: i32,
+    pub active: bool,
+    pub drop_slot: usize,
+    pub defer_collapse_idx: Option<usize>,
+}
+
 /// Hauptanwendung für die MOD4WIN 3.00 Multi-Window-Oberfläche.
 pub struct Mod4WinApp {
     pub(crate) shared_state: Arc<Mutex<UiSharedState>>,
@@ -1759,6 +2016,14 @@ pub struct Mod4WinApp {
     pub(crate) quick_select_scroll: usize, // Scroll-Offset in der Quick Selection (bm3.bmp)
     pub(crate) quick_select_cursor: usize, // Aktuell markierter Eintrag in der Quick Selection (`orig_idx`)
     pub(crate) quick_select_all_selected: bool, // `Strg+A`: Alle Einträge in der Quick Selection / Modern Playlist markiert
+    pub(crate) playlist_selected: std::collections::BTreeSet<usize>, // Mehrfachauswahl (`orig_idx`) im Modern Playlist-Dock
+    pub(crate) playlist_anchor: usize, // Anker-Index für `Shift+Klick` / `Shift+Pfeil` im Modern Playlist-Dock
+    pub(crate) playlist_reorder_drag: Option<PlaylistReorderDrag>, // Laufende Maus-Umsortierung im Modern Playlist-Dock
+    #[cfg(not(feature = "retro-win32"))]
+    pub(crate) playlist_meta_cache: HashMap<String, Option<PlaylistTrackMeta>>,
+    #[cfg(not(feature = "retro-win32"))]
+    pub(crate) playlist_meta_rx:
+        Option<std::sync::mpsc::Receiver<(String, Option<PlaylistTrackMeta>)>>,
     pub(crate) playlist_scroll_dragging: bool, // Ziehen des vertikalen Scrollbalkens im Modern Playlist-Dock
     pub(crate) modern_playlist_rows: usize, // Anzahl sichtbarer Zeilen im Modern Playlist-Dock (`5..=36`, Standard `9`)
     pub(crate) open_dlg: OpenDialogState, // Commander-Zustand für „Open Module“ (newopen.pas)
@@ -1782,6 +2047,7 @@ pub struct Mod4WinApp {
     pub(crate) modifiers: Modifiers,
     pub(crate) scale_factor: f64,
     pub(crate) preamp_dragging: bool,
+    pub(crate) pending_right_click_close: Option<WindowKind>,
     pub(crate) pressed_btn: Option<PressedButton>,
     pub(crate) pressed_btn_tracker: Option<(PressedButton, Instant, Instant)>,
     pub(crate) last_drop_time: Option<Instant>,
@@ -1843,6 +2109,13 @@ impl Mod4WinApp {
             quick_select_scroll: 0,
             quick_select_cursor: st_clone.playlist_idx,
             quick_select_all_selected: false,
+            playlist_selected: std::collections::BTreeSet::new(),
+            playlist_anchor: st_clone.playlist_idx,
+            playlist_reorder_drag: None,
+            #[cfg(not(feature = "retro-win32"))]
+            playlist_meta_cache: HashMap::new(),
+            #[cfg(not(feature = "retro-win32"))]
+            playlist_meta_rx: None,
             playlist_scroll_dragging: false,
             modern_playlist_rows: init_playlist_rows,
             open_dlg: OpenDialogState::new_lazy(initial_dir, &initial_playlist),
@@ -1875,6 +2148,7 @@ impl Mod4WinApp {
             modifiers: Modifiers::default(),
             scale_factor: init_scale,
             preamp_dragging: false,
+            pending_right_click_close: None,
             pressed_btn: None,
             pressed_btn_tracker: None,
             last_drop_time: None,
@@ -1968,6 +2242,17 @@ impl Mod4WinApp {
             let _ = st
                 .ini_config
                 .save_to_file(&Mod4WinIniConfig::default_ini_path());
+        }
+        if mode == SkinMode::Modern {
+            if self.file_menu_open {
+                self.file_menu_open = false;
+                self.file_menu_hover = None;
+                self.close_window(WindowKind::FileMenu);
+            }
+            if self.confirm_action == Some(ConfirmAction::DeleteFromDisk) {
+                self.confirm_action = None;
+                self.close_window(WindowKind::ConfirmDialog);
+            }
         }
         self.apply_skin_to_all_open_windows();
     }
@@ -2200,8 +2485,8 @@ impl Mod4WinApp {
             }
             WindowKind::EffectsHelp => (EFF_WINDOW_WIDTH, EFF_WINDOW_HEIGHT),
             WindowKind::QuickSelect => {
-                let rows = state.playlist.len().clamp(1, 12) as u32;
-                (QUICK_SELECT_WIDTH, 56 + rows.saturating_sub(1) * 13)
+                let (qw, qh, ..) = self.classic_quick_select_layout(state.playlist.len());
+                (qw, qh)
             }
             WindowKind::OpenDialog => (OPEN_WINDOW_WIDTH, OPEN_WINDOW_HEIGHT),
             WindowKind::SetupDialog => (SETUP_WINDOW_WIDTH, SETUP_WINDOW_HEIGHT),
@@ -2366,6 +2651,215 @@ impl Mod4WinApp {
             .unwrap_or(false)
     }
 
+    /// Entfernt im Modern Playlist-Dock entweder alle Einträge (`quick_select_all_selected`),
+    /// die Mehrfachauswahl (`playlist_selected`) oder den einzelnen Cursor-Eintrag.
+    pub(crate) fn remove_selected_modern_playlist_items(&mut self) {
+        if self.quick_select_all_selected {
+            {
+                let mut st = self.shared_state.lock().unwrap();
+                st.clear_playlist();
+                let _ = st
+                    .ini_config
+                    .save_to_file(&Mod4WinIniConfig::default_ini_path());
+            }
+            self.quick_select_all_selected = false;
+            self.playlist_selected.clear();
+            self.playlist_reorder_drag = None;
+            self.quick_select_cursor = 0;
+            self.quick_select_scroll = 0;
+            self.playlist_anchor = 0;
+            return;
+        }
+        if self.playlist_selected.len() > 1 {
+            let sel_copy = self.playlist_selected.clone();
+            let first_sel = *sel_copy.iter().next().unwrap_or(&0);
+            let new_len = {
+                let mut st = self.shared_state.lock().unwrap();
+                st.remove_playlist_selection(&sel_copy);
+                let _ = st
+                    .ini_config
+                    .save_to_file(&Mod4WinIniConfig::default_ini_path());
+                st.playlist.len()
+            };
+            self.playlist_selected.clear();
+            self.playlist_reorder_drag = None;
+            if new_len == 0 {
+                self.quick_select_cursor = 0;
+                self.quick_select_scroll = 0;
+                self.playlist_anchor = 0;
+            } else {
+                let next_cur = first_sel.min(new_len - 1);
+                self.quick_select_cursor = next_cur;
+                self.playlist_anchor = next_cur;
+                self.playlist_selected.insert(next_cur);
+                let max_vis = self.modern_playlist_rows.clamp(5, 36);
+                let max_scroll = new_len.saturating_sub(max_vis);
+                if self.quick_select_scroll > max_scroll {
+                    self.quick_select_scroll = max_scroll;
+                }
+                if next_cur < self.quick_select_scroll {
+                    self.quick_select_scroll = next_cur;
+                } else if next_cur >= self.quick_select_scroll + max_vis {
+                    self.quick_select_scroll = next_cur + 1 - max_vis;
+                }
+            }
+            return;
+        }
+        let target = self
+            .playlist_selected
+            .iter()
+            .next()
+            .copied()
+            .unwrap_or(self.quick_select_cursor);
+        self.playlist_selected.clear();
+        self.playlist_reorder_drag = None;
+        self.remove_playlist_item_and_update_cursor(target);
+        let len = self.shared_state.lock().unwrap().playlist.len();
+        if len > 0 && self.quick_select_cursor < len {
+            self.playlist_selected.insert(self.quick_select_cursor);
+            self.playlist_anchor = self.quick_select_cursor;
+        }
+    }
+
+    /// Aktualisiert während einer Mausbewegung im Modern Playlist-Dock die Einfügeposition (`drop_slot`)
+    /// inkl. automatischem Scrollen am oberen/unteren Listenrand.
+    pub(crate) fn update_modern_playlist_reorder_drag(&mut self, vy: i32) {
+        let Some(mut drag) = self.playlist_reorder_drag.clone() else {
+            return;
+        };
+        if !drag.active && (vy - drag.press_vy).abs() >= 4 {
+            drag.active = true;
+            // Sobald aktiv gezogen wird, ggf. auf kanonische Reihenfolge (`Order = 0`) wechseln,
+            // damit die Umsortierung 1:1 sichtbar ist.
+            if self.quick_select_sort != 0 {
+                self.quick_select_sort = 0;
+            }
+        }
+        if drag.active {
+            let total_len = self.shared_state.lock().unwrap().playlist.len();
+            let max_vis = self.modern_playlist_rows.clamp(5, 36);
+            let max_scroll = total_len.saturating_sub(max_vis);
+            let list_top = 35;
+            let list_bot = 35 + (max_vis as i32) * 16;
+            if vy < list_top + 6 && self.quick_select_scroll > 0 {
+                self.quick_select_scroll = self.quick_select_scroll.saturating_sub(1);
+            } else if vy > list_bot - 6 && self.quick_select_scroll < max_scroll {
+                self.quick_select_scroll = (self.quick_select_scroll + 1).min(max_scroll);
+            }
+            let scroll = self.quick_select_scroll.min(max_scroll);
+            // Einfügeschlitz auf halber Zeilenhöhe (`+8 px`) runden -> `0..=max_vis`
+            let rel_slot = ((vy - list_top + 8).max(0) / 16) as usize;
+            drag.drop_slot = (scroll + rel_slot.min(max_vis)).min(total_len);
+        }
+        self.playlist_reorder_drag = Some(drag);
+    }
+
+    /// Schließt eine Drag-&-Drop-Umsortierung im Modern Playlist-Dock beim Loslassen der linken Maustaste ab.
+    pub(crate) fn finish_modern_playlist_reorder_drag(&mut self) {
+        let Some(drag) = self.playlist_reorder_drag.take() else {
+            return;
+        };
+        if drag.active {
+            if self.quick_select_all_selected {
+                return;
+            }
+            let mut sel = self.playlist_selected.clone();
+            if sel.is_empty() {
+                sel.insert(self.quick_select_cursor);
+            }
+            let new_sel = {
+                let mut st = self.shared_state.lock().unwrap();
+                let res = st.reorder_playlist_selection(&sel, drag.drop_slot);
+                let _ = st
+                    .ini_config
+                    .save_to_file(&Mod4WinIniConfig::default_ini_path());
+                res
+            };
+            if let Some(&first_new) = new_sel.iter().next() {
+                self.quick_select_cursor = first_new;
+                self.playlist_anchor = first_new;
+            }
+            self.playlist_selected = new_sel;
+        } else if let Some(single_idx) = drag.defer_collapse_idx {
+            // Einfacher Klick ohne Ziehen auf einen bereits mehrfach markierten Eintrag -> auf Einzeleintrag reduzieren
+            self.playlist_selected.clear();
+            self.playlist_selected.insert(single_idx);
+            self.quick_select_cursor = single_idx;
+            self.playlist_anchor = single_idx;
+        }
+    }
+
+    /// Asynchroner Hintergrund-Metadaten-Scanner für das Modern Playlist-Dock (Backlog #3).
+    pub(crate) fn poll_playlist_meta_scanner(&mut self) {
+        #[cfg(not(feature = "retro-win32"))]
+        {
+            let mut updated = false;
+            let mut worker_done = false;
+            if let Some(rx) = &self.playlist_meta_rx {
+                loop {
+                    match rx.try_recv() {
+                        Ok((key, meta_opt)) => {
+                            self.playlist_meta_cache.insert(key, meta_opt);
+                            updated = true;
+                        }
+                        Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                            worker_done = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if worker_done {
+                self.playlist_meta_rx = None;
+            }
+            if updated {
+                if let Some(&id) = self
+                    .kind_to_id
+                    .get(&WindowKind::QuickSelect)
+                    .or_else(|| self.kind_to_id.get(&WindowKind::OpenDialog))
+                    && let Some(surf) = self.windows.get(&id)
+                {
+                    surf.window.request_redraw();
+                }
+            }
+            if self.playlist_meta_rx.is_some() {
+                return;
+            }
+            let batch: Vec<(String, PathBuf)> = {
+                let st = self.shared_state.lock().unwrap();
+                if !self.is_modern_skin(&st) || st.playlist.is_empty() {
+                    return;
+                }
+                st.playlist
+                    .iter()
+                    .filter_map(|p| {
+                        let k = UiSharedState::playlist_path_key(p);
+                        if self.playlist_meta_cache.contains_key(&k) {
+                            None
+                        } else {
+                            Some((k, p.clone()))
+                        }
+                    })
+                    .take(32)
+                    .collect()
+            };
+            if batch.is_empty() {
+                return;
+            }
+            let (tx, rx) = std::sync::mpsc::channel();
+            self.playlist_meta_rx = Some(rx);
+            std::thread::spawn(move || {
+                for (key, path) in batch {
+                    let meta = super::live_audio::scan_playlist_track_metadata(&path);
+                    if tx.send((key, meta)).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+    }
+
     /// Fordert ein sofortiges Neuzeichnen des Hauptfensters an (z. B. nach Öffnen/Schließen von Unterfenstern).
     pub(crate) fn request_main_redraw(&self) {
         if let Some(&main_id) = self.kind_to_id.get(&WindowKind::Main)
@@ -2393,19 +2887,19 @@ impl Mod4WinApp {
             } else {
                 let new_vis_pos = orig_idx.min(new_len - 1);
                 self.quick_select_cursor = new_vis_pos;
-                let max_vis = if is_modern {
-                    self.modern_playlist_rows.clamp(5, 36)
+                if is_modern {
+                    let max_vis = self.modern_playlist_rows.clamp(5, 36);
+                    let max_scroll = new_len.saturating_sub(max_vis);
+                    if self.quick_select_scroll > max_scroll {
+                        self.quick_select_scroll = max_scroll;
+                    }
+                    if new_vis_pos < self.quick_select_scroll {
+                        self.quick_select_scroll = new_vis_pos;
+                    } else if new_vis_pos >= self.quick_select_scroll + max_vis {
+                        self.quick_select_scroll = new_vis_pos + 1 - max_vis;
+                    }
                 } else {
-                    13
-                };
-                let max_scroll = new_len.saturating_sub(max_vis);
-                if self.quick_select_scroll > max_scroll {
-                    self.quick_select_scroll = max_scroll;
-                }
-                if new_vis_pos < self.quick_select_scroll {
-                    self.quick_select_scroll = new_vis_pos;
-                } else if new_vis_pos >= self.quick_select_scroll + max_vis {
-                    self.quick_select_scroll = new_vis_pos + 1 - max_vis;
+                    self.ensure_classic_quick_select_visible(new_vis_pos, new_len);
                 }
             }
             return;
@@ -2437,19 +2931,19 @@ impl Mod4WinApp {
         } else {
             let new_vis_pos = old_vis_pos.min(new_items.len() - 1);
             self.quick_select_cursor = new_items[new_vis_pos].0;
-            let max_vis = if is_modern {
-                self.modern_playlist_rows.clamp(5, 36)
+            if is_modern {
+                let max_vis = self.modern_playlist_rows.clamp(5, 36);
+                let max_scroll = new_items.len().saturating_sub(max_vis);
+                if self.quick_select_scroll > max_scroll {
+                    self.quick_select_scroll = max_scroll;
+                }
+                if new_vis_pos < self.quick_select_scroll {
+                    self.quick_select_scroll = new_vis_pos;
+                } else if new_vis_pos >= self.quick_select_scroll + max_vis {
+                    self.quick_select_scroll = new_vis_pos + 1 - max_vis;
+                }
             } else {
-                13
-            };
-            let max_scroll = new_items.len().saturating_sub(max_vis);
-            if self.quick_select_scroll > max_scroll {
-                self.quick_select_scroll = max_scroll;
-            }
-            if new_vis_pos < self.quick_select_scroll {
-                self.quick_select_scroll = new_vis_pos;
-            } else if new_vis_pos >= self.quick_select_scroll + max_vis {
-                self.quick_select_scroll = new_vis_pos + 1 - max_vis;
+                self.ensure_classic_quick_select_visible(new_vis_pos, new_items.len());
             }
         }
     }
@@ -2471,8 +2965,44 @@ impl Mod4WinApp {
         }
     }
 
+    /// Liefert den aktuell obersten modalen Dialog (`MakeDlg` / `Parent^.Disable` in `MULBOX.PAS` & `newopen.pas`),
+    /// der Tastatureingaben und Mausklicks auf dahinterliegende Fenster exklusiv abfängt.
+    pub(crate) fn topmost_modal_dialog(&self, is_modern: bool) -> Option<WindowKind> {
+        if self.kind_to_id.contains_key(&WindowKind::ConfirmDialog) || self.confirm_action.is_some() {
+            return Some(WindowKind::ConfirmDialog);
+        }
+        let modal_stack_top = [
+            WindowKind::FileSelectDialog,
+            WindowKind::WavAskDialog,
+            WindowKind::FileManager,
+            WindowKind::HotkeyEditor,
+            WindowKind::ArchiveSetup,
+            WindowKind::SetupDialog,
+        ];
+        for kind in modal_stack_top {
+            if self.kind_to_id.contains_key(&kind) {
+                return Some(kind);
+            }
+        }
+        if !is_modern {
+            if self.kind_to_id.contains_key(&WindowKind::OpenDialog) {
+                return Some(WindowKind::OpenDialog);
+            }
+            if self.kind_to_id.contains_key(&WindowKind::QuickSelect) {
+                return Some(WindowKind::QuickSelect);
+            }
+        }
+        if self.kind_to_id.contains_key(&WindowKind::About) {
+            return Some(WindowKind::About);
+        }
+        None
+    }
+
     pub(crate) fn open_window(&mut self, event_loop: &ActiveEventLoop, kind: WindowKind) {
         let kind = self.canonical_window_kind(kind);
+        if !matches!(kind, WindowKind::HelpViewer | WindowKind::FileMenu | WindowKind::ConfirmDialog) {
+            self.active_window_kind = kind;
+        }
         if let Some(&existing_id) = self.kind_to_id.get(&kind)
             && let Some(surf) = self.windows.get(&existing_id) {
                 surf.window.focus_window();
@@ -2523,11 +3053,6 @@ impl Mod4WinApp {
         } else if kind == WindowKind::QuickSelect {
             self.quick_select_all_selected = false;
             self.playlist_scroll_dragging = false;
-            let max_vis = if self.is_modern_skin(&state) {
-                self.modern_playlist_rows.clamp(5, 36)
-            } else {
-                13
-            };
             let target_idx = state.playlist_idx.min(state.playlist.len().saturating_sub(1));
             self.quick_select_cursor = target_idx;
             let pos = if self.quick_select_sort == 0 {
@@ -2536,12 +3061,20 @@ impl Mod4WinApp {
                 let items = self.sorted_quick_select_items(&state);
                 items.iter().position(|(orig_idx, _)| *orig_idx == target_idx)
             };
-            if let Some(p) = pos {
-                if p >= max_vis {
-                    self.quick_select_scroll = p.saturating_sub(max_vis / 2);
+            if self.is_modern_skin(&state) {
+                let max_vis = self.modern_playlist_rows.clamp(5, 36);
+                if let Some(p) = pos {
+                    if p >= max_vis {
+                        self.quick_select_scroll = p.saturating_sub(max_vis / 2);
+                    } else {
+                        self.quick_select_scroll = 0;
+                    }
                 } else {
                     self.quick_select_scroll = 0;
                 }
+            } else if let Some(p) = pos {
+                self.quick_select_scroll = 0;
+                self.ensure_classic_quick_select_visible(p, state.playlist.len());
             } else {
                 self.quick_select_scroll = 0;
             }
@@ -2724,6 +3257,7 @@ impl Mod4WinApp {
                     .ok()
                     .map(|p| (p.x, p.y))
                     .or(saved_pos);
+                let focus_win = Arc::clone(&window);
                 self.windows.insert(
                     id,
                     WindowSurface {
@@ -2737,8 +3271,12 @@ impl Mod4WinApp {
                         active_resize_dir: None,
                         needs_aspect_snap: false,
                         last_outer_pos: init_outer_pos,
+                        last_raw_outer_pos: init_outer_pos,
                     },
                 );
+                if kind != WindowKind::FileMenu {
+                    focus_win.focus_window();
+                }
                 if kind != WindowKind::Main {
                     let open_keys = self.collect_open_window_keys();
                     self.setup_cfg.saved_open_windows = open_keys.clone();
@@ -2784,6 +3322,9 @@ impl Mod4WinApp {
     }
 
     pub(crate) fn close_window(&mut self, kind: WindowKind) {
+        if self.pending_right_click_close == Some(kind) {
+            self.pending_right_click_close = None;
+        }
         if kind == WindowKind::FileMenu {
             self.file_menu_open = false;
             self.file_menu_hover = None;
@@ -2805,7 +3346,9 @@ impl Mod4WinApp {
         if kind != WindowKind::Main {
             self.setup_cfg.saved_open_windows = open_keys.clone();
         }
+        let mut is_mod_after = false;
         if let Ok(mut state) = self.shared_state.lock() {
+            is_mod_after = self.is_modern_skin(&state);
             match kind {
                 WindowKind::ModuleInfo => state.show_info = false,
                 WindowKind::Effects => state.show_effects = false,
@@ -2827,6 +3370,17 @@ impl Mod4WinApp {
             let _ = state
                 .ini_config
                 .save_to_file(&Mod4WinIniConfig::default_ini_path());
+        }
+        if kind != WindowKind::Main && kind != WindowKind::FileMenu {
+            let return_target = self
+                .topmost_modal_dialog(is_mod_after)
+                .unwrap_or(WindowKind::Main);
+            self.active_window_kind = return_target;
+            if let Some(&ret_id) = self.kind_to_id.get(&return_target)
+                && let Some(ret_surf) = self.windows.get(&ret_id)
+            {
+                ret_surf.window.focus_window();
+            }
         }
         self.request_main_redraw();
     }
@@ -3265,6 +3819,8 @@ impl Mod4WinApp {
                         } else {
                             self.close_window(WindowKind::About);
                         }
+                    } else if button == MouseButton::Right {
+                        self.pending_right_click_close = Some(WindowKind::About);
                     }
                     return;
                 }
@@ -3276,12 +3832,23 @@ impl Mod4WinApp {
             if self.help_dlg.popup_topic_id.is_some() {
                 self.help_dlg.popup_topic_id = None;
             } else {
-                self.close_window(WindowKind::HelpViewer);
+                self.pending_right_click_close = Some(WindowKind::HelpViewer);
             }
             return;
         }
 
-        // Rechtsklick im Effekt-Fenster (außer auf Kanalnummern / Header) schließt es
+        // Rechtsklick im Classic QuickSelect (`WMRButtonDown` in `MULBOX.PAS` Zeile 106) oder About:
+        // Erst beim Loslassen (`WM_RBUTTONUP`) schließen, damit kein Rechtsklick an den Windows-Desktop leakt!
+        if !is_modern && kind == WindowKind::QuickSelect && button == MouseButton::Right {
+            self.pending_right_click_close = Some(WindowKind::QuickSelect);
+            return;
+        }
+        if !is_modern && kind == WindowKind::About && button == MouseButton::Right {
+            self.pending_right_click_close = Some(WindowKind::About);
+            return;
+        }
+
+        // Rechtsklick im Effekt-Fenster (außer auf Kanalnummern / Header) schließt es beim Loslassen (`WM_RBUTTONUP`)
         if kind == WindowKind::Effects && button == MouseButton::Right {
             let num_ch = self.shared_state.lock().unwrap().num_channels.clamp(4, 32);
             let ch_end_y = 80 + (num_ch as i32) * 9;
@@ -3304,13 +3871,13 @@ impl Mod4WinApp {
                 state.channel_muted_dirty = true;
                 return;
             } else {
-                self.close_window(WindowKind::Effects);
+                self.pending_right_click_close = Some(WindowKind::Effects);
                 return;
             }
         }
 
         if kind == WindowKind::EffectsHelp && button == MouseButton::Right {
-            self.close_window(WindowKind::EffectsHelp);
+            self.pending_right_click_close = Some(WindowKind::EffectsHelp);
             return;
         }
 
@@ -3597,24 +4164,69 @@ impl ApplicationHandler for Mod4WinApp {
                     state.is_paused = false;
                     state.is_finished = true;
                     event_loop.exit();
+                } else if kind == WindowKind::SetupDialog {
+                    self.cancel_setup_dialog();
+                } else if kind == WindowKind::ArchiveSetup {
+                    self.setup_cfg = self.setup_backup_cfg.clone();
+                    self.close_window(WindowKind::ArchiveSetup);
                 } else {
                     self.close_window(kind);
                 }
             }
             WindowEvent::DroppedFile(dropped_path) => {
-                // Drag & Drop aus dem Windows-Explorer (`wmDropFiles` in `mod4win.pas`):
-                // Erster gültiger Drop eines Batches ersetzt die Playlist, weitere Drops desselben Batches (< 250ms) hängen an.
-                let now = Instant::now();
-                let first_of_batch = self
-                    .last_drop_time
-                    .map(|t| now.duration_since(t).as_millis() > 250)
-                    .unwrap_or(true);
-                let accepted = {
-                    let mut state = self.shared_state.lock().unwrap();
-                    state.handle_dropped_batch_item(&dropped_path, first_of_batch)
-                };
-                if accepted {
-                    self.last_drop_time = Some(now);
+                if kind == WindowKind::OpenDialog {
+                    // Drop auf den Classic Open-Files-Commander hängt dedupliziert an die rechte Arbeits-Playlist an
+                    let added = self.open_dlg.append_dropped_path(&dropped_path);
+                    if added > 0
+                        && let Some(surf) = self.windows.get(&id)
+                    {
+                        surf.window.request_redraw();
+                    }
+                } else if kind == WindowKind::QuickSelect {
+                    // Drop auf das Playlist-Fenster (Modern Playlist Dock / Classic QuickSelect) hängt dedupliziert an,
+                    // statt die bestehende Playlist zu überschreiben!
+                    let accepted = {
+                        let mut state = self.shared_state.lock().unwrap();
+                        let ok = state.append_dropped_to_playlist(&dropped_path);
+                        if ok {
+                            let _ = state
+                                .ini_config
+                                .save_to_file(&Mod4WinIniConfig::default_ini_path());
+                        }
+                        ok
+                    };
+                    if accepted && let Some(surf) = self.windows.get(&id) {
+                        surf.window.request_redraw();
+                    }
+                } else {
+                    // Drag & Drop aufs Hauptfenster (`wmDropFiles` in `mod4win.pas`):
+                    // Erster gültiger Drop eines Batches ersetzt die Playlist, weitere Drops desselben Batches (< 250ms) hängen an.
+                    let now = Instant::now();
+                    let first_of_batch = self
+                        .last_drop_time
+                        .map(|t| now.duration_since(t).as_millis() > 250)
+                        .unwrap_or(true);
+                    let accepted = {
+                        let mut state = self.shared_state.lock().unwrap();
+                        let ok = state.handle_dropped_batch_item(&dropped_path, first_of_batch);
+                        if ok {
+                            let _ = state
+                                .ini_config
+                                .save_to_file(&Mod4WinIniConfig::default_ini_path());
+                        }
+                        ok
+                    };
+                    if accepted {
+                        if first_of_batch {
+                            self.quick_select_all_selected = false;
+                            self.playlist_selected.clear();
+                            self.playlist_reorder_drag = None;
+                            self.playlist_anchor = 0;
+                            self.quick_select_cursor = 0;
+                            self.quick_select_scroll = 0;
+                        }
+                        self.last_drop_time = Some(now);
+                    }
                 }
             }
             WindowEvent::Focused(true) => {
@@ -3801,6 +4413,12 @@ impl ApplicationHandler for Mod4WinApp {
                     self.update_preamp_from_y(vy);
                 } else if let Some(vy) = playlist_drag_vy {
                     self.update_modern_playlist_scroll_from_y(vy);
+                } else if self.playlist_reorder_drag.is_some()
+                    && is_mod_skin
+                    && matches!(kind, WindowKind::QuickSelect | WindowKind::OpenDialog)
+                    && let Some((_, vy)) = virt_pos
+                {
+                    self.update_modern_playlist_reorder_drag(vy);
                 } else if let Some((vx, vy)) = virt_pos {
                     if kind == WindowKind::FileMenu {
                         self.file_menu_hover = if (0..=212).contains(&vx) && (3..=62).contains(&vy) {
@@ -3887,6 +4505,7 @@ impl ApplicationHandler for Mod4WinApp {
                     if button == MouseButton::Left {
                         self.preamp_dragging = false;
                         self.playlist_scroll_dragging = false;
+                        self.finish_modern_playlist_reorder_drag();
                         self.pressed_btn = None;
                         self.pressed_btn_tracker = None;
                         let _ = self.on_pointer_release();
@@ -3957,6 +4576,12 @@ impl ApplicationHandler for Mod4WinApp {
                             self.open_dlg.classic_drag_dir = None;
                             self.file_man_dlg.classic_drag_dir = None;
                         }
+                    } else if button == MouseButton::Right {
+                        if let Some(close_kind) = self.pending_right_click_close.take()
+                            && close_kind == kind
+                        {
+                            self.close_window(close_kind);
+                        }
                     }
                     return;
                 }
@@ -3965,6 +4590,20 @@ impl ApplicationHandler for Mod4WinApp {
                     let st = self.shared_state.lock().unwrap();
                     self.is_modern_skin(&st)
                 };
+                if let Some(modal_kind) = self.topmost_modal_dialog(is_mod_skin)
+                    && kind != modal_kind
+                    && kind != WindowKind::HelpViewer
+                {
+                    if let Some(&modal_id) = self.kind_to_id.get(&modal_kind)
+                        && let Some(modal_surf) = self.windows.get(&modal_id)
+                    {
+                        self.active_window_kind = modal_kind;
+                        modal_surf.window.focus_window();
+                        raise_win32_window_noactivate(&modal_surf.window);
+                        modal_surf.window.request_redraw();
+                    }
+                    return;
+                }
                 let Some(surf) = self.windows.get_mut(&id) else {
                     return;
                 };
@@ -4067,14 +4706,21 @@ impl ApplicationHandler for Mod4WinApp {
                             let st = self.shared_state.lock().unwrap();
                             (self.is_modern_skin(&st), st.playlist.len())
                         };
-                        let max_vis = if is_mod {
-                            self.modern_playlist_rows.clamp(5, 36)
+                        if is_mod {
+                            let max_vis = self.modern_playlist_rows.clamp(5, 36);
+                            let max_scroll = pl_len.saturating_sub(max_vis);
+                            self.quick_select_scroll =
+                                (self.quick_select_scroll as i32 + lines).clamp(0, max_scroll as i32) as usize;
                         } else {
-                            13
-                        };
-                        let max_scroll = pl_len.saturating_sub(max_vis);
-                        self.quick_select_scroll =
-                            (self.quick_select_scroll as i32 + lines).clamp(0, max_scroll as i32) as usize;
+                            let (_, _, vis_rows, vis_cols, total_cols, _) =
+                                self.classic_quick_select_layout(pl_len);
+                            let max_col_off = total_cols.saturating_sub(vis_cols);
+                            let cur_col_off = (self.quick_select_scroll / vis_rows.max(1)).min(max_col_off);
+                            let col_step = if lines > 0 { 1i32 } else { -1i32 };
+                            let next_col_off =
+                                (cur_col_off as i32 + col_step).clamp(0, max_col_off as i32) as usize;
+                            self.quick_select_scroll = next_col_off * vis_rows.max(1);
+                        }
                     } else if kind == WindowKind::OpenDialog {
                         let vx = self
                             .windows
@@ -4175,6 +4821,7 @@ impl ApplicationHandler for Mod4WinApp {
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         self.poll_held_button_repeat();
         let _ = self.poll_touch_long_press_and_kinetic(event_loop);
+        self.poll_playlist_meta_scanner();
 
         let pending_ps = {
             let mut st = self.shared_state.lock().unwrap();
@@ -4517,6 +5164,148 @@ mod tests {
         st.on_auto_advance(false);
         assert!(!st.is_playing);
         assert_eq!(st.pending_seek_pattern.take(), Some(1));
+    }
+
+    #[test]
+    fn test_playlist_deduplication_and_append_preserves_playback() {
+        let mut st = UiSharedState::new("SONG A", "ProTr", 4, 10, 10, 10, vec![], 120);
+        let deduped = UiSharedState::dedup_playlist_vec(vec![
+            PathBuf::from("C:\\Mods\\SpaceDebris.MOD"),
+            PathBuf::from("c:/mods/spacedebris.mod"),
+            PathBuf::from("C:\\Mods\\CrystalHammer.MOD"),
+        ]);
+        assert_eq!(deduped.len(), 2);
+        assert_eq!(deduped[0], PathBuf::from("C:\\Mods\\SpaceDebris.MOD"));
+        assert_eq!(deduped[1], PathBuf::from("C:\\Mods\\CrystalHammer.MOD"));
+
+        st.playlist = deduped;
+        st.playlist_idx = 0;
+        st.playing_track_detached = false;
+        st.is_playing = true;
+        st.rebuild_number_list();
+
+        // Appending duplicate + new track must skip duplicate, append new track, and NOT interrupt active playback!
+        let added = UiSharedState::append_unique_paths(
+            &mut st.playlist,
+            vec![
+                PathBuf::from("c:/mods/crystalhammer.mod"),
+                PathBuf::from("C:\\Mods\\Enigma.MOD"),
+            ],
+        );
+        st.rebuild_number_list();
+        assert_eq!(added, 1);
+        assert_eq!(st.playlist.len(), 3);
+        assert_eq!(st.playlist_idx, 0);
+        assert!(st.pending_load_file.is_none());
+        assert!(st.is_playing);
+    }
+
+    #[test]
+    fn test_playlist_multi_select_drag_drop_reorder_and_remove() {
+        let mut st = UiSharedState::new("SONG C", "Fast2", 8, 10, 10, 10, vec![], 180);
+        st.playlist = vec![
+            PathBuf::from("0_A.XM"),
+            PathBuf::from("1_B.XM"),
+            PathBuf::from("2_C.XM"),
+            PathBuf::from("3_D.XM"),
+            PathBuf::from("4_E.XM"),
+        ];
+        st.playlist_idx = 2; // 2_C.XM plays actively
+        st.playing_track_detached = false;
+        st.rebuild_number_list();
+
+        // Move discontinuous multi-selection {0_A.XM (0), 3_D.XM (3)} to the end (drop_slot = 5):
+        // Expected order: [1_B.XM, 2_C.XM, 4_E.XM, 0_A.XM, 3_D.XM]
+        let mut sel = std::collections::BTreeSet::new();
+        sel.insert(0);
+        sel.insert(3);
+        let new_sel = st.reorder_playlist_selection(&sel, 5);
+        assert_eq!(
+            st.playlist,
+            vec![
+                PathBuf::from("1_B.XM"),
+                PathBuf::from("2_C.XM"),
+                PathBuf::from("4_E.XM"),
+                PathBuf::from("0_A.XM"),
+                PathBuf::from("3_D.XM"),
+            ]
+        );
+        // Active playing track 2_C.XM shifted from index 2 -> index 1 seamlessly without reload!
+        assert_eq!(st.playlist_idx, 1);
+        assert_eq!(st.playlist_pos, 1);
+        assert!(st.pending_load_file.is_none());
+        let expected_sel: std::collections::BTreeSet<usize> = [3, 4].into_iter().collect();
+        assert_eq!(new_sel, expected_sel);
+
+        // Move those two selected items {3, 4} to the very top (drop_slot = 0):
+        // Expected order: [0_A.XM, 3_D.XM, 1_B.XM, 2_C.XM, 4_E.XM]
+        let top_sel = st.reorder_playlist_selection(&new_sel, 0);
+        assert_eq!(st.playlist[0], PathBuf::from("0_A.XM"));
+        assert_eq!(st.playlist[1], PathBuf::from("3_D.XM"));
+        assert_eq!(st.playlist_idx, 3); // 2_C.XM is now at index 3
+        let expected_top: std::collections::BTreeSet<usize> = [0, 1].into_iter().collect();
+        assert_eq!(top_sel, expected_top);
+
+        // Remove multi-selection {0, 4} while index 3 (2_C.XM) is playing:
+        let mut rem_sel = std::collections::BTreeSet::new();
+        rem_sel.insert(0);
+        rem_sel.insert(4);
+        assert_eq!(st.remove_playlist_selection(&rem_sel), 2);
+        assert_eq!(
+            st.playlist,
+            vec![
+                PathBuf::from("3_D.XM"),
+                PathBuf::from("1_B.XM"),
+                PathBuf::from("2_C.XM"),
+            ]
+        );
+        assert_eq!(st.playlist_idx, 2);
+        assert!(!st.playing_track_detached);
+    }
+
+    #[test]
+    fn test_detached_direct_open_preserves_saved_adhoc_playlist() {
+        let mut st = UiSharedState::new("EXT", "ProTr", 4, 8, 8, 8, vec![], 90);
+        st.ini_config.state_saver = true;
+        st.ini_config.saved_playlist = vec![PathBuf::from("S1.MOD"), PathBuf::from("S2.MOD")];
+        st.ini_config.saved_playlist_idx = 1;
+        st.ini_config.saved_order_pos = 5;
+        st.playlist = st.ini_config.saved_playlist.clone();
+        st.playlist_idx = 1;
+        // Direct file association open (`mod4win.exe external.mod`): plays detached while keeping saved playlist intact!
+        st.playing_track_detached = true;
+        st.current_file_path = Some(PathBuf::from("EXTERNAL.MOD"));
+        st.curr_pos = 9;
+        st.sync_runtime_to_ini();
+
+        assert_eq!(
+            st.ini_config.saved_playlist,
+            vec![PathBuf::from("S1.MOD"), PathBuf::from("S2.MOD")]
+        );
+        assert_eq!(st.ini_config.saved_playlist_idx, 1);
+        assert_eq!(st.ini_config.saved_order_pos, 5);
+    }
+
+    #[test]
+    fn test_classic_quick_select_multicolumn_autosize_500_tracks() {
+        let state = Arc::new(Mutex::new(UiSharedState::new(
+            "TEST", "ProTr", 4, 10, 10, 10, vec![], 100,
+        )));
+        let app = Mod4WinApp::new(Arc::clone(&state));
+        let (w_small, h_small, rows_small, cols_small, total_cols_small, hscroll_small) =
+            app.classic_quick_select_layout(5);
+        let (w_500, h_500, rows_500, cols_500, total_cols_500, hscroll_500) =
+            app.classic_quick_select_layout(500);
+
+        assert_eq!(cols_small, 1);
+        assert_eq!(total_cols_small, 1);
+        assert!(!hscroll_small);
+        assert!(rows_500 > rows_small);
+        assert!(cols_500 > 1, "500 tracks must expand into multiple columns like MULBOX.PAS");
+        assert!(w_500 > w_small);
+        assert!(h_500 > h_small);
+        assert!(total_cols_500 > cols_500);
+        assert!(hscroll_500, "500 tracks exceeding screen columns must enable horizontal scrollbar");
     }
 }
 
