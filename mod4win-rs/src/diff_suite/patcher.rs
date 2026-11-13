@@ -101,6 +101,52 @@ pub fn patch_player32_dll_bytes(base: &[u8]) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
+/// Erzeugt eine garantiert Headless-taugliche `MOD4WIN.INI` (CRLF) für Batch-Regressionstests.
+///
+/// Verhindert zuverlässig modale Blocker-Dialoge (`AskHD=0`, `AskExtensions=0`, `ForceExtensions=0`),
+/// aktiviert den Sofortstart (`PlayOnLoad=1`) sowie `Direct To Disk Recording` (`DeviceID=-2`)
+/// und setzt `HDPath` auf das jeweilige RAM-/Temp-Arbeitsverzeichnis (z. B. `R:\`).
+pub fn build_headless_mod4win_ini(hd_path_dos: &str) -> String {
+    let mut hd = hd_path_dos.trim().replace('/', "\\");
+    if !hd.ends_with('\\') {
+        hd.push('\\');
+    }
+    format!(
+        "[State]\r\n\
+OverrideRateChange=0\r\n\
+PauseWhileSetup=0\r\n\
+PlayOnLoad=1\r\n\
+StateSaver=0\r\n\
+AskHD=0\r\n\
+HDPath={hd}\r\n\
+AskExtensions=0\r\n\
+ForceExtensions=0\r\n\
+LOG_ERRORS=0\r\n\
+\r\n\
+[Playing Device]\r\n\
+DeviceID=-2\r\n\
+DeviceName=Direct To Disk Recording\r\n\
+\r\n\
+[Sampling]\r\n\
+SampleRate=44100\r\n\
+BitsPerSample=16\r\n\
+Channels=2\r\n\
+OutputBuffers=99\r\n\
+TimerMode=0\r\n\
+Surround=0\r\n\
+PreAmplification=30\r\n\
+OverSampling=3\r\n\
+EnablePanning=1\r\n\
+Clipping=1\r\n\
+HDDRecBuffers=16\r\n\
+\r\n\
+[Language]\r\n\
+Help=M4W_GER.HLP\r\n\
+Resource=RES_GER.DLL\r\n\
+Language=1\r\n"
+    )
+}
+
 /// Prüft im angegebenen `m4w_dir`, ob `MOD4WIN_IDO0..3.EXE` und die gepatchte `PLAYER32.DLL`
 /// vorhanden und auf dem korrekten Patch-Stand sind. Falls nicht, werden automatisch `.bak`-Backups
 /// angelegt und die vier `MOD4WIN_IDO0..3.EXE` sowie `PLAYER32.DLL` gepatcht.
@@ -208,39 +254,7 @@ pub fn ensure_mod4win_test_environment(m4w_dir: &Path) -> Result<(), String> {
     // 4. Prüfe, ob eine passende MOD4WIN.INI für Direct-To-Disk existiert
     let ini_path = m4w_dir.join("MOD4WIN.INI");
     if !ini_path.exists() {
-        let default_ini = "\
-[State]\r\n\
-OverrideRateChange=0\r\n\
-PauseWhileSetup=0\r\n\
-PlayOnLoad=0\r\n\
-StateSaver=1\r\n\
-AskHD=1\r\n\
-HDPath=C:\\\r\n\
-AskExtensions=0\r\n\
-ForceExtensions=1\r\n\
-\r\n\
-[Playing Device]\r\n\
-DeviceID=-2\r\n\
-DeviceName=Direct To Disk Recording\r\n\
-\r\n\
-[Sampling]\r\n\
-SampleRate=44100\r\n\
-BitsPerSample=16\r\n\
-Channels=2\r\n\
-OutputBuffers=99\r\n\
-TimerMode=0\r\n\
-Surround=0\r\n\
-PreAmplification=30\r\n\
-OverSampling=3\r\n\
-EnablePanning=1\r\n\
-Clipping=1\r\n\
-HDDRecBuffers=16\r\n\
-\r\n\
-[Language]\r\n\
-Help=M4W_GER.HLP\r\n\
-Resource=RES_GER.DLL\r\n\
-Language=1\r\n";
-        let _ = fs::write(&ini_path, default_ini);
+        let _ = fs::write(&ini_path, build_headless_mod4win_ini("R:\\"));
     }
 
     Ok(())

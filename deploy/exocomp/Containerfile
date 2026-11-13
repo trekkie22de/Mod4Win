@@ -1,0 +1,24 @@
+FROM docker.io/library/debian:bookworm-slim
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    WINEDEBUG=-all \
+    WINEDLLOVERRIDES="mscoree,mshtml,winemenubuilder.exe,winedbg.exe=d" \
+    DISPLAY=:99
+
+RUN dpkg --add-architecture i386 \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        wine \
+        wine32:i386 \
+        xvfb \
+        xauth \
+        ffmpeg \
+        procps \
+        psmisc \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY m4w-container-entry.sh /usr/local/bin/m4w-container-entry.sh
+RUN chmod 0755 /usr/local/bin/m4w-container-entry.sh
+
+ENTRYPOINT ["/usr/local/bin/m4w-container-entry.sh"]

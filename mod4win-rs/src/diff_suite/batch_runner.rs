@@ -33,7 +33,7 @@ use super::compare::{
     format_module_header, run_ffmpeg_stage_comparison_to_string, run_single_ido_diff_in_memory,
     WavData,
 };
-use super::patcher::ensure_mod4win_test_environment;
+use super::patcher::{build_headless_mod4win_ini, ensure_mod4win_test_environment};
 
 // ============================================================================
 // 1. Reines Rust-MD5 (RFC 1321) für 100% kompatible Duplikat-Hashes zu Mod_Batch.ps1
@@ -233,7 +233,7 @@ mod os_proc {
     }
 
     /// Liest die verbrauchte CPU-Zeit (`KernelTime + UserTime`) eines Kindprozesses in Millisekunden.
-    pub fn get_process_cpu_ms(child: &Child) -> Option<f64> {
+    pub fn get_process_cpu_ms(child: &Child, _worker_tag: Option<&str>) -> Option<f64> {
         unsafe {
             let h_proc = child.as_raw_handle() as isize;
             let mut creation = FileTime::default();
@@ -253,7 +253,7 @@ mod os_proc {
     }
 
     /// Beendet einen hängenden Worker-Prozessbaum (`taskkill /F /T /PID`).
-    pub fn kill_process_tree(child: &mut Child) {
+    pub fn kill_process_tree(child: &mut Child, _wine_prefix: Option<&std::path::Path>) {
         let pid = child.id();
         let _ = Command::new("taskkill.exe")
             .args(["/F", "/T", "/PID", &pid.to_string()])
@@ -268,6 +268,7 @@ mod os_proc {
 #[cfg(target_os = "linux")]
 mod os_proc {
     use std::fs;
+    use std::path::Path;
     use std::process::{Child, Command, Stdio};
 
     pub struct WorkerJobGuard;
@@ -279,23 +280,79 @@ mod os_proc {
         pub fn assign(&self, _child: &Child) {}
     }
 
-    /// Liest die verbrauchte CPU-Zeit (`utime + stime` in `/proc/<pid>/stat`) in Millisekunden.
-    pub fn get_process_cpu_ms(child: &Child) -> Option<f64> {
-        let pid = child.id();
+    fn parse_proc_stat_ticks_and_pgrp(pid: u32) -> Option<(u64, i32)> {
         let stat_str = fs::read_to_string(format!("/proc/{}/stat", pid)).ok()?;
         let close_paren = stat_str.rfind(')')?;
         let rest = stat_str.get(close_paren + 2..)?;
         let fields: Vec<&str> = rest.split_whitespace().collect();
         // Nach `(comm)` ist Feld 0 = state (Feld 3 in man 5 proc),
-        // Feld 11 = utime (14), Feld 12 = stime (15).
+        // Feld 2 = pgrp (Feld 5), Feld 11 = utime (14), Feld 12 = stime (15).
+        let pgrp: i32 = fields.get(2)?.parse().ok()?;
         let utime: u64 = fields.get(11)?.parse().ok()?;
         let stime: u64 = fields.get(12)?.parse().ok()?;
-        // Standard-USER_HZ unter Linux ist 100 Ticks/Sekunde (10 ms pro Tick)
-        Some(((utime + stime) * 10) as f64)
+        Some((utime.saturating_add(stime), pgrp))
     }
 
-    /// Beendet die Prozessgruppe des Wine-Workers unter Linux.
-    pub fn kill_process_tree(child: &mut Child) {
+    fn proc_has_worker_tag(pid: u32, tag_needle: &[u8]) -> bool {
+        let Ok(env_bytes) = fs::read(format!("/proc/{}/environ", pid)) else {
+            return false;
+        };
+        env_bytes
+            .split(|&b| b == 0)
+            .any(|entry| entry == tag_needle)
+    }
+
+    /// Liest die verbrauchte CPU-Zeit (`utime + stime` über Prozessgruppe & Wine-Worker-Tag) in Millisekunden.
+    ///
+    /// Unter Wine wird 16-Bit `winevdm.exe` vom `wineserver` außerhalb der direkten Kind-PID
+    /// gestartet; über `M4W_WTAG=<worker>` werden `wine`, `winevdm.exe` und `wineserver` dieses
+    /// Workers exakt zusammengezählt.
+    pub fn get_process_cpu_ms(child: &Child, worker_tag: Option<&str>) -> Option<f64> {
+        let root_pid = child.id();
+        let root_pgrp = root_pid as i32;
+        let tag_str = worker_tag.map(|t| format!("M4W_WTAG={}", t));
+        let tag_bytes = tag_str.as_deref().map(str::as_bytes);
+
+        let Ok(entries) = fs::read_dir("/proc") else {
+            let (ticks, _) = parse_proc_stat_ticks_and_pgrp(root_pid)?;
+            return Some((ticks * 10) as f64);
+        };
+
+        let mut total_ticks: u64 = 0;
+        let mut matched_any = false;
+
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let Some(pid_str) = name.to_str() else {
+                continue;
+            };
+            let Ok(pid) = pid_str.parse::<u32>() else {
+                continue;
+            };
+            let Some((ticks, pgrp)) = parse_proc_stat_ticks_and_pgrp(pid) else {
+                continue;
+            };
+            let belongs = pid == root_pid
+                || pgrp == root_pgrp
+                || tag_bytes
+                    .map(|needle| proc_has_worker_tag(pid, needle))
+                    .unwrap_or(false);
+            if belongs {
+                total_ticks = total_ticks.saturating_add(ticks);
+                matched_any = true;
+            }
+        }
+
+        if matched_any {
+            // Standard-USER_HZ unter Linux ist 100 Ticks/Sekunde (10 ms pro Tick)
+            Some((total_ticks * 10) as f64)
+        } else {
+            None
+        }
+    }
+
+    /// Beendet die Prozessgruppe sowie ggf. den isolierten `wineserver` des Wine-Workers unter Linux.
+    pub fn kill_process_tree(child: &mut Child, wine_prefix: Option<&Path>) {
         let pid = child.id();
         let _ = Command::new("kill")
             .args(["-9", &format!("-{}", pid)])
@@ -304,6 +361,15 @@ mod os_proc {
             .status();
         let _ = child.kill();
         let _ = child.wait();
+        if let Some(pfx) = wine_prefix {
+            let _ = Command::new("wineserver")
+                .arg("-k9")
+                .env("WINEPREFIX", pfx)
+                .env("WINEDEBUG", "-all")
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+        }
     }
 }
 
@@ -516,19 +582,78 @@ fn to_win16_runner_path(p: &Path) -> String {
     }
 }
 
-fn is_supported_batch_mod_extension(ext_lower: &str) -> bool {
-    matches!(
-        ext_lower,
-        "mod" | "xm" | "s3m" | "mtm" | "669" | "ult" | "far" | "stm" | "okt" | "okta" | "wow" | "it" | "umx"
-    )
+/// Erkennt sowohl klassische PC-Dateiendungen (`.mod`, `.nst`, `.xm`, `.s3m`, …) als auch
+/// Amiga-/Modland-/Aminet-Präfixnamen (`mod.space debris`, `okt.song`, `xm.track`, …).
+/// Gibt `(logische_ext_klein, dos_8_3_endung)` zurück, z. B. `("mod", ".MOD")`.
+fn detect_batch_mod_format(path: &Path) -> Option<(&'static str, &'static str)> {
+    fn map_token(tok: &str) -> Option<(&'static str, &'static str)> {
+        match tok {
+            "mod" | "nst" => Some(("mod", ".MOD")),
+            "xm" => Some(("xm", ".XM")),
+            "s3m" => Some(("s3m", ".S3M")),
+            "mtm" => Some(("mtm", ".MTM")),
+            "669" => Some(("669", ".669")),
+            "ult" => Some(("ult", ".ULT")),
+            "far" => Some(("far", ".FAR")),
+            "stm" => Some(("stm", ".STM")),
+            "okt" | "okta" => Some(("okt", ".OKT")),
+            "wow" => Some(("wow", ".WOW")),
+            "it" => Some(("it", ".IT")),
+            "umx" => Some(("umx", ".UMX")),
+            _ => None,
+        }
+    }
+
+    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        let ext_lower = ext.to_ascii_lowercase();
+        if let Some(mapped) = map_token(&ext_lower) {
+            return Some(mapped);
+        }
+        // Nicht-Modul-Artefakte (z. B. `mod.song.0.TXT`, `.wav`, `.zip`) niemals als Amiga-Präfix werten
+        if matches!(
+            ext_lower.as_str(),
+            "txt"
+                | "wav"
+                | "log"
+                | "bak"
+                | "ini"
+                | "pks"
+                | "exe"
+                | "dll"
+                | "bmp"
+                | "hlp"
+                | "mol"
+                | "zip"
+                | "7z"
+                | "rar"
+                | "lha"
+                | "lzh"
+                | "gz"
+                | "xz"
+                | "bz2"
+                | "md"
+                | "json"
+                | "csv"
+        ) {
+            return None;
+        }
+    }
+
+    let file_name = path.file_name().and_then(|n| n.to_str())?;
+    if file_name.starts_with('.') {
+        return None;
+    }
+    let (prefix, rest) = file_name.split_once('.')?;
+    if rest.trim().is_empty() {
+        return None;
+    }
+    map_token(&prefix.to_ascii_lowercase())
 }
 
 fn collect_mod_files_recursive(dir_or_file: &Path, out: &mut Vec<PathBuf>) {
     if dir_or_file.is_file() {
-        if let Some(ext) = dir_or_file.extension().and_then(|e| e.to_str()) {
-            if is_supported_batch_mod_extension(&ext.to_ascii_lowercase()) {
-                out.push(dir_or_file.to_path_buf());
-            }
+        if detect_batch_mod_format(dir_or_file).is_some() {
+            out.push(dir_or_file.to_path_buf());
         }
         return;
     }
@@ -540,12 +665,353 @@ fn collect_mod_files_recursive(dir_or_file: &Path, out: &mut Vec<PathBuf>) {
     for p in sub_paths {
         if p.is_dir() {
             collect_mod_files_recursive(&p, out);
-        } else if p.is_file() {
-            if let Some(ext) = p.extension().and_then(|e| e.to_str()) {
-                if is_supported_batch_mod_extension(&ext.to_ascii_lowercase()) {
-                    out.push(p);
+        } else if p.is_file() && detect_batch_mod_format(&p).is_some() {
+            out.push(p);
+        }
+    }
+}
+
+/// Findet die von 16-Bit `MOD4WIN.EXE` geschriebene Worker-WAV-Datei unabhängig von der
+/// Groß-/Kleinschreibung auf Linux-Dateisystemen (`tmpfs` schreibt z. B. `w0.WAV` statt `W0.WAV`).
+fn find_worker_wav_variant(work_dir: &Path, prefix: &str) -> Option<PathBuf> {
+    let lower = prefix.to_ascii_lowercase();
+    let upper = prefix.to_ascii_uppercase();
+    let candidates = [
+        format!("{}.WAV", lower),
+        format!("{}.WAV", upper),
+        format!("{}.wav", lower),
+        format!("{}.wav", upper),
+    ];
+    for c in candidates {
+        let p = work_dir.join(c);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    None
+}
+
+fn remove_worker_wav_variants(work_dir: &Path, prefix: &str) {
+    let lower = prefix.to_ascii_lowercase();
+    let upper = prefix.to_ascii_uppercase();
+    for c in [
+        format!("{}.WAV", lower),
+        format!("{}.WAV", upper),
+        format!("{}.wav", lower),
+        format!("{}.wav", upper),
+    ] {
+        let _ = fs::remove_file(work_dir.join(c));
+    }
+}
+
+#[cfg(target_os = "linux")]
+mod linux_wine {
+    use std::fs::{self, OpenOptions};
+    use std::io::Write;
+    use std::os::unix::fs::symlink;
+    use std::path::{Path, PathBuf};
+    use std::process::{Command, Stdio};
+
+    use super::build_headless_mod4win_ini;
+
+    pub const WINE_DLL_OVERRIDES: &str = "mscoree,mshtml,winemenubuilder.exe,winedbg.exe=d";
+
+    pub fn is_wine_runner(runner_bin: &str) -> bool {
+        let name = Path::new(runner_bin)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(runner_bin)
+            .to_ascii_lowercase();
+        name == "wine" || name.starts_with("wine32") || name.starts_with("wine64")
+    }
+
+    fn copy_tree_preserving_symlinks(src: &Path, dst: &Path) -> std::io::Result<()> {
+        fs::create_dir_all(dst)?;
+        for entry in fs::read_dir(src)? {
+            let entry = entry?;
+            let src_path = entry.path();
+            let dst_path = dst.join(entry.file_name());
+            let meta = fs::symlink_metadata(&src_path)?;
+            let ft = meta.file_type();
+            if ft.is_symlink() {
+                let target = fs::read_link(&src_path)?;
+                let _ = fs::remove_file(&dst_path);
+                symlink(&target, &dst_path)?;
+            } else if ft.is_dir() {
+                copy_tree_preserving_symlinks(&src_path, &dst_path)?;
+            } else if ft.is_file() {
+                fs::copy(&src_path, &dst_path)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Initialisiert einmalig vor dem Start der Worker-Threads ein sauberes 32/16-Bit `_pfx_template`
+    /// in `work_dir` (inkl. `WINEARCH=win32`, `Managed=N` für Xvfb ohne Window-Manager und
+    /// `[Player32] UseHardware=0` in `win.ini`).
+    pub fn ensure_wine_template_prefix(work_dir: &Path) -> Result<PathBuf, String> {
+        let template_dir = work_dir.join("_pfx_template");
+        if !template_dir.join("system.reg").exists() {
+            println!(
+                "[Wine-Init] Initialisiere isoliertes 16/32-Bit Wine-Template in '{}' ...",
+                template_dir.display()
+            );
+            let _ = fs::remove_dir_all(&template_dir);
+            fs::create_dir_all(&template_dir).map_err(|e| {
+                format!(
+                    "Konnte Wine-Template '{}' nicht anlegen: {}",
+                    template_dir.display(),
+                    e
+                )
+            })?;
+
+            let status = Command::new("wineboot")
+                .arg("--init")
+                .env("WINEPREFIX", &template_dir)
+                .env("WINEARCH", "win32")
+                .env("WINEDEBUG", "-all")
+                .env("WINEDLLOVERRIDES", WINE_DLL_OVERRIDES)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .map_err(|e| format!("Konnte `wineboot --init` nicht ausführen: {}", e))?;
+            if !status.success() {
+                return Err(format!(
+                    "`wineboot --init` fehlgeschlagen (Exit-Code: {:?})",
+                    status.code()
+                ));
+            }
+
+            // Deaktiviere X11-Window-Manager-Synchronisation für Headless-Xvfb (vermeidet 2s Withdraw-Timeout)
+            let _ = Command::new("wine")
+                .args([
+                    "reg",
+                    "add",
+                    r"HKCU\Software\Wine\X11 Driver",
+                    "/v",
+                    "Managed",
+                    "/t",
+                    "REG_SZ",
+                    "/d",
+                    "N",
+                    "/f",
+                ])
+                .env("WINEPREFIX", &template_dir)
+                .env("WINEARCH", "win32")
+                .env("WINEDEBUG", "-all")
+                .env("WINEDLLOVERRIDES", WINE_DLL_OVERRIDES)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+
+            // Unterdrücke modale Wine-Crash-Dialoge (`winedbg --auto`), falls 16-Bit `winevdm.exe`
+            // beim DPMI-Exit nach geschriebener WAV oder bei korrupten Modland-Dateien faultet.
+            let _ = Command::new("wine")
+                .args([
+                    "reg",
+                    "add",
+                    r"HKCU\Software\Wine\WineDbg",
+                    "/v",
+                    "ShowCrashDialog",
+                    "/t",
+                    "REG_DWORD",
+                    "/d",
+                    "0",
+                    "/f",
+                ])
+                .env("WINEPREFIX", &template_dir)
+                .env("WINEARCH", "win32")
+                .env("WINEDEBUG", "-all")
+                .env("WINEDLLOVERRIDES", WINE_DLL_OVERRIDES)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+
+            let _ = Command::new("wine")
+                .args([
+                    "reg",
+                    "delete",
+                    r"HKLM\Software\Microsoft\Windows NT\CurrentVersion\AeDebug",
+                    "/f",
+                ])
+                .env("WINEPREFIX", &template_dir)
+                .env("WINEARCH", "win32")
+                .env("WINEDEBUG", "-all")
+                .env("WINEDLLOVERRIDES", WINE_DLL_OVERRIDES)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+
+            let _ = Command::new("wineserver")
+                .arg("-w")
+                .env("WINEPREFIX", &template_dir)
+                .env("WINEARCH", "win32")
+                .env("WINEDEBUG", "-all")
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+        }
+
+        let win_dir = template_dir.join("drive_c").join("windows");
+        let _ = fs::create_dir_all(&win_dir);
+
+        // Stelle sicher, dass PLAYER32.DLL keinen ISA-Port-Scan (GUS/EWS64) im DPMI-Modus ausführt
+        let win_ini_path = win_dir.join("win.ini");
+        let existing_win_ini = fs::read_to_string(&win_ini_path).unwrap_or_default();
+        if !existing_win_ini.to_ascii_lowercase().contains("[player32]") {
+            if let Ok(mut f) = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&win_ini_path)
+            {
+                let _ = write!(
+                    f,
+                    "\r\n[Player32]\r\nUseHardware=0\r\nPALTiming=0\r\nPeakSearch=1\r\nShowPeakSearch=0\r\nExactPeakSearch=1\r\n"
+                );
+            }
+        }
+
+        let headless_ini = build_headless_mod4win_ini("R:\\");
+        let _ = fs::write(win_dir.join("MOD4WIN.INI"), headless_ini.as_bytes());
+
+        Ok(template_dir)
+    }
+
+    /// Isolierte pro-Worker-Umgebung (`WINEPREFIX` + eigenes `m4w_W<id>` + persistenter `wineserver -p3`),
+    /// damit 16+ parallele 16-Bit-`MOD4WIN.EXE`-/DPMI-`PLAYER32.DLL`-Instanzen völlig lockfrei skalieren.
+    pub struct LinuxWineWorkerGuard {
+        pub worker_tag: String,
+        pub wine_prefix: PathBuf,
+        pub worker_m4w_dir: PathBuf,
+        ini_bytes: Vec<u8>,
+    }
+
+    impl LinuxWineWorkerGuard {
+        pub fn setup(
+            worker_id: usize,
+            work_dir: &Path,
+            m4w_dir: &Path,
+            template_dir: &Path,
+        ) -> Result<Self, String> {
+            let worker_tag = format!("W{}", worker_id);
+            let wine_prefix = work_dir.join(format!("pfx_{}", worker_tag));
+            let worker_m4w_dir = work_dir.join(format!("m4w_{}", worker_tag));
+
+            let _ = Command::new("wineserver")
+                .arg("-k9")
+                .env("WINEPREFIX", &wine_prefix)
+                .env("WINEARCH", "win32")
+                .env("WINEDEBUG", "-all")
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+            let _ = fs::remove_dir_all(&wine_prefix);
+            let _ = fs::remove_dir_all(&worker_m4w_dir);
+
+            fs::create_dir_all(&worker_m4w_dir)
+                .map_err(|e| format!("m4w-Worker-Dir Fehler ({}): {}", worker_tag, e))?;
+
+            let abs_m4w_src = fs::canonicalize(m4w_dir).unwrap_or_else(|_| m4w_dir.to_path_buf());
+            let entries = fs::read_dir(&abs_m4w_src)
+                .map_err(|e| format!("Konnte '{}' nicht lesen: {}", abs_m4w_src.display(), e))?;
+            for entry in entries.flatten() {
+                let src_p = entry.path();
+                let fname = entry.file_name();
+                let fname_upper = fname.to_string_lossy().to_ascii_uppercase();
+                // MOD4WIN.INI und MOD4WIN.PKS müssen pro Worker privat sein; alte Desktop-Playlists (.STA) ausblenden!
+                if matches!(
+                    fname_upper.as_str(),
+                    "MOD4WIN.INI" | "MOD4WIN.PKS" | "MOD4WIN.STA"
+                ) {
+                    continue;
+                }
+                let dst_p = worker_m4w_dir.join(&fname);
+                if symlink(&src_p, &dst_p).is_err() && src_p.is_file() {
+                    let _ = fs::copy(&src_p, &dst_p);
                 }
             }
+
+            let ini_bytes = build_headless_mod4win_ini("R:\\").into_bytes();
+            let _ = fs::write(worker_m4w_dir.join("MOD4WIN.INI"), &ini_bytes);
+
+            copy_tree_preserving_symlinks(template_dir, &wine_prefix)
+                .map_err(|e| format!("Wine-Prefix-Klon fehlgeschlagen ({}): {}", worker_tag, e))?;
+
+            let win_dir = wine_prefix.join("drive_c").join("windows");
+            let _ = fs::create_dir_all(&win_dir);
+            let _ = fs::write(win_dir.join("MOD4WIN.INI"), &ini_bytes);
+
+            // Kurze 8.3 DOS-Laufwerke `M:` (Worker-M4W) und `R:` (RAM-Work-Dir) eintragen
+            let dosdevices = wine_prefix.join("dosdevices");
+            let _ = fs::create_dir_all(&dosdevices);
+            let abs_worker_m4w =
+                fs::canonicalize(&worker_m4w_dir).unwrap_or_else(|_| worker_m4w_dir.clone());
+            let abs_work_dir = fs::canonicalize(work_dir).unwrap_or_else(|_| work_dir.to_path_buf());
+            let m_link = dosdevices.join("m:");
+            let r_link = dosdevices.join("r:");
+            let _ = fs::remove_file(&m_link);
+            let _ = fs::remove_file(&r_link);
+            let _ = symlink(&abs_worker_m4w, &m_link);
+            let _ = symlink(&abs_work_dir, &r_link);
+
+            let guard = Self {
+                worker_tag,
+                wine_prefix,
+                worker_m4w_dir,
+                ini_bytes,
+            };
+            guard.start_warm_wineserver();
+            Ok(guard)
+        }
+
+        pub fn start_warm_wineserver(&self) {
+            let _ = Command::new("wineserver")
+                .arg("-p")
+                .env("WINEPREFIX", &self.wine_prefix)
+                .env("WINEARCH", "win32")
+                .env("WINEDEBUG", "-all")
+                .env("M4W_WTAG", &self.worker_tag)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+        }
+
+        /// Bereinigt vor jedem 16-Bit-Aufruf etwaige State-/PeakSearch-Reste (`MOD4WIN.sta`,
+        /// `MOD4WIN.PKS`) im RAM-Verzeichnis und stellt eine frische Headless-`MOD4WIN.INI` her.
+        pub fn prepare_before_run(&self) {
+            for stale in ["MOD4WIN.PKS", "mod4win.pks", "MOD4WIN.STA", "MOD4WIN.sta", "mod4win.sta"] {
+                let _ = fs::remove_file(self.worker_m4w_dir.join(stale));
+            }
+            let _ = fs::write(self.worker_m4w_dir.join("MOD4WIN.INI"), &self.ini_bytes);
+        }
+
+        /// Stellt nach einem harten Timeout-Kill (`wineserver -k9`) `MOD4WIN.INI` und den warmen
+        /// `wineserver` für das nächste Modul sauber wieder her.
+        pub fn reset_after_abort(&self) {
+            self.prepare_before_run();
+            let _ = fs::write(
+                self.wine_prefix
+                    .join("drive_c")
+                    .join("windows")
+                    .join("MOD4WIN.INI"),
+                &self.ini_bytes,
+            );
+            self.start_warm_wineserver();
+        }
+    }
+
+    impl Drop for LinuxWineWorkerGuard {
+        fn drop(&mut self) {
+            let _ = Command::new("wineserver")
+                .arg("-k")
+                .env("WINEPREFIX", &self.wine_prefix)
+                .env("WINEARCH", "win32")
+                .env("WINEDEBUG", "-all")
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+            let _ = fs::remove_dir_all(&self.wine_prefix);
+            let _ = fs::remove_dir_all(&self.worker_m4w_dir);
         }
     }
 }
@@ -624,14 +1090,8 @@ pub fn run_batch_m4w_diff(opts: &BatchM4wDiffOptions) -> Result<(), Box<dyn std:
     }
 
     let has_classic_mods = all_mod_files.iter().any(|p| {
-        !matches!(
-            p.extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("")
-                .to_ascii_lowercase()
-                .as_str(),
-            "it" | "umx"
-        )
+        let fmt = detect_batch_mod_format(p).map(|(ext_l, _)| ext_l).unwrap_or("mod");
+        !matches!(fmt, "it" | "umx")
     });
 
     let ffmpeg_opt = resolve_ffmpeg_available(opts.ffmpeg_bin.as_deref());
@@ -656,6 +1116,22 @@ pub fn run_batch_m4w_diff(opts: &BatchM4wDiffOptions) -> Result<(), Box<dyn std:
     }
 
     let work_dir = resolve_work_dir(opts.work_dir.as_deref())?;
+
+    #[cfg(target_os = "linux")]
+    let wine_template_opt: Option<PathBuf> = if has_classic_mods {
+        if let (Some(_m4w_dir), Some(runner_bin)) = (m4w_dir_opt.as_deref(), runner_opt.as_deref())
+        {
+            if linux_wine::is_wine_runner(runner_bin) {
+                Some(linux_wine::ensure_wine_template_prefix(&work_dir)?)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
 
     // Duplikat-Dateinamen (Case-Insensitive) wie in Mod_Batch.ps1 bestimmen
     let mut seen_names = HashSet::new();
@@ -757,6 +1233,8 @@ pub fn run_batch_m4w_diff(opts: &BatchM4wDiffOptions) -> Result<(), Box<dyn std:
             let timeout_cnt = &timeout_counter;
             let skip_cnt = &skip_counter;
             let done_cnt = &done_files_counter;
+            #[cfg(target_os = "linux")]
+            let wine_tpl_ref = wine_template_opt.as_deref();
 
             s.spawn(move || {
                 // Gestaffelter Start wie in Mod_Batch.ps1 (verhindert I/O-Spike beim Start)
@@ -768,6 +1246,25 @@ pub fn run_batch_m4w_diff(opts: &BatchM4wDiffOptions) -> Result<(), Box<dyn std:
                 let mismatch_log = log_ref.join(format!("_MISMATCHES_{}.log", prefix));
                 let debug_log = log_ref.join(format!("_WORKER_DEBUG_{}.log", prefix));
 
+                #[cfg(target_os = "linux")]
+                let wine_worker_guard = match (m4w_dir_ref, wine_tpl_ref) {
+                    (Some(m4w_d), Some(tpl_d)) => {
+                        match linux_wine::LinuxWineWorkerGuard::setup(
+                            worker_id, work_ref, m4w_d, tpl_d,
+                        ) {
+                            Ok(g) => Some(g),
+                            Err(e) => {
+                                append_line_utf8(
+                                    &debug_log,
+                                    &format!("WINE SETUP ERROR ({}): {}", prefix, e),
+                                );
+                                None
+                            }
+                        }
+                    }
+                    _ => None,
+                };
+
                 loop {
                     let idx = next_ref.fetch_add(1, Ordering::Relaxed);
                     if idx >= total_files {
@@ -775,11 +1272,9 @@ pub fn run_batch_m4w_diff(opts: &BatchM4wDiffOptions) -> Result<(), Box<dyn std:
                     }
                     let file_path = &all_files_ref[idx];
                     let safe_base_name = compute_safe_base_name(file_path, dup_ref);
-                    let ext_raw = file_path
-                        .extension()
-                        .and_then(|e| e.to_str())
-                        .unwrap_or("mod");
-                    let ext_lower = ext_raw.to_ascii_lowercase();
+                    let (ext_lower_str, ext_dos_str) =
+                        detect_batch_mod_format(file_path).unwrap_or(("mod", ".MOD"));
+                    let ext_lower = ext_lower_str.to_string();
 
                     // Lade Modul einmalig in Rust im RAM
                     let raw_bytes = match fs::read(file_path) {
@@ -913,11 +1408,7 @@ pub fn run_batch_m4w_diff(opts: &BatchM4wDiffOptions) -> Result<(), Box<dyn std:
                         continue;
                     };
 
-                    let ext_dos = if ext_lower == "okta" {
-                        ".OKT".to_string()
-                    } else {
-                        format!(".{}", ext_raw.to_ascii_uppercase())
-                    };
+                    let ext_dos = ext_dos_str;
                     let temp_mod = work_ref.join(format!("{}{}", prefix, ext_dos));
                     let temp_wav = work_ref.join(format!("{}.WAV", prefix));
                     let mut mod_copied = false;
@@ -942,7 +1433,7 @@ pub fn run_batch_m4w_diff(opts: &BatchM4wDiffOptions) -> Result<(), Box<dyn std:
 
                         if !mod_copied {
                             let _ = fs::remove_file(&temp_mod);
-                            let _ = fs::remove_file(&temp_wav);
+                            remove_worker_wav_variants(work_ref, &prefix);
                             if let Err(e) = fs::write(&temp_mod, &raw_bytes) {
                                 append_line_utf8(
                                     &debug_log,
@@ -951,27 +1442,51 @@ pub fn run_batch_m4w_diff(opts: &BatchM4wDiffOptions) -> Result<(), Box<dyn std:
                                 break;
                             }
                             mod_copied = true;
-                        } else if temp_wav.exists() {
-                            let _ = fs::remove_file(&temp_wav);
+                        } else {
+                            remove_worker_wav_variants(work_ref, &prefix);
                         }
-
-                        let m4w_exe = m4w_dir.join(format!("MOD4WIN_IDO{}.EXE", ido));
-                        let m4w_arg = to_win16_runner_path(&m4w_exe);
-                        let mod_arg = to_win16_runner_path(&temp_mod);
 
                         let mut cmd = Command::new(runner_bin);
-                        cmd.arg(&m4w_arg)
-                            .arg(&mod_arg)
-                            .current_dir(m4w_dir)
-                            .stdout(Stdio::null())
-                            .stderr(Stdio::null());
-
                         #[cfg(target_os = "linux")]
-                        {
-                            use std::os::unix::process::CommandExt;
-                            cmd.env("WINEDEBUG", "-all");
-                            cmd.process_group(0);
-                        }
+                        let (worker_tag_opt, worker_pfx_opt): (Option<&str>, Option<&Path>) =
+                            if let Some(ref wg) = wine_worker_guard {
+                                use std::os::unix::process::CommandExt;
+                                wg.prepare_before_run();
+                                cmd.arg(format!("M:\\MOD4WIN_IDO{}.EXE", ido))
+                                    .arg(format!("R:\\{}{}", prefix, ext_dos))
+                                    .current_dir(&wg.worker_m4w_dir)
+                                    .env("WINEPREFIX", &wg.wine_prefix)
+                                    .env("WINEARCH", "win32")
+                                    .env("WINEDEBUG", "-all")
+                                    .env("WINEDLLOVERRIDES", linux_wine::WINE_DLL_OVERRIDES)
+                                    .env("M4W_WTAG", &wg.worker_tag)
+                                    .process_group(0)
+                                    .stdout(Stdio::null())
+                                    .stderr(Stdio::null());
+                                (Some(wg.worker_tag.as_str()), Some(wg.wine_prefix.as_path()))
+                            } else {
+                                use std::os::unix::process::CommandExt;
+                                let m4w_exe = m4w_dir.join(format!("MOD4WIN_IDO{}.EXE", ido));
+                                cmd.arg(to_win16_runner_path(&m4w_exe))
+                                    .arg(to_win16_runner_path(&temp_mod))
+                                    .current_dir(m4w_dir)
+                                    .env("WINEDEBUG", "-all")
+                                    .process_group(0)
+                                    .stdout(Stdio::null())
+                                    .stderr(Stdio::null());
+                                (None, None)
+                            };
+
+                        #[cfg(target_os = "windows")]
+                        let (worker_tag_opt, worker_pfx_opt): (Option<&str>, Option<&Path>) = {
+                            let m4w_exe = m4w_dir.join(format!("MOD4WIN_IDO{}.EXE", ido));
+                            cmd.arg(to_win16_runner_path(&m4w_exe))
+                                .arg(to_win16_runner_path(&temp_mod))
+                                .current_dir(m4w_dir)
+                                .stdout(Stdio::null())
+                                .stderr(Stdio::null());
+                            (None, None)
+                        };
 
                         let mut child = match cmd.spawn() {
                             Ok(c) => c,
@@ -1006,8 +1521,8 @@ pub fn run_batch_m4w_diff(opts: &BatchM4wDiffOptions) -> Result<(), Box<dyn std:
                             }
 
                             let elapsed_sec = timer.elapsed().as_secs_f64();
-                            let cur_cpu_ms =
-                                os_proc::get_process_cpu_ms(&child).unwrap_or(last_cpu_ms);
+                            let cur_cpu_ms = os_proc::get_process_cpu_ms(&child, worker_tag_opt)
+                                .unwrap_or(last_cpu_ms);
                             let cpu_delta = cur_cpu_ms - last_cpu_ms;
                             last_cpu_ms = cur_cpu_ms;
 
@@ -1017,28 +1532,31 @@ pub fn run_batch_m4w_diff(opts: &BatchM4wDiffOptions) -> Result<(), Box<dyn std:
                                 idle_seconds = 0;
                             }
 
-                            if let Ok(meta) = fs::metadata(&temp_wav) {
-                                let cur_size = meta.len();
-                                if cur_size > last_size {
-                                    last_size = cur_size;
-                                    last_growth_sec = elapsed_sec;
-                                    idle_seconds = 0;
-                                }
-                                if cur_size > max_wav_size_bytes {
-                                    abort_reason = Some(format!(
-                                        "ENDLESS_LOOP_WAV_SIZE (greater than {} MB)",
-                                        opts.max_wav_mb
-                                    ));
-                                    break;
-                                }
-                                if last_size > 44
-                                    && (elapsed_sec - last_growth_sec) > (opts.max_stall_sec as f64)
-                                {
-                                    abort_reason = Some(format!(
-                                        "STALLED_DURING_WRITE (No WAV growth for {}s)",
-                                        opts.max_stall_sec
-                                    ));
-                                    break;
+                            if let Some(found_wav) = find_worker_wav_variant(work_ref, &prefix) {
+                                if let Ok(meta) = fs::metadata(&found_wav) {
+                                    let cur_size = meta.len();
+                                    if cur_size > last_size {
+                                        last_size = cur_size;
+                                        last_growth_sec = elapsed_sec;
+                                        idle_seconds = 0;
+                                    }
+                                    if cur_size > max_wav_size_bytes {
+                                        abort_reason = Some(format!(
+                                            "ENDLESS_LOOP_WAV_SIZE (greater than {} MB)",
+                                            opts.max_wav_mb
+                                        ));
+                                        break;
+                                    }
+                                    if last_size > 44
+                                        && (elapsed_sec - last_growth_sec)
+                                            > (opts.max_stall_sec as f64)
+                                    {
+                                        abort_reason = Some(format!(
+                                            "STALLED_DURING_WRITE (No WAV growth for {}s)",
+                                            opts.max_stall_sec
+                                        ));
+                                        break;
+                                    }
                                 }
                             }
 
@@ -1060,7 +1578,11 @@ pub fn run_batch_m4w_diff(opts: &BatchM4wDiffOptions) -> Result<(), Box<dyn std:
                         }
 
                         if let Some(reason) = abort_reason {
-                            os_proc::kill_process_tree(&mut child);
+                            os_proc::kill_process_tree(&mut child, worker_pfx_opt);
+                            #[cfg(target_os = "linux")]
+                            if let Some(ref wg) = wine_worker_guard {
+                                wg.reset_after_abort();
+                            }
                             let msg = format!(
                                 "{} | [{}] | {} | IDO {}",
                                 reason,
@@ -1075,14 +1597,16 @@ pub fn run_batch_m4w_diff(opts: &BatchM4wDiffOptions) -> Result<(), Box<dyn std:
                             if !saved_mod.exists() {
                                 let _ = fs::copy(file_path, &saved_mod);
                             }
-                            let _ = fs::remove_file(&temp_wav);
+                            remove_worker_wav_variants(work_ref, &prefix);
                             timeout_cnt.fetch_add(1, Ordering::Relaxed);
                             break; // Restliche IDOs für dieses Modul überspringen
                         }
 
-                        // WAV sofort in den RAM einlesen und temporäre Datei löschen!
-                        let wav_bytes_opt = fs::read(&temp_wav).ok().filter(|b| b.len() > 44);
-                        let _ = fs::remove_file(&temp_wav);
+                        // WAV sofort (Case-Insensitive für Linux tmpfs `w0.WAV`) in den RAM einlesen und löschen!
+                        let actual_wav_path =
+                            find_worker_wav_variant(work_ref, &prefix).unwrap_or_else(|| temp_wav.clone());
+                        let wav_bytes_opt = fs::read(&actual_wav_path).ok().filter(|b| b.len() > 44);
+                        remove_worker_wav_variants(work_ref, &prefix);
 
                         if let Some(wav_bytes) = wav_bytes_opt {
                             let Some(ref loaded) = loaded_opt else {
@@ -1116,7 +1640,7 @@ pub fn run_batch_m4w_diff(opts: &BatchM4wDiffOptions) -> Result<(), Box<dyn std:
                             };
 
                             let ref_wav = WavData::from_parsed(
-                                temp_wav.display().to_string(),
+                                actual_wav_path.display().to_string(),
                                 parsed,
                             );
                             let (passed, max_diff, diff_out) = run_single_ido_diff_in_memory(
@@ -1180,7 +1704,7 @@ pub fn run_batch_m4w_diff(opts: &BatchM4wDiffOptions) -> Result<(), Box<dyn std:
                     }
 
                     let _ = fs::remove_file(&temp_mod);
-                    let _ = fs::remove_file(&temp_wav);
+                    remove_worker_wav_variants(work_ref, &prefix);
                     let done = done_cnt.fetch_add(1, Ordering::Relaxed) + 1;
                     let p = pass_cnt.load(Ordering::Relaxed);
                     let f = fail_cnt.load(Ordering::Relaxed);
@@ -2579,6 +3103,42 @@ mod tests {
         assert_eq!(md5_short_hex_6(b""), "D41D8C");
         // "abc" -> 900150983cd24fb0d6963f7d28e17f72 -> "900150"
         assert_eq!(md5_short_hex_6(b"abc"), "900150");
+    }
+
+    #[test]
+    fn test_detect_batch_mod_format_pc_and_amiga_modland() {
+        assert_eq!(
+            detect_batch_mod_format(Path::new("/corpus/SPACE_DEBRIS.MOD")),
+            Some(("mod", ".MOD"))
+        );
+        assert_eq!(
+            detect_batch_mod_format(Path::new("/corpus/track.nst")),
+            Some(("mod", ".MOD"))
+        );
+        assert_eq!(
+            detect_batch_mod_format(Path::new("/corpus/song.okta")),
+            Some(("okt", ".OKT"))
+        );
+        assert_eq!(
+            detect_batch_mod_format(Path::new("/corpus/mod.space debris")),
+            Some(("mod", ".MOD"))
+        );
+        assert_eq!(
+            detect_batch_mod_format(Path::new("/corpus/mod.stardust.memories")),
+            Some(("mod", ".MOD"))
+        );
+        assert_eq!(
+            detect_batch_mod_format(Path::new("/corpus/okt.cyberpunk")),
+            Some(("okt", ".OKT"))
+        );
+        assert_eq!(
+            detect_batch_mod_format(Path::new("/results/pass/mod.space debris.0.TXT")),
+            None
+        );
+        assert_eq!(
+            detect_batch_mod_format(Path::new("/results/wav/mod.space debris.0.wav")),
+            None
+        );
     }
 }
 

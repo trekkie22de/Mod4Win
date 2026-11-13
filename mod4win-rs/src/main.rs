@@ -149,6 +149,15 @@ VOLLAUTOMATISCHER MULTI-CORE BATCH-DIFF (INKL. AUTO-PATCHER & RAM-DIFF):
     --max-stall-sec <N>          Watchdog: Max. Sekunden ohne WAV-Wachstum (Standard: 25)
     --max-wav-mb <N>             Watchdog: Max. WAV-Größe in MB (Standard: 350)
 
+  ERFORDERLICHE 16-BIT INI-EINSTELLUNGEN (werden unter Linux/Wine pro Worker automatisch
+  gesetzt; bei manuellen 16-Bit-Einzelaufnahmen unter Windows/otvdm in MOD4WIN.INI prüfen):
+    MOD4WIN.INI -> [State]:          PlayOnLoad=1, AskHD=0, HDPath=R:\\, AskExtensions=0,
+                                     ForceExtensions=0, StateSaver=0, LOG_ERRORS=0
+                   [Playing Device]: DeviceID=-2 (Direct To Disk Recording)
+                   [Sampling]:       SampleRate=44100, BitsPerSample=16, Channels=2,
+                                     EnablePanning=1, Clipping=1, Surround=0
+    WIN.INI     -> [Player32]:       UseHardware=0, PALTiming=0, PeakSearch=1, ExactPeakSearch=1
+
 EINZELMODUL-DIAGNOSE (--diff-suite):
   1) Direktvergleich gegen FFmpeg (libopenmpt) im RAM:
      {bin} <modul_datei> --diff-suite ffmpeg [--ido <0..6>]
