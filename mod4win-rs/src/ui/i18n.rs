@@ -351,8 +351,8 @@ mod tests {
             );
         }
 
-        // Alle 43 Hotkeys müssen in beiden Sprachen vorhanden sein
-        for id in 1..=43 {
+        // Alle 44 Hotkeys müssen in beiden Sprachen vorhanden sein
+        for id in 1..=44 {
             let lbl_de = de.hotkey_label(id, "");
             let lbl_en = en.hotkey_label(id, "");
             assert!(!lbl_de.is_empty(), "hk_{:02} fehlt in de.ini", id);

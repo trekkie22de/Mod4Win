@@ -591,7 +591,7 @@ pub fn export_topics_to_html_for_lang(
     let (doc_title, lbl_contents, lbl_dialogs, lbl_keys, lbl_effects, lbl_faq, lbl_history, menu_bar) =
         match lang_code {
             "de" => (
-                "MOD4WIN 3.11 - Hilfesystem (Deutsch)",
+                "MOD4WIN 3.12 - Hilfesystem (Deutsch)",
                 "Inhalt",
                 "Dialoge",
                 "Tasten",
@@ -601,7 +601,7 @@ pub fn export_topics_to_html_for_lang(
                 "&nbsp;<U>D</U>atei &nbsp;&nbsp;<U>B</U>earbeiten &nbsp;&nbsp;<U>L</U>esezeichen &nbsp;&nbsp;<U>H</U>ilfe",
             ),
             "fr" => (
-                "MOD4WIN 3.11 - Aide (Francais)",
+                "MOD4WIN 3.12 - Aide (Francais)",
                 "Contenu",
                 "Dialogues",
                 "Touches",
@@ -611,7 +611,7 @@ pub fn export_topics_to_html_for_lang(
                 "&nbsp;<U>F</U>ichier &nbsp;&nbsp;<U>E</U>dition &nbsp;&nbsp;<U>S</U>ignets &nbsp;&nbsp;<U>A</U>ide",
             ),
             "es" => (
-                "MOD4WIN 3.11 - Ayuda (Espanol)",
+                "MOD4WIN 3.12 - Ayuda (Espanol)",
                 "Indice",
                 "Dialogos",
                 "Teclas",
@@ -621,7 +621,7 @@ pub fn export_topics_to_html_for_lang(
                 "&nbsp;<U>A</U>rchivo &nbsp;&nbsp;<U>E</U>dicion &nbsp;&nbsp;<U>M</U>arcador &nbsp;&nbsp;A<U>y</U>uda",
             ),
             "grk" => (
-                "MOD4WIN 3.11 - Help System (Greek)",
+                "MOD4WIN 3.12 - Help System (Greek)",
                 "Contents",
                 "Dialogs",
                 "Hotkeys",
@@ -631,7 +631,7 @@ pub fn export_topics_to_html_for_lang(
                 "&nbsp;<U>F</U>ile &nbsp;&nbsp;<U>E</U>dit &nbsp;&nbsp;<U>B</U>ookmark &nbsp;&nbsp;<U>H</U>elp",
             ),
             _ => (
-                "MOD4WIN 3.11 - Help System",
+                "MOD4WIN 3.12 - Help System",
                 "Contents",
                 "Dialogs",
                 "Hotkeys",

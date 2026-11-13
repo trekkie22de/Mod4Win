@@ -67,6 +67,7 @@ pub fn default_hotkey_bindings() -> Vec<HotkeyBinding> {
         (41, "41. Next Instrument (Detail dialog)", "NUMPAD PLUS", 1),
         (42, "42. Prev Instrument (Detail dialog)", "NUMPAD MINUS", 1),
         (43, "43. About this program", "A", 0),
+        (44, "44. Toggle Skin (Classic / Modern)", "G", 0),
     ];
     defs.iter()
         .map(|&(action_id, label, key_name, state)| HotkeyBinding {

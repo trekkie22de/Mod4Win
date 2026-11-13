@@ -226,7 +226,7 @@ impl Mod4WinApp {
             dh,
             22,
             4,
-            loc.tr_or("win", "setup_title", "MOD4WIN 3.11 Setup"),
+            loc.tr_or("win", "setup_title", "MOD4WIN 3.12 Setup"),
             [48, 56, 68, 255],
         );
         self.assets

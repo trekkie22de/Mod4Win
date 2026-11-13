@@ -34,7 +34,7 @@ pub const MODERN_SETUP_W: u32 = 530;
 pub const MODERN_SETUP_H: u32 = 505;
 pub const MODERN_ABOUT_W: u32 = 360;
 pub const MODERN_ABOUT_H: u32 = 185;
-pub const MODERN_SNAP_THRESHOLD: i32 = 12;
+pub const MODERN_SNAP_THRESHOLD: i32 = 8;
 
 // Farbkonstanten aus `mockup.html`
 const COL_CHASSIS_MID: [u8; 4] = [0x26, 0x30, 0x3d, 255];
@@ -825,8 +825,22 @@ impl Mod4WinApp {
     ///    `pixels.resize_buffer(...)` und `pixels.resize_surface(...)` auf die neue Basis-Auflösung aus.
     /// 3. Rendert jedes offene Fenster sofort im neuen Skin (`render_window` + `pixels.render()` + `window.request_redraw()`).
     pub(crate) fn apply_skin_to_all_open_windows(&mut self) {
-        let st_snapshot = self.shared_state.lock().unwrap().clone();
-        let active_skin = st_snapshot.skin_mode;
+        let active_skin = self.shared_state.lock().unwrap().skin_mode;
+        let prev_skin = self.last_applied_skin.replace(active_skin);
+
+        // Beim Wechsel von Modern -> Classic wird das dauerhaft offene Modern-Playlist-Dock geschlossen,
+        // damit es im Classic Skin nicht plötzlich als großes modales Quick-Selection-Fenster jede Eingabe blockiert!
+        if prev_skin == Some(SkinMode::Modern) && active_skin != SkinMode::Modern {
+            self.playlist_reorder_drag = None;
+            self.playlist_scroll_dragging = false;
+            self.playlist_selected.clear();
+            if self.kind_to_id.contains_key(&WindowKind::QuickSelect) {
+                self.close_window(WindowKind::QuickSelect);
+            }
+            if self.kind_to_id.contains_key(&WindowKind::OpenDialog) {
+                self.close_window(WindowKind::OpenDialog);
+            }
+        }
 
         // Falls beim Wechsel auf Modern sowohl QuickSelect als auch OpenDialog (bzw. ModuleInfo + InstrumentInfo)
         // gleichzeitig offen waren, deduplizieren wir die im Modern-Skin kombinierten Fenster:
@@ -842,6 +856,8 @@ impl Mod4WinApp {
                 self.close_window(WindowKind::OpenDialog);
             }
         }
+
+        let st_snapshot = self.shared_state.lock().unwrap().clone();
 
         let scale = if cfg!(any(feature = "retro-win32", target_arch = "x86")) {
             1.0
@@ -908,7 +924,7 @@ impl Mod4WinApp {
             return (pos_x, pos_y);
         }
 
-        let Some((moved_kind, old_pos, old_raw_pos, dw, dh, monitor_rect)) =
+        let Some((moved_kind, old_pos, _old_raw_pos, dw, dh, monitor_rect)) =
             self.windows.get(&moved_id).map(|s| {
                 let sz = s.window.outer_size();
                 let mon = s.window.current_monitor().map(|m| {
@@ -987,54 +1003,35 @@ impl Mod4WinApp {
                 }
             }
 
-        let (raw_dx, raw_dy) = old_raw_pos
-            .map(|(rx, ry)| (pos_x - rx, pos_y - ry))
-            .unwrap_or((0, 0));
-        let (old_sx, old_sy) = old_pos.unwrap_or((pos_x, pos_y));
-
-        // Richtungsabhängiges Snapping mit Break-Away-Hysterese:
-        // - Zieht man von einer bereits gedockten Kante aktiv weg, wird NIEMALS zurückgesnappt
-        //   (löst das Festkleben im „unteren Eck-Dreieck“ zuverlässig auf).
-        // - Nur bei Annäherung an eine Kante (`SNAP_IN = 8px`) oder beim rein orthogonalen Entlanggleiten (`HOLD = 4px`)
-        //   an einer überlappenden Kante rastet die Position ein.
-        const SNAP_IN: i32 = 8;
-        const SNAP_HOLD: i32 = 4;
-        let can_snap_axis = |cur: i32, target: i32, old_snapped: i32, raw_delta: i32| -> Option<i32> {
-            let dist = (cur - target).abs();
-            if dist == 0 {
-                return Some(0);
-            }
-            let was_docked_here = (old_snapped - target).abs() <= 1;
-            if was_docked_here {
-                let pulling_away = (cur > target && raw_delta > 0) || (cur < target && raw_delta < 0);
-                if !pulling_away && dist <= SNAP_HOLD {
-                    Some(dist)
-                } else {
-                    None
-                }
-            } else {
-                let approaching = (cur > target && raw_delta < 0) || (cur < target && raw_delta > 0);
-                if approaching && dist <= SNAP_IN {
-                    Some(dist)
-                } else {
-                    None
-                }
-            }
+        let is_modern = {
+            let st = self.shared_state.lock().unwrap();
+            self.is_modern_skin(&st)
         };
 
+        // Im Classic Skin gibt es kein magnetisches Einrasten (wie im Original `MOD4WIN 2.40`):
+        if !is_modern {
+            if let Some(moved_surf) = self.windows.get_mut(&moved_id) {
+                moved_surf.last_outer_pos = Some((pos_x, pos_y));
+                moved_surf.last_raw_outer_pos = Some((pos_x, pos_y));
+            }
+            return (pos_x, pos_y);
+        }
+
+        // Modern Skin: Dezenter magnetischer „Schnapper“ (`MODERN_SNAP_THRESHOLD = 8px`).
+        // Wichtig für Win32 `SC_MOVE` (`window.drag_window()`): Statische Distanzprüfung hält das Fenster
+        // innerhalb der 8px-Zone stabil eingerastet, während echte Kantenüberlappung (`+6px` Mindestüberdeckung,
+        // keine Eck-Überhänge) und unabhängige X/Y-Auswertung jedes Festkleben im „Eck-Dreieck“ verhindern!
         let mut best_x: Option<(i32, i32)> = None; // (dist, target_x)
         let mut best_y: Option<(i32, i32)> = None; // (dist, target_y)
         let mut consider_x = |target_x: i32| {
-            if let Some(d) = can_snap_axis(pos_x, target_x, old_sx, raw_dx)
-                && best_x.map_or(true, |(bd, _)| d < bd)
-            {
+            let d = (pos_x - target_x).abs();
+            if d <= MODERN_SNAP_THRESHOLD && best_x.map_or(true, |(bd, _)| d < bd) {
                 best_x = Some((d, target_x));
             }
         };
         let mut consider_y = |target_y: i32| {
-            if let Some(d) = can_snap_axis(pos_y, target_y, old_sy, raw_dy)
-                && best_y.map_or(true, |(bd, _)| d < bd)
-            {
+            let d = (pos_y - target_y).abs();
+            if d <= MODERN_SNAP_THRESHOLD && best_y.map_or(true, |(bd, _)| d < bd) {
                 best_y = Some((d, target_y));
             }
         };
@@ -1050,7 +1047,8 @@ impl Mod4WinApp {
             consider_y(0);
         }
 
-        // 2. Snapping an alle anderen geöffneten Player-Fenster (nur bei echter Kanten-Überlappung!)
+        // 2. Snapping an alle anderen geöffneten Player-Fenster (nur bei echter Kanten-Überlappung >= 6px!)
+        const MIN_EDGE_OVERLAP: i32 = 6;
         for (&other_id, other_surf) in &self.windows {
             if other_id == moved_id
                 || docked_followers.iter().any(|(fid, _, _, _)| *fid == other_id)
@@ -1064,8 +1062,10 @@ impl Mod4WinApp {
                 let ow = osize.width as i32;
                 let oh = osize.height as i32;
 
-                let vert_overlap = pos_y < oy + oh && pos_y + dh > oy;
-                let horiz_overlap = pos_x < ox + ow && pos_x + dw > ox;
+                let vert_overlap =
+                    pos_y + MIN_EDGE_OVERLAP < oy + oh && pos_y + dh - MIN_EDGE_OVERLAP > oy;
+                let horiz_overlap =
+                    pos_x + MIN_EDGE_OVERLAP < ox + ow && pos_x + dw - MIN_EDGE_OVERLAP > ox;
 
                 if vert_overlap {
                     consider_x(ox + ow);
@@ -1087,8 +1087,8 @@ impl Mod4WinApp {
 
         self.suppress_move_snap = true;
         if (nx != pos_x || ny != pos_y)
-            && (nx - pos_x).abs() <= SNAP_IN
-            && (ny - pos_y).abs() <= SNAP_IN
+            && (nx - pos_x).abs() <= MODERN_SNAP_THRESHOLD
+            && (ny - pos_y).abs() <= MODERN_SNAP_THRESHOLD
             && let Some(moved_surf) = self.windows.get(&moved_id) {
                 moved_surf
                     .window
@@ -1155,7 +1155,7 @@ impl Mod4WinApp {
             dw,
             dh,
             true,
-            "MOD4WIN 3.11",
+            "MOD4WIN 3.12",
             true,
             false,
         );
@@ -4233,7 +4233,7 @@ impl Mod4WinApp {
         dh: u32,
         _state: &UiSharedState,
     ) {
-        draw_modern_window_shell(frame, dw, dh, false, "[5] About MOD4WIN 3.11", false, false);
+        draw_modern_window_shell(frame, dw, dh, false, "[5] About MOD4WIN 3.12", false, false);
 
         // Obere Box mit 2 animierten Lautsprecher-Konussen links/rechts + MOD 4 WIN Pill
         fill_rounded_rect_grad(
@@ -4271,7 +4271,7 @@ impl Mod4WinApp {
             [0x06, 0x1c, 0x24, 255],
         );
         stroke_rounded_rect(frame, dw, dh, 116, 52, 128, 22, 2, [0x00, 0xa2, 0xb8, 255]);
-        draw_modern_ui_text(frame, dw, dh, 146, 60, "MOD4WIN 3.11", COL_CYAN_BRAND);
+        draw_modern_ui_text(frame, dw, dh, 146, 60, "MOD4WIN 3.12", COL_CYAN_BRAND);
         draw_modern_ui_text(
             frame,
             dw,

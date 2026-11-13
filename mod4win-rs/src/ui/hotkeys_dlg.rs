@@ -641,14 +641,36 @@ impl Mod4WinApp {
                 }
                 self.open_window(event_loop, WindowKind::About);
             }
+            44 => {
+                self.cycle_skin_live();
+            }
             _ => return false,
         }
         true
     }
 
+    #[inline]
+    pub(crate) fn mark_escape_consumed(&mut self) {
+        self.suppress_escape_stop = true;
+        self.last_escape_close_at = Some(std::time::Instant::now());
+    }
+
+    #[inline]
+    pub(crate) fn is_escape_stop_suppressed(&self) -> bool {
+        self.last_escape_close_at.is_some_and(|t| {
+            let ms = t.elapsed().as_millis();
+            (self.suppress_escape_stop && ms < 1500) || ms < 300
+        })
+    }
+
     pub(crate) fn handle_key_press(&mut self, event_loop: &ActiveEventLoop, event: &KeyEvent) {
+        let is_esc_key = matches!(&event.logical_key, Key::Named(NamedKey::Escape));
+
         // 0. Wenn gerade eine F7/F8 Sicherheitsabfrage offen ist:
         if let Some(action) = self.confirm_action {
+            if is_esc_key {
+                self.mark_escape_consumed();
+            }
             if event.repeat {
                 return;
             }
@@ -717,6 +739,7 @@ impl Mod4WinApp {
         if self.kind_to_id.contains_key(&WindowKind::HelpViewer) {
             match &event.logical_key {
                 Key::Named(NamedKey::Escape) => {
+                    self.mark_escape_consumed();
                     if self.help_dlg.popup_topic_id.is_some() {
                         self.help_dlg.popup_topic_id = None;
                     } else {
@@ -758,6 +781,9 @@ impl Mod4WinApp {
 
         // 0_fsel. Wenn der Datei-/Verzeichnis-Auswahldialog (`FileSelectDialog` / `tbrowse` / `tDirbrowse`) offen ist:
         if self.kind_to_id.contains_key(&WindowKind::FileSelectDialog) {
+            if is_esc_key {
+                self.mark_escape_consumed();
+            }
             let is_fb = self.fsel_dlg.is_file_browse();
             match &event.logical_key {
                 Key::Named(NamedKey::Escape) => {
@@ -849,6 +875,9 @@ impl Mod4WinApp {
 
         // 0a. Wenn der Hotkey-Editor (`KEYSEL.PAS`) geöffnet ist:
         if self.kind_to_id.contains_key(&WindowKind::HotkeyEditor) {
+            if is_esc_key {
+                self.mark_escape_consumed();
+            }
             if self.hotkey_dlg.capturing {
                 if matches!(&event.logical_key, Key::Named(NamedKey::Escape)) {
                     self.hotkey_dlg.capturing = false;
@@ -885,6 +914,15 @@ impl Mod4WinApp {
                 match &event.logical_key {
                     Key::Named(NamedKey::Enter) => {
                         self.hotkey_dlg.capturing = true;
+                        return;
+                    }
+                    Key::Named(NamedKey::Delete) | Key::Named(NamedKey::Backspace) => {
+                        if let Some(binding) =
+                            self.hotkey_dlg.working_keys.get_mut(self.hotkey_dlg.cursor)
+                        {
+                            binding.key_name = "NONE".to_string();
+                            binding.state = 0;
+                        }
                         return;
                     }
                     Key::Named(NamedKey::Escape) => {
@@ -928,6 +966,9 @@ impl Mod4WinApp {
 
         // 0b. Wenn das Archiv-Setup (`tarcopt` oder Parameter-Subdialog `tmorearc`) offen ist:
         if self.kind_to_id.contains_key(&WindowKind::ArchiveSetup) {
+            if is_esc_key {
+                self.mark_escape_consumed();
+            }
             if self.archive_dlg.more_arc_type.is_some() {
                 match &event.logical_key {
                     Key::Named(NamedKey::Enter) => {
@@ -1073,6 +1114,9 @@ impl Mod4WinApp {
 
         // 0c. Wenn der Mini-File-Manager (`COPYWND.PAS`) offen ist (strikt modal):
         if self.kind_to_id.contains_key(&WindowKind::FileManager) {
+            if is_esc_key {
+                self.mark_escape_consumed();
+            }
             if self.file_man_dlg.editing_target {
                 match &event.logical_key {
                     Key::Named(NamedKey::Enter) => {
@@ -1172,6 +1216,9 @@ impl Mod4WinApp {
 
         // 0d. Wenn das `TAskWin`-Fenster (Direct-to-Disk .WAV Dateiname) offen ist:
         if self.kind_to_id.contains_key(&WindowKind::WavAskDialog) {
+            if is_esc_key {
+                self.mark_escape_consumed();
+            }
             match &event.logical_key {
                 Key::Named(NamedKey::Enter) => {
                     self.commit_wav_ask_ok();
@@ -1243,6 +1290,9 @@ impl Mod4WinApp {
         if self.kind_to_id.contains_key(&WindowKind::SetupDialog)
             && self.setup_edit_focus != SetupEditFocus::None
         {
+            if is_esc_key {
+                self.mark_escape_consumed();
+            }
             match &event.logical_key {
                 Key::Named(NamedKey::Enter) | Key::Named(NamedKey::Escape) => {
                     self.setup_edit_focus = SetupEditFocus::None;
@@ -1310,6 +1360,9 @@ impl Mod4WinApp {
 
         // 0e2. Wenn der Setup-Dialog (`SetupDialog`, ohne fokussiertes Edit-Feld) offen ist (strikt modal):
         if self.kind_to_id.contains_key(&WindowKind::SetupDialog) {
+            if is_esc_key {
+                self.mark_escape_consumed();
+            }
             match &event.logical_key {
                 Key::Named(NamedKey::Escape) => {
                     self.cancel_setup_dialog();
@@ -1348,6 +1401,9 @@ impl Mod4WinApp {
 
         // 0e3. Wenn das About-Fenster (`About`) offen ist (modal: Escape/Enter/Space schließt):
         if self.kind_to_id.contains_key(&WindowKind::About) {
+            if is_esc_key {
+                self.mark_escape_consumed();
+            }
             if !event.repeat
                 && matches!(
                     &event.logical_key,
@@ -1362,11 +1418,11 @@ impl Mod4WinApp {
         }
 
         // 0e4. Wenn `EffectsHelp` aktiv ist: Escape schließt
-        if self.kind_to_id.contains_key(&WindowKind::EffectsHelp)
-            && !event.repeat
-            && matches!(&event.logical_key, Key::Named(NamedKey::Escape))
-        {
-            self.close_window(WindowKind::EffectsHelp);
+        if self.kind_to_id.contains_key(&WindowKind::EffectsHelp) && is_esc_key {
+            self.mark_escape_consumed();
+            if !event.repeat {
+                self.close_window(WindowKind::EffectsHelp);
+            }
             return;
         }
 
@@ -1376,6 +1432,9 @@ impl Mod4WinApp {
                 || self.open_dlg.editing_filter
                 || self.open_dlg.editing_right_filter)
         {
+            if is_esc_key {
+                self.mark_escape_consumed();
+            }
             match &event.logical_key {
                 Key::Named(NamedKey::Enter) => {
                     if self.open_dlg.saving_mol {
@@ -1464,6 +1523,9 @@ impl Mod4WinApp {
 
         // 0_open. Classic Open-Dialog (`newopen.pas`): strikt modal mit vollständiger Original-Tastatursteuerung!
         if self.kind_to_id.contains_key(&WindowKind::OpenDialog) && !is_modern {
+            if is_esc_key {
+                self.mark_escape_consumed();
+            }
             if !classic_input
                 && ctrl
                 && !shift
@@ -2038,6 +2100,7 @@ impl Mod4WinApp {
                     return;
                 }
                 Key::Named(NamedKey::Escape) => {
+                    self.mark_escape_consumed();
                     self.quick_select_all_selected = false;
                     self.playlist_selected.clear();
                     self.playlist_reorder_drag = None;
@@ -2231,20 +2294,28 @@ impl Mod4WinApp {
 
         // Offene Popups/Menüs (`SysMenu`, `FileMenu`, `About`) zuerst per Escape schließen,
         // bevor die Hotkey-Tabelle `ESCAPE -> Stop playback` auslöst.
-        if !event.repeat && matches!(&event.logical_key, Key::Named(NamedKey::Escape)) {
+        if is_esc_key {
             if self.sys_menu_open {
+                self.mark_escape_consumed();
                 self.sys_menu_open = false;
                 self.sys_menu_hover = None;
                 return;
             }
             if self.file_menu_open {
+                self.mark_escape_consumed();
                 self.file_menu_open = false;
                 self.file_menu_hover = None;
                 self.close_window(WindowKind::FileMenu);
                 return;
             }
             if self.kind_to_id.contains_key(&WindowKind::About) {
+                self.mark_escape_consumed();
                 self.close_window(WindowKind::About);
+                return;
+            }
+            // Falls `ESC` unmittelbar zuvor bereits einen Dialog geschlossen hat (z. B. Classic Playlist / QuickSelect),
+            // ignoriert das Hauptfenster `ESC`, bis die Taste physisch losgelassen und neu gedrückt wurde!
+            if self.is_escape_stop_suppressed() {
                 return;
             }
         }
@@ -2360,14 +2431,14 @@ impl Mod4WinApp {
             }
         }
 
-        // Zusätzliche Tastenkürzel außerhalb der 43er `KEYSEL.PAS`-Tabelle (`G` = Skin wechseln, `-`/`+` = PreAmp):
+        // Zusätzliche Fallback-Tastenkürzel, falls `ini_config.hotkeys` leer ist:
         if let Key::Character(ch) = &event.logical_key
             && !ctrl
             && !alt
         {
             let c = ch.chars().next().unwrap_or('\0').to_ascii_uppercase();
             match c {
-                'G' if !shift => {
+                'G' if !shift && !has_hotkey_table => {
                     if !event.repeat {
                         self.cycle_skin_live();
                     }
@@ -2502,6 +2573,9 @@ impl Mod4WinApp {
                     }
                     'T' => {
                         let _ = self.execute_hotkey_event(event_loop, 15);
+                    }
+                    'G' => {
+                        let _ = self.execute_hotkey_event(event_loop, 44);
                     }
                     _ => {}
                 }

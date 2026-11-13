@@ -57,7 +57,7 @@ impl Mod4WinApp {
             dh,
             22,
             4,
-            self.locale.tr_or("win", "info_title", "MOD4WIN 3.11 Module Info"),
+            self.locale.tr_or("win", "info_title", "MOD4WIN 3.12 Module Info"),
             [48, 56, 68, 255],
         );
         self.assets

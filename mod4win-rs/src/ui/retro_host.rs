@@ -683,6 +683,7 @@ pub mod event {
         Touch(Touch),
         KeyboardInput {
             event: KeyEvent,
+            is_synthetic: bool,
         },
         DroppedFile(PathBuf),
         RedrawRequested,
@@ -1996,7 +1997,13 @@ unsafe extern "system" fn retro_wnd_proc(
             );
             let kev =
                 translate_vk_to_key_event(w_param as UINT, l_param, event::ElementState::Pressed);
-            queue_window_event(win_id, event::WindowEvent::KeyboardInput { event: kev });
+            queue_window_event(
+                win_id,
+                event::WindowEvent::KeyboardInput {
+                    event: kev,
+                    is_synthetic: false,
+                },
+            );
             if msg == WM_SYSKEYDOWN {
                 return unsafe { DefWindowProcA(hwnd, msg, w_param, l_param) };
             }
@@ -2009,7 +2016,13 @@ unsafe extern "system" fn retro_wnd_proc(
             );
             let kev =
                 translate_vk_to_key_event(w_param as UINT, l_param, event::ElementState::Released);
-            queue_window_event(win_id, event::WindowEvent::KeyboardInput { event: kev });
+            queue_window_event(
+                win_id,
+                event::WindowEvent::KeyboardInput {
+                    event: kev,
+                    is_synthetic: false,
+                },
+            );
             if msg == WM_SYSKEYUP {
                 return unsafe { DefWindowProcA(hwnd, msg, w_param, l_param) };
             }

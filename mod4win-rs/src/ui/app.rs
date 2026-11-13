@@ -2053,6 +2053,9 @@ pub struct Mod4WinApp {
     pub(crate) last_drop_time: Option<Instant>,
     pub(crate) touch_gesture: TouchGestureState,
     pub(crate) locale: LocaleCatalog,
+    pub(crate) last_applied_skin: Option<SkinMode>,
+    pub(crate) suppress_escape_stop: bool,
+    pub(crate) last_escape_close_at: Option<Instant>,
     pub(crate) suppress_move_snap: bool,
     pub(crate) bringing_to_front: bool,
     pub(crate) last_bring_to_front: Instant,
@@ -2154,6 +2157,9 @@ impl Mod4WinApp {
             last_drop_time: None,
             touch_gesture: TouchGestureState::default(),
             locale: LocaleCatalog::load_for_language_id(initial_ini.language),
+            last_applied_skin: Some(st_clone.skin_mode),
+            suppress_escape_stop: false,
+            last_escape_close_at: None,
             suppress_move_snap: false,
             bringing_to_front: false,
             last_bring_to_front: now,
@@ -2525,7 +2531,7 @@ impl Mod4WinApp {
                             self.locale.tr_or("win", "mini_title", "MOD4WIN Mini-Status").to_string(),
                         );
                     } else {
-                        return (w, h, "MOD4WIN 3.11".to_string());
+                        return (w, h, "MOD4WIN 3.12".to_string());
                     }
                 }
                 WindowKind::ModuleInfo | WindowKind::InstrumentInfo => {
@@ -2542,7 +2548,7 @@ impl Mod4WinApp {
                     return (w, h, "[13] MOD4WIN Setup".to_string());
                 }
                 WindowKind::About => {
-                    return (w, h, "[5] About MOD4WIN 3.11".to_string());
+                    return (w, h, "[5] About MOD4WIN 3.12".to_string());
                 }
                 _ => {}
             }
@@ -2559,14 +2565,14 @@ impl Mod4WinApp {
                     (
                         w,
                         h,
-                        self.locale.tr_or("win", "main_title", "MOD4WIN 3.11").to_string(),
+                        self.locale.tr_or("win", "main_title", "MOD4WIN 3.12").to_string(),
                     )
                 }
             }
             WindowKind::ModuleInfo => (
                 w,
                 h,
-                self.locale.tr_or("win", "info_title", "MOD4WIN 3.11 Module Info").to_string(),
+                self.locale.tr_or("win", "info_title", "MOD4WIN 3.12 Module Info").to_string(),
             ),
             WindowKind::InstrumentInfo => (
                 w,
@@ -2596,7 +2602,7 @@ impl Mod4WinApp {
             WindowKind::SetupDialog => (
                 w,
                 h,
-                self.locale.tr_or("win", "setup_title", "MOD4WIN 3.11 Setup").to_string(),
+                self.locale.tr_or("win", "setup_title", "MOD4WIN 3.12 Setup").to_string(),
             ),
             WindowKind::WavAskDialog => (
                 w,
@@ -2630,7 +2636,7 @@ impl Mod4WinApp {
             WindowKind::About => (
                 w,
                 h,
-                self.locale.tr_or("win", "about_title", "MOD4WIN 3.11 About").to_string(),
+                self.locale.tr_or("win", "about_title", "MOD4WIN 3.12 About").to_string(),
             ),
             WindowKind::HelpViewer => (
                 w,
@@ -3103,12 +3109,15 @@ impl Mod4WinApp {
             } else {
                 state.ini_config.hotkeys.clone()
             };
+            let mut merged = default_hotkey_bindings();
+            for existing in &hk {
+                if let Some(slot) = merged.iter_mut().find(|d| d.action_id == existing.action_id) {
+                    slot.key_name = existing.key_name.clone();
+                    slot.state = existing.state;
+                }
+            }
             self.hotkey_dlg = HotkeyEditorState {
-                working_keys: if hk.len() == 43 {
-                    hk
-                } else {
-                    default_hotkey_bindings()
-                },
+                working_keys: merged,
                 scroll: 0,
                 cursor: 0,
                 capturing: false,
@@ -4109,6 +4118,21 @@ impl ApplicationHandler for Mod4WinApp {
                     } else if kind == WindowKind::OpenDialog {
                         kind = WindowKind::QuickSelect;
                     }
+                    // Nur nicht-modale Begleitfenster (`ModuleInfo`, `Effects`, `QuickSelect`) beim Start wiederherstellen
+                    if !matches!(
+                        kind,
+                        WindowKind::ModuleInfo | WindowKind::Effects | WindowKind::QuickSelect
+                    ) {
+                        continue;
+                    }
+                } else {
+                    // Im Classic Skin sind `QuickSelect` und `OpenDialog` modal und dürfen beim Start nicht ungefragt alles blockieren!
+                    if !matches!(
+                        kind,
+                        WindowKind::ModuleInfo | WindowKind::InstrumentInfo | WindowKind::Effects
+                    ) {
+                        continue;
+                    }
                 }
                 if self.kind_to_id.contains_key(&kind) {
                     continue;
@@ -4234,6 +4258,11 @@ impl ApplicationHandler for Mod4WinApp {
                     self.active_window_kind = kind;
                 }
                 self.bring_all_windows_to_front(id);
+            }
+            WindowEvent::Focused(false) => {
+                if kind == WindowKind::Main {
+                    self.suppress_escape_stop = false;
+                }
             }
             WindowEvent::Moved(pos) => {
                 // Speichere die neue Fensterposition (falls nicht minimiert auf -32000,-32000)
@@ -4789,8 +4818,19 @@ impl ApplicationHandler for Mod4WinApp {
                     }
                 }
             }
-            WindowEvent::KeyboardInput { event, .. } => {
-                if event.state == ElementState::Pressed {
+            WindowEvent::KeyboardInput {
+                event,
+                is_synthetic,
+                ..
+            } => {
+                if event.state == ElementState::Released {
+                    if matches!(
+                        &event.logical_key,
+                        super::winit::keyboard::Key::Named(super::winit::keyboard::NamedKey::Escape)
+                    ) {
+                        self.suppress_escape_stop = false;
+                    }
+                } else if event.state == ElementState::Pressed && !is_synthetic {
                     self.handle_key_press(event_loop, &event);
                 }
             }
@@ -4814,6 +4854,7 @@ impl ApplicationHandler for Mod4WinApp {
                 }
                 self.render_scratch_buf = buf;
             }
+            #[allow(unreachable_patterns)]
             _ => {}
         }
     }
@@ -5306,6 +5347,22 @@ mod tests {
         assert!(h_500 > h_small);
         assert!(total_cols_500 > cols_500);
         assert!(hscroll_500, "500 tracks exceeding screen columns must enable horizontal scrollbar");
+
+        // Action 44 (`Toggle Skin`) ist standardmäßig auf `G` gelegt und frei umbelegbar
+        let defs = default_hotkey_bindings();
+        assert_eq!(defs.len(), 44);
+        let hk44 = defs
+            .iter()
+            .find(|h| h.action_id == 44)
+            .expect("Action 44 must exist");
+        assert_eq!(hk44.key_name, "G");
+        assert_eq!(hk44.state, 0);
+
+        // Escape-Suppression nach Dialog-Close verhindert unbeabsichtigten Playback-Stopp auf `Main`
+        assert!(!app.is_escape_stop_suppressed());
+        let mut app_mut = app;
+        app_mut.mark_escape_consumed();
+        assert!(app_mut.is_escape_stop_suppressed());
     }
 }
 
