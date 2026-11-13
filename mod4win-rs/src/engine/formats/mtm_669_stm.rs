@@ -9,8 +9,9 @@ use crate::engine::types::{
 };
 
 use super::{
-    bitset_contains, bitset_include, load_instrument_into_sample_mem,
+    bitset_contains, bitset_include, load_instrument_into_sample_mem_with_arena,
     normalize_note_for_track_write, read_le_i32, read_le_u16, sconvert_and_reduce, LoadedModule,
+    PlayMemArena,
 };
 
 /// Lädt eine MultiTracker (`.MTM`)-Datei aus einem `&[u8]`-Slice.
@@ -191,6 +192,7 @@ pub fn load_mtm(data: &[u8]) -> Result<LoadedModule, u16> {
     }
 
     // Kommentar überspringen und Samples einlesen (loaders.pas Zeilen 1758–1768)
+    let mut play_mem_arena = PlayMemArena::from_file_len(data.len());
     let mut cursor = (comment_ofs + comment_len).min(data.len());
     for i in 0..num_samples {
         let inst = &mut state.mi.instruments[i];
@@ -208,7 +210,7 @@ pub fn load_mtm(data: &[u8]) -> Result<LoadedModule, u16> {
             let bits = inst.bits;
             let ins_type = 2 * ((bits & 0x10) >> 4) + 1;
 
-            load_instrument_into_sample_mem(
+            load_instrument_into_sample_mem_with_arena(
                 &mut module.sample_mem,
                 raw_slice,
                 &mut offset,
@@ -219,6 +221,7 @@ pub fn load_mtm(data: &[u8]) -> Result<LoadedModule, u16> {
                 bits,
                 ins_type,
                 false,
+                &mut play_mem_arena,
             );
 
             inst.offset = offset;
@@ -229,6 +232,7 @@ pub fn load_mtm(data: &[u8]) -> Result<LoadedModule, u16> {
         }
     }
 
+    play_mem_arena.finalize_post_load(&mut module.sample_mem);
     state.row_played = [[0u8; 32]; MAX_PATTERNS];
     Ok(module)
 }
@@ -451,6 +455,7 @@ pub fn load_669(data: &[u8]) -> Result<LoadedModule, u16> {
     }
 
     // Sample-Daten einlesen (ins_type = 1 = 8-Bit unsigned, loaders.pas Zeilen 1829–1831)
+    let mut play_mem_arena = PlayMemArena::from_file_len(data.len());
     for i in 0..ninstruments {
         let inst = &mut state.mi.instruments[i];
         let mut iend = inst.iend;
@@ -466,7 +471,7 @@ pub fn load_669(data: &[u8]) -> Result<LoadedModule, u16> {
             let mut volume = inst.volume;
             let bits = inst.bits;
 
-            load_instrument_into_sample_mem(
+            load_instrument_into_sample_mem_with_arena(
                 &mut module.sample_mem,
                 raw_slice,
                 &mut offset,
@@ -477,6 +482,7 @@ pub fn load_669(data: &[u8]) -> Result<LoadedModule, u16> {
                 bits,
                 1,
                 false,
+                &mut play_mem_arena,
             );
 
             inst.offset = offset;
@@ -487,6 +493,7 @@ pub fn load_669(data: &[u8]) -> Result<LoadedModule, u16> {
         }
     }
 
+    play_mem_arena.finalize_post_load(&mut module.sample_mem);
     state.row_played = [[0u8; 32]; MAX_PATTERNS];
     Ok(module)
 }
@@ -680,6 +687,7 @@ pub fn load_stm(data: &[u8]) -> Result<LoadedModule, u16> {
     }
 
     // Samples einlesen (Offset = 16 * STMSampleMemOfs[i], ins_type = 0, loaders.pas Zeilen 2134–2139)
+    let mut play_mem_arena = PlayMemArena::from_file_len(data.len());
     for i in 0..31 {
         let inst = &mut state.mi.instruments[i];
         let mut iend = inst.iend;
@@ -696,7 +704,7 @@ pub fn load_stm(data: &[u8]) -> Result<LoadedModule, u16> {
                 let mut volume = inst.volume;
                 let bits = inst.bits;
 
-                load_instrument_into_sample_mem(
+                load_instrument_into_sample_mem_with_arena(
                     &mut module.sample_mem,
                     raw_slice,
                     &mut offset,
@@ -707,6 +715,7 @@ pub fn load_stm(data: &[u8]) -> Result<LoadedModule, u16> {
                     bits,
                     0,
                     false,
+                    &mut play_mem_arena,
                 );
 
                 inst.offset = offset;
@@ -723,6 +732,7 @@ pub fn load_stm(data: &[u8]) -> Result<LoadedModule, u16> {
         }
     }
 
+    play_mem_arena.finalize_post_load(&mut module.sample_mem);
     state.row_played = [[0u8; 32]; MAX_PATTERNS];
     Ok(module)
 }

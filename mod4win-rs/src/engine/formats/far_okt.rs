@@ -9,9 +9,9 @@ use crate::engine::types::{
 };
 
 use super::{
-    bitset_contains, bitset_include, load_instrument_into_sample_mem,
+    bitset_contains, bitset_include, load_instrument_into_sample_mem_with_arena,
     normalize_note_for_track_write, read_be_u16, read_be_u32, read_le_i32, read_le_u16,
-    sconvert_and_reduce, LoadedModule,
+    sconvert_and_reduce, LoadedModule, PlayMemArena,
 };
 
 /// Lädt eine Farandole-Composer (`.FAR`)-Datei aus einem `&[u8]`-Slice.
@@ -224,6 +224,7 @@ pub fn load_far(data: &[u8]) -> Result<LoadedModule, u16> {
     let sample_map = &data[cursor..cursor + 8];
     cursor += 8;
 
+    let mut play_mem_arena = PlayMemArena::from_file_len(data.len());
     state.mi.num_instruments = 0;
     for i in 0..64 {
         let is_present = (sample_map[i >> 3] & (1 << (i & 7))) != 0;
@@ -269,7 +270,7 @@ pub fn load_far(data: &[u8]) -> Result<LoadedModule, u16> {
                 let raw_slice = &data[cursor..cursor + read_len];
                 cursor += read_len;
 
-                load_instrument_into_sample_mem(
+                load_instrument_into_sample_mem_with_arena(
                     &mut module.sample_mem,
                     raw_slice,
                     &mut offset,
@@ -280,6 +281,7 @@ pub fn load_far(data: &[u8]) -> Result<LoadedModule, u16> {
                     bits,
                     ins_type,
                     false,
+                    &mut play_mem_arena,
                 );
 
                 inst.offset = offset;
@@ -295,6 +297,7 @@ pub fn load_far(data: &[u8]) -> Result<LoadedModule, u16> {
         }
     }
 
+    play_mem_arena.finalize_post_load(&mut module.sample_mem);
     state.row_played = [[0u8; 32]; MAX_PATTERNS];
     Ok(module)
 }
@@ -602,6 +605,7 @@ pub fn load_okt(data: &[u8]) -> Result<LoadedModule, u16> {
     }
 
     // 3. Sample-Bodies ("SBOD") einlesen (loaders.pas Zeilen 1918–1936)
+    let mut play_mem_arena = PlayMemArena::from_file_len(data.len());
     for i in 0..num_inst_slots {
         if state.mi.instruments[i].iend > 0 {
             if cursor + 8 > data.len() || &data[cursor..cursor + 4] != b"SBOD" {
@@ -631,7 +635,7 @@ pub fn load_okt(data: &[u8]) -> Result<LoadedModule, u16> {
             let bits = inst.bits;
             let ins_type = if (bits & 0x1F) == 7 && !one_8 { 4 } else { 0 };
 
-            load_instrument_into_sample_mem(
+            load_instrument_into_sample_mem_with_arena(
                 &mut module.sample_mem,
                 raw_slice,
                 &mut offset,
@@ -642,6 +646,7 @@ pub fn load_okt(data: &[u8]) -> Result<LoadedModule, u16> {
                 bits,
                 ins_type,
                 false,
+                &mut play_mem_arena,
             );
 
             inst.offset = offset;
@@ -652,6 +657,7 @@ pub fn load_okt(data: &[u8]) -> Result<LoadedModule, u16> {
         }
     }
 
+    play_mem_arena.finalize_post_load(&mut module.sample_mem);
     state.row_played = [[0u8; 32]; MAX_PATTERNS];
     Ok(module)
 }

@@ -10,8 +10,9 @@ use crate::engine::types::{
 };
 
 use super::{
-    load_instrument_into_sample_mem_with_top, normalize_note_for_track_write, read_le_i32,
-    read_le_u16, read_le_u32, sconvert_and_reduce, LoadedModule, MAX_FT2_INSTS, MAX_FT2_SAMPLES,
+    load_instrument_into_sample_mem_with_arena, normalize_note_for_track_write, read_le_i32,
+    read_le_u16, read_le_u32, sconvert_and_reduce, LoadedModule, PlayMemArena, MAX_FT2_INSTS,
+    MAX_FT2_SAMPLES,
 };
 
 /// Lädt eine FastTracker-II (`.XM`)-Datei aus einem `&[u8]`-Slice.
@@ -236,8 +237,7 @@ pub fn load_xm(data: &[u8]) -> Result<LoadedModule, u16> {
 
     // Instrumente und Samples einlesen (loaders.pas Zeilen 1446–1532 & 2441–2460)
     // Initiales PlayMemTop aus GetPlayMem(Longint(MI.FileSiz) * 1024) (player32.pas Zeile 551 & playdefs.pas Zeile 1394)
-    let mut play_mem_top: usize = (((data.len() / 1024) * 1024 + 8192 + 65536) + 31) & !31;
-    let mut effective_limit: usize = play_mem_top;
+    let mut play_mem_arena = PlayMemArena::from_file_len(data.len());
     let mut k_sample_idx: usize = 1;
     for inst_idx in 1..=num_instrs.min(MAX_FT2_INSTS) {
         if cursor + 4 > data.len() {
@@ -473,7 +473,7 @@ pub fn load_xm(data: &[u8]) -> Result<LoadedModule, u16> {
                 let mut loopend = ft2_smp.hdr.loopend;
                 let mut volume = ft2_smp.hdr.volume;
 
-                load_instrument_into_sample_mem_with_top(
+                load_instrument_into_sample_mem_with_arena(
                     &mut module.sample_mem,
                     raw_delta,
                     &mut samp_offset,
@@ -484,8 +484,7 @@ pub fn load_xm(data: &[u8]) -> Result<LoadedModule, u16> {
                     curr_flags,
                     ins_type,
                     bidi,
-                    &mut play_mem_top,
-                    &mut effective_limit,
+                    &mut play_mem_arena,
                 );
 
                 ft2_smp.samp_offset = samp_offset;
@@ -502,6 +501,8 @@ pub fn load_xm(data: &[u8]) -> Result<LoadedModule, u16> {
         }
         cursor = data_cursor;
     }
+
+    play_mem_arena.finalize_post_load(&mut module.sample_mem);
 
     Ok(module)
 }

@@ -226,6 +226,123 @@ fn reverse_loop_segment(src: &[u8], is_16bit: bool) -> Vec<u8> {
     }
 }
 
+/// Emuliert das exakte Reallokationsverhalten von `GetPlayMem` / `FitPlayMem` (`playdefs.pas`
+/// Zeilen 1308–1412) im `OS = WINDOWS_NT`-Pfad (`GlobalAlloc16` / `GlobalReAlloc16` + 32-Bit-Heap).
+///
+/// Hintergrund (BIT-EXACTNESS INVARIANT):
+/// Oberhalb von `1 MB` (`size > 0x100000`) setzt `krnl386` im LDT-Deskriptor das
+/// 4-KB-Granularitäts-Bit (`G=1`, `selector.c`: `ldt_make_entry`), wodurch `GlobalSize16(PlayMemSel)`
+/// (`PlayMemTop` in Pascal) auf `((size - 1) | 0xFFF) + 1` aufgerundet wird, obwohl der darunterliegende
+/// Heap-Block nur `data_size = (req + 31) & !31` Nutzer-Bytes angefordert hat.
+/// Passt ein nachfolgendes Sample noch in den 4-KB-Überhang `[data_size .. play_mem_top)`, überspringt
+/// `loaders.pas` (Zeile 417) `FitPlayMem` und schreibt direkt hinter `data_size` in die bereits
+/// committete Speicherseite. Erst wenn ein späteres `FitPlayMem` die physische Large-Block-Region
+/// sprengt (`ARENA_LARGE` = `64 KB` unter Wine `ntdll/heap.c`, `_HEAP_VIRTUAL_ALLOC_ENTRY` = `4 KB`
+/// unter Windows `ntdll`), kopiert `RtlReAllocateHeap` per `memcpy(ret, ptr, old_data_size)` nur
+/// `data_size` Bytes in den neuen, null-initialisierten Block und nullt dadurch den Überhang.
+#[derive(Clone, Copy, Debug)]
+pub struct PlayMemArena {
+    play_mem_top: usize,
+    data_size: usize,
+    region_end: usize,
+}
+
+impl PlayMemArena {
+    /// Unbegrenzter Dummy-Zustand für Formate ohne `FitPlayMem`-Grenzsimulation.
+    pub const UNBOUNDED: Self = Self {
+        play_mem_top: usize::MAX,
+        data_size: usize::MAX,
+        region_end: usize::MAX,
+    };
+
+    #[cfg(target_os = "linux")]
+    const LARGE_REGION_MASK: usize = 0xFFFF; // Wine ntdll/heap.c: REGION_ALIGN = 64 KB
+    #[cfg(not(target_os = "linux"))]
+    const LARGE_REGION_MASK: usize = 0x0FFF; // Windows ntdll VirtualAlloc Large-Block = 4 KB
+
+    const HEAP_LARGE_HEADER: usize = 0x20; // sizeof(ARENA_LARGE) / sizeof(_HEAP_VIRTUAL_ALLOC_ENTRY) (32-Bit)
+    const HEAP_MIN_LARGE_BLOCK: usize = 0x7EFF8; // Wine HEAP_MIN_LARGE_BLOCK_SIZE (520.184 Bytes)
+
+    /// Initialisiert `PlayMemTop` analog zu `GetPlayMem(Longint(MI.FileSiz) * 1024)` (`playdefs.pas` Z. 1391).
+    pub fn from_file_len(file_len: usize) -> Self {
+        let file_siz_kb = (file_len / 1024) as u16 as usize;
+        let init_req = file_siz_kb * 1024 + 8192 + 65536;
+        let size = (init_req + 31) & !31;
+        let play_mem_top = if size > 0x100000 {
+            ((size - 1) | 0xFFF) + 1
+        } else {
+            size
+        };
+        let region_end = if size + 8 >= Self::HEAP_MIN_LARGE_BLOCK {
+            (Self::HEAP_LARGE_HEADER + size + Self::LARGE_REGION_MASK) & !Self::LARGE_REGION_MASK
+        } else {
+            size
+        };
+        Self {
+            play_mem_top,
+            data_size: size,
+            region_end,
+        }
+    }
+
+    /// Prüft `IF (need >= PlayMemTop) AND (NOT FitPlayMem(need))` (`loaders.pas` Zeilen 417 / 431
+    /// bzw. `FitPlayMem(NewSize)` in `playdefs.pas` Zeile 1407).
+    #[inline]
+    pub fn ensure_capacity(&mut self, sample_mem: &mut [u8], need: usize) {
+        if need < self.play_mem_top {
+            return;
+        }
+        let size = (need + 31) & !31;
+        // GlobalReAlloc16 (global.c Zeile 331): `if (ptr && (size == oldsize)) return handle;`
+        if size == self.play_mem_top {
+            return;
+        }
+        let is_large = size + 8 >= Self::HEAP_MIN_LARGE_BLOCK;
+        let was_large = self.data_size + 8 >= Self::HEAP_MIN_LARGE_BLOCK;
+        if is_large {
+            let needed_total = Self::HEAP_LARGE_HEADER + size;
+            if !was_large || needed_total > self.region_end {
+                if sample_mem.len() > self.data_size {
+                    sample_mem[self.data_size..].fill(0);
+                }
+                self.region_end =
+                    (needed_total + Self::LARGE_REGION_MASK) & !Self::LARGE_REGION_MASK;
+            }
+        } else {
+            self.region_end = size;
+        }
+        self.data_size = size;
+        self.play_mem_top = if size > 0x100000 {
+            ((size - 1) | 0xFFF) + 1
+        } else {
+            size
+        };
+    }
+
+    /// Simuliert die abschließenden `FitPlayMem`-Aufrufe nach `<Format>_GetFileData`:
+    /// 1. `PLAYER32.PAS` Zeile 579: `FitPlayMem(PlayMemOfs)`
+    /// 2. `PLAY.INC` Zeilen 2279–2280 (`ActivateSound` vor `PeakSearch` und Wiedergabe/`DEV_HDD`):
+    ///    `PlayMemOfs := ((PlayMemOfs + 31) DIV 32) * 32;`
+    ///    `FitPlayMem(PlayMemOfs + WaveBuffers * BufferSize)` (`3 * 35296 = 0x19DA0` für `PeakSearch`
+    ///    bzw. `16 * 32768 = 0x80000` für `DEV_HDD`).
+    ///
+    /// BIT-EXACTNESS INVARIANT:
+    /// Wurden die letzten Samples eines Moduls in den unpromoteten 4-KB-LDT-Überhang
+    /// `[data_size .. play_mem_top)` geschrieben (z. B. `imaginary voyage.xm` Ins 21/22 oder
+    /// `top of the line.xm` Ins 44), erzwingt `ActivateSound` einen Regionswechsel des Large-Blocks,
+    /// wobei `RtlReAllocateHeap` nur `data_size` Bytes kopiert und diese End-Samples nullt.
+    pub fn finalize_post_load(&mut self, sample_mem: &mut [u8]) {
+        if self.play_mem_top == usize::MAX {
+            return;
+        }
+        let play_mem_ofs = sample_mem.len();
+        self.ensure_capacity(sample_mem, play_mem_ofs);
+        let aligned_ofs = (play_mem_ofs + 31) & !31;
+        self.ensure_capacity(sample_mem, aligned_ofs + 3 * 35_296);
+        self.ensure_capacity(sample_mem, aligned_ofs + 16 * 32_768);
+    }
+}
+
 /// Lädt und präpariert ein einzelnes Sample bit-identisch zu `LoadInstrument` in
 /// `legacy_src/PLAYER/loaders.pas` (Zeilen 337–465).
 #[allow(clippy::too_many_arguments)]
@@ -241,9 +358,8 @@ pub fn load_instrument_into_sample_mem(
     ins_type: u8,
     bidi: bool,
 ) {
-    let mut dummy_top = usize::MAX;
-    let mut dummy_limit = usize::MAX;
-    load_instrument_into_sample_mem_with_top(
+    let mut dummy_arena = PlayMemArena::UNBOUNDED;
+    load_instrument_into_sample_mem_with_arena(
         sample_mem,
         raw_bytes,
         offset,
@@ -254,13 +370,12 @@ pub fn load_instrument_into_sample_mem(
         bits,
         ins_type,
         bidi,
-        &mut dummy_top,
-        &mut dummy_limit,
+        &mut dummy_arena,
     );
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn load_instrument_into_sample_mem_with_top(
+pub fn load_instrument_into_sample_mem_with_arena(
     sample_mem: &mut Vec<u8>,
     raw_bytes: &[u8],
     offset: &mut i32,
@@ -271,8 +386,7 @@ pub fn load_instrument_into_sample_mem_with_top(
     bits: u8,
     ins_type: u8,
     mut bidi: bool,
-    play_mem_top: &mut usize,
-    effective_limit: &mut usize,
+    arena: &mut PlayMemArena,
 ) {
     const MAX_CLASSIC_SAMPLE_MEM: usize = 256 * 1024 * 1024;
     let actual_len = (raw_bytes.len() as i32).min(*iend);
@@ -356,15 +470,7 @@ pub fn load_instrument_into_sample_mem_with_top(
 
     // FitPlayMem(PlayMemOfs + IEnd + 16) (loaders.pas Zeile 417)
     let need1 = aligned_ofs + (*iend as usize) + 16;
-    if need1 >= *play_mem_top {
-        let was_initial = (*play_mem_top & 0x3FF) == 0 && *effective_limit == *play_mem_top;
-        let old_page = (*play_mem_top - 1) >> 12;
-        let new_page = (need1 - 1) >> 12;
-        *play_mem_top = (need1 + 31) & !31;
-        if new_page > old_page || was_initial || *play_mem_top <= 0x100000 {
-            *effective_limit = *play_mem_top;
-        }
-    }
+    arena.ensure_capacity(sample_mem, need1);
 
     // 2 Null-Bytes für Cubic-Spline voranstellen (loaders.pas Zeilen 423–424)
     sample_mem.extend_from_slice(&[0u8, 0u8]);
@@ -379,9 +485,6 @@ pub fn load_instrument_into_sample_mem_with_top(
     if sample_mem.len() < play_mem_ofs {
         sample_mem.resize(play_mem_ofs, 0);
     }
-    if sample_mem.len() > *effective_limit {
-        sample_mem[*effective_limit..].fill(0);
-    }
 
     // BiDi-Loop entrollen, falls noch aktiv (loaders.pas Zeilen 429–441)
     if bidi && *loop_end > *loop_start {
@@ -390,15 +493,7 @@ pub fn load_instrument_into_sample_mem_with_top(
         if le <= sample_mem.len() && ls < le {
             let loop_len = le - ls;
             let need2 = play_mem_ofs + loop_len + 16;
-            if need2 >= *play_mem_top {
-                let was_initial = (*play_mem_top & 0x3FF) == 0 && *effective_limit == *play_mem_top;
-                let old_page = (*play_mem_top - 1) >> 12;
-                let new_page = (need2 - 1) >> 12;
-                *play_mem_top = (need2 + 31) & !31;
-                if new_page > old_page || was_initial || *play_mem_top <= 0x100000 {
-                    *effective_limit = *play_mem_top;
-                }
-            }
+            arena.ensure_capacity(sample_mem, need2);
             let rev = reverse_loop_segment(&sample_mem[ls..le], is_16bit);
             play_mem_ofs += loop_len;
             let needed = play_mem_ofs.max(le + loop_len);
@@ -407,9 +502,6 @@ pub fn load_instrument_into_sample_mem_with_top(
             }
             let write_start = le + loop_len - rev.len();
             sample_mem[write_start..le + loop_len].copy_from_slice(&rev);
-            if sample_mem.len() > *effective_limit {
-                sample_mem[*effective_limit..].fill(0);
-            }
             *iend += loop_len as i32;
             *loop_end += loop_len as i32;
         }
@@ -436,9 +528,6 @@ pub fn load_instrument_into_sample_mem_with_top(
             sample_mem.resize(needed, 0);
         }
         sample_mem[le..le + 4].copy_from_slice(&guard);
-        if sample_mem.len() > *effective_limit {
-            sample_mem[*effective_limit..].fill(0);
-        }
     }
 
     // Offsets anpassen (loaders.pas Zeilen 448–461)
@@ -920,6 +1009,56 @@ mod tests {
             assert_eq!(loaded.state.mi.file_type, ModType::WOW);
             assert_eq!(num_tracks, 8);
         }
+    }
+
+    #[test]
+    fn test_play_mem_arena_ldt_overhang_promotion_and_activate_sound_wipe() {
+        // 1. In-Place-Promotion innerhalb derselben Large-Block-Region (skyscraper.xm Ins 27..29):
+        //    Ins A setzt data_size = 0x1262A0, play_mem_top = 0x127000.
+        //    Ins B schreibt in den 4-KB-Überhang [0x1262A0 .. 0x126FEE) ohne FitPlayMem.
+        //    Ins C wächst in-place auf 0x127DA0 (unter Linux innerhalb 0x130000, unter Windows 0x128000)
+        //    und rettet dadurch die Sample-Daten von Ins B!
+        let mut arena = PlayMemArena::from_file_len(960_775);
+        let mut mem = vec![0x5Au8; 0x126290];
+        arena.ensure_capacity(&mut mem, 0x12629A);
+        assert_eq!(arena.data_size, 0x1262A0);
+        assert_eq!(arena.play_mem_top, 0x127000);
+
+        // Ins B passt in [0x126294 .. 0x126FF8) < 0x127000 -> kein Realloc
+        arena.ensure_capacity(&mut mem, 0x126FF8);
+        mem.resize(0x126FEE, 0x77);
+        assert_eq!(arena.data_size, 0x1262A0);
+
+        // Ins C fordert 0x127D84 -> in-place innerhalb derselben Region -> 0x77 bleibt erhalten!
+        arena.ensure_capacity(&mut mem, 0x127D84);
+        assert_eq!(arena.data_size, 0x127DA0);
+        assert_eq!(mem[0x126300], 0x77);
+        mem.resize(0x127D7A, 0x33);
+        arena.finalize_post_load(&mut mem);
+        assert_eq!(mem[0x126300], 0x77);
+        assert_eq!(mem[0x127D00], 0x33);
+
+        // 2. Unpromoteter Überhang am Dateiende wird durch ActivateSound (finalize_post_load) genullt
+        //    (imaginary voyage.xm Ins 19 -> Ins 20 -> Ins 21/22 & top of the line.xm Ins 44):
+        let mut arena2 = PlayMemArena::from_file_len(975_279);
+        let mut mem2 = vec![0x11u8; 0x13CF54];
+        arena2.ensure_capacity(&mut mem2, 0x1437F4); // Ins 19 alloziert Region bis 0x150000
+        mem2.resize(0x14E0FC, 0x11);
+        arena2.ensure_capacity(&mut mem2, 0x14E106); // Ins 20 in-place innerhalb 0x150000
+        assert_eq!(arena2.data_size, 0x14E120);
+        assert_eq!(arena2.play_mem_top, 0x14F000);
+
+        // Ins 21 & 22 schreiben bis 0x14EE9D (< 0x14F000), ohne FitPlayMem auszulösen
+        arena2.ensure_capacity(&mut mem2, 0x14E5D6);
+        arena2.ensure_capacity(&mut mem2, 0x14EEA7);
+        mem2.resize(0x14EE9D, 0x66);
+        assert_eq!(mem2[0x14E600], 0x66);
+
+        // ActivateSound erzwingt Reallokation über die Regionsgrenze -> [0x14E120..) wird genullt!
+        arena2.finalize_post_load(&mut mem2);
+        assert_eq!(mem2[0x14E0FB], 0x11);
+        assert_eq!(mem2[0x14E11F], 0x66);
+        assert!(mem2[0x14E120..].iter().all(|&b| b == 0));
     }
 }
 

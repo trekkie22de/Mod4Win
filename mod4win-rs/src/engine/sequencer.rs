@@ -3934,9 +3934,19 @@ impl Sequencer {
             self.module.state.env_stack_val = 0;
         }
 
-        // EventChg nach erfolgreichem Mix-Block leeren (play.inc Zeile 1511)
+        // BIT-EXACTNESS INVARIANT (`play.inc` Zeilen 1396–1422):
+        // `FOR ii := 1 TO Mi.NumTracks DO WITH Channels[ii] DO EventChg := [];` steht im Original-Pascal
+        // ausschließlich im `ELSE`-Zweig (`IF NOT Search`), wird also NUR im normalen Mischbetrieb geleert!
+        // Während `Search = True` (`PeakSearch`, d. h. `self.mix_mem.peak_search == true`) bleibt `EventChg`
+        // über Tick-Grenzen hinweg sticky (`ePitch`, `eVol`, `eInst` bleiben gesetzt). Nach einem Vibrato
+        // bewirkt das sticky `ePitch` zusammen mit `NewTonH := TonH` (`play.inc` Zeile 1437), dass `DoPHiPLo`
+        // im `PeakSearch` die Kanalperiode zurücksetzt, während sie im späteren Render-Lauf (`Search = False`)
+        // auf dem letzten Vibrato-Wert stehenbleibt (entscheidend z. B. für `top of the line.xm` bei `IDO 0`:
+        // `PreAmp = 0x9F` statt `0x9E`).
         for ch_idx in 0..num_tracks {
-            self.module.state.channels[ch_idx].event_chg = 0;
+            if !self.mix_mem.peak_search {
+                self.module.state.channels[ch_idx].event_chg = 0;
+            }
             self.module.state.channels[ch_idx].new_tonh = self.module.state.channels[ch_idx].tonh;
         }
 
@@ -5334,5 +5344,25 @@ mod tests {
                 filename
             );
         }
+    }
+
+    #[test]
+    fn test_peak_search_keeps_event_chg_sticky_across_ticks() {
+        let mut seq = Sequencer::new(LoadedModule::default(), SoundSettings::default());
+        seq.module.state.mi.num_tracks = 4;
+        seq.module.state.channels[0].event_chg = event_flags::E_PITCH | event_flags::E_INST;
+
+        // Während `PeakSearch` (`Search = True` in `play.inc` Z. 1396–1422) bleibt `EventChg` sticky:
+        seq.mix_mem.peak_search = true;
+        seq.advance_tick();
+        assert_eq!(
+            seq.module.state.channels[0].event_chg,
+            event_flags::E_PITCH | event_flags::E_INST
+        );
+
+        // Im regulären Wiedergabe-/Render-Modus (`Search = False`) leert `advance_tick` `EventChg`:
+        seq.mix_mem.peak_search = false;
+        seq.advance_tick();
+        assert_eq!(seq.module.state.channels[0].event_chg, 0);
     }
 }

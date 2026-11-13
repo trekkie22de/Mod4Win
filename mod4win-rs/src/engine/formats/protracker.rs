@@ -8,8 +8,8 @@ use crate::engine::types::{
 };
 
 use super::{
-    bitset_contains, bitset_include, load_instrument_into_sample_mem,
-    normalize_note_for_track_write, read_be_u16, sconvert_and_reduce, LoadedModule,
+    bitset_contains, bitset_include, load_instrument_into_sample_mem_with_arena,
+    normalize_note_for_track_write, read_be_u16, sconvert_and_reduce, LoadedModule, PlayMemArena,
 };
 
 /// Prüft anhand der Dateigröße und Instrumenten-Header, ob eine `"M.K."`-Datei ein 8-Kanal
@@ -325,6 +325,7 @@ fn load_mod_or_wow(data: &[u8], force_wow: bool) -> Result<LoadedModule, u16> {
     }
 
     // Sample-Daten in den Sample-Speicher laden (loaders.pas Zeilen 1705–1707)
+    let mut play_mem_arena = PlayMemArena::from_file_len(data.len());
     for i in 0..num_inst_slots {
         let inst = &mut state.mi.instruments[i];
         let mut iend = inst.iend;
@@ -340,7 +341,7 @@ fn load_mod_or_wow(data: &[u8], force_wow: bool) -> Result<LoadedModule, u16> {
             let mut volume = inst.volume;
             let bits = inst.bits;
 
-            load_instrument_into_sample_mem(
+            load_instrument_into_sample_mem_with_arena(
                 &mut module.sample_mem,
                 raw_slice,
                 &mut offset,
@@ -351,6 +352,7 @@ fn load_mod_or_wow(data: &[u8], force_wow: bool) -> Result<LoadedModule, u16> {
                 bits,
                 0,
                 false,
+                &mut play_mem_arena,
             );
 
             inst.offset = offset;
@@ -361,6 +363,7 @@ fn load_mod_or_wow(data: &[u8], force_wow: bool) -> Result<LoadedModule, u16> {
         }
     }
 
+    play_mem_arena.finalize_post_load(&mut module.sample_mem);
     state.row_played = [[0u8; 32]; MAX_PATTERNS];
     Ok(module)
 }

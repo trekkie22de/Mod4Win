@@ -9,9 +9,9 @@ use crate::engine::types::{
 };
 
 use super::{
-    bitset_contains, bitset_include, load_instrument_into_sample_mem,
+    bitset_contains, bitset_include, load_instrument_into_sample_mem_with_arena,
     normalize_note_for_track_write, read_le_i32, read_le_u16, read_le_u32, sconvert_and_reduce,
-    LoadedModule,
+    LoadedModule, PlayMemArena,
 };
 
 /// Lädt eine ScreamTracker-3 (`.S3M`)-Datei aus einem `&[u8]`-Slice.
@@ -261,6 +261,7 @@ pub fn load_s3m(data: &[u8]) -> Result<LoadedModule, u16> {
     }
 
     // Instrumente und Samples einlesen (loaders.pas Zeilen 984–1037 & 2321–2347)
+    let mut play_mem_arena = PlayMemArena::from_file_len(data.len());
     state.mi.num_instruments = 0;
     for i in 0..ins_num.min(255) {
         let ins_para = read_le_u16(data, ins_ptr_ofs + i * 2).unwrap_or(0) as usize;
@@ -345,7 +346,7 @@ pub fn load_s3m(data: &[u8]) -> Result<LoadedModule, u16> {
                 // InsType = 2 * ((Bits & 0x10) >> 4) + (Ffv - 1)
                 let ins_type = (2 * ((bits & 0x10) >> 4)) + ((ffv as u8) - 1);
 
-                load_instrument_into_sample_mem(
+                load_instrument_into_sample_mem_with_arena(
                     &mut module.sample_mem,
                     raw_pcm,
                     &mut offset,
@@ -356,6 +357,7 @@ pub fn load_s3m(data: &[u8]) -> Result<LoadedModule, u16> {
                     bits,
                     ins_type,
                     false,
+                    &mut play_mem_arena,
                 );
                 state.mi.num_instruments += 1;
             }
@@ -370,6 +372,7 @@ pub fn load_s3m(data: &[u8]) -> Result<LoadedModule, u16> {
         }
     }
 
+    play_mem_arena.finalize_post_load(&mut module.sample_mem);
     state.row_played = [[0u8; 32]; MAX_PATTERNS];
     Ok(module)
 }
