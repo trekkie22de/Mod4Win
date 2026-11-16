@@ -7,7 +7,9 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+#[cfg(debug_assertions)]
+use std::path::Path;
+use std::path::PathBuf;
 
 /// Eingebettete deutsche Standardsprachdatei (`lang/de.ini`) als Fallback.
 pub const EMBEDDED_DE_INI: &str = include_str!("../../lang/de.ini");
