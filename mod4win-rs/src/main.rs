@@ -654,6 +654,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut restored_from_state_saver = false;
     let mut cli_mol_playlist: Option<Vec<std::path::PathBuf>> = None;
+    let mut restore_saved_playlist_only = false;
+    let mut state_saver_load_failed = false;
     if let Some(ref f_arg) = file_arg {
         let p = Path::new(f_arg);
         if !no_gui
@@ -684,12 +686,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .saved_playlist_idx
             .min(ini_cfg.saved_playlist.len().saturating_sub(1));
         let candidate = &ini_cfg.saved_playlist[idx];
-        restored_from_state_saver = true;
+        restore_saved_playlist_only = true;
         if candidate.exists() || mod4win_rs::ui::parse_zip_virtual_path(candidate).is_some() {
+            restored_from_state_saver = true;
             file_arg = Some(candidate.to_string_lossy().into_owned());
             if seek_pattern.is_none() && ini_cfg.saved_order_pos > 1 {
                 seek_pattern = Some(ini_cfg.saved_order_pos as u16);
             }
+        } else {
+            state_saver_load_failed = true;
         }
     }
 
@@ -701,7 +706,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(1);
     }
 
-    let mut state_saver_load_failed = false;
     let (loaded_module, has_initial_module, initial_file_bytes) = if let Some(ref f_arg) = file_arg
     {
         let resolved_arg = mod4win_rs::ui::resolve_path_case_insensitive(Path::new(f_arg));
@@ -960,6 +964,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .min(init_ui_state.playlist.len().saturating_sub(1));
         } else if !no_gui
             && !is_diff_suite_active
+            && init_ui_state.ini_config.state_saver
             && !init_ui_state.ini_config.saved_playlist.is_empty()
         {
             // Direktes Öffnen einer einzelnen Moduldatei per Explorer/CLI:
@@ -1010,7 +1015,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             init_ui_state.playlist.push(file_path.to_path_buf());
         }
         init_ui_state.rebuild_number_list();
-    } else if restored_from_state_saver && !init_ui_state.ini_config.saved_playlist.is_empty() {
+    } else if (restored_from_state_saver || restore_saved_playlist_only)
+        && !init_ui_state.ini_config.saved_playlist.is_empty()
+    {
         // StateSaver war aktiv, aber der zuletzt gespielte Track existiert z. B. auf einem ausgehängten Laufwerk nicht:
         // Gespeicherte Ad-Hoc-Playlist trotzdem wiederherstellen statt zu leeren!
         init_ui_state.playlist =

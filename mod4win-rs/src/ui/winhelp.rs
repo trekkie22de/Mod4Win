@@ -511,6 +511,7 @@ impl WinHelpBook {
             }
             dirs.push(cwd.join("mod4win-rs").join("help"));
         }
+        #[cfg(debug_assertions)]
         if let Some(root) = Path::new(env!("CARGO_MANIFEST_DIR")).parent() {
             dirs.push(root.join("help"));
         }
@@ -521,6 +522,7 @@ impl WinHelpBook {
                     dirs.push(parent.join("help"));
                 }
             }
+        #[cfg(debug_assertions)]
         dirs.push(Path::new(env!("CARGO_MANIFEST_DIR")).join("help"));
         dirs
     }
@@ -534,6 +536,9 @@ impl WinHelpBook {
 
     /// Gibt das nächste oder vorherige Hauptthema in der Browse-Sequenz (`<<` / `>>`) zurück.
     pub fn step_browse(&self, current_id: &str, delta: isize) -> Option<&HelpTopic> {
+        if self.browse_order.is_empty() {
+            return None;
+        }
         let key = current_id.trim().to_ascii_lowercase();
         let cur_topic_idx = *self.id_to_idx.get(&key)?;
         let pos = self
@@ -567,7 +572,9 @@ fn html_escape(s: &str) -> String {
 }
 
 fn html_unescape(s: &str) -> String {
-    s.replace("&quot;", "\"")
+    s.replace("&nbsp;", " ")
+        .replace("&#160;", " ")
+        .replace("&quot;", "\"")
         .replace("&lt;", "<")
         .replace("&gt;", ">")
         .replace("&amp;", "&")
@@ -1347,6 +1354,7 @@ fn parse_html_section_blocks(body: &str) -> Vec<HelpBlock> {
                 extract_attr(tag_str, "data-indent")
                     .and_then(|v| v.parse::<i32>().ok())
                     .unwrap_or(dd_depth)
+                    .clamp(0, 16)
             };
             if let Some(end_rel) = find_ci(&body[tag_end + 1..], close_tag) {
                 let inner = &body[tag_end + 1..tag_end + 1 + end_rel];
@@ -2336,6 +2344,8 @@ pub const HELP_MENU_LANGUAGES: [(u8, &str, &str); 7] = [
     (6, "grk", "Ελληνικά (Greek)"),
 ];
 
+type CachedTopicLayout = Option<(u8, String, i32, std::rc::Rc<TopicLayout>)>;
+
 /// Zustand des integrierten HTML-/WinHelp-Viewers.
 #[derive(Clone, Debug)]
 pub struct HelpViewerState {
@@ -2346,6 +2356,9 @@ pub struct HelpViewerState {
     pub popup_topic_id: Option<String>,
     pub popup_anchor: (i32, i32),
     pub file_menu_open: bool,
+    pub user_lang_override: Option<u8>,
+    pub last_setup_lang: u8,
+    layout_cache: std::cell::RefCell<CachedTopicLayout>,
 }
 
 impl HelpViewerState {
@@ -2362,25 +2375,51 @@ impl HelpViewerState {
             popup_topic_id: None,
             popup_anchor: (160, 120),
             file_menu_open: false,
+            user_lang_override: None,
+            last_setup_lang: lang_id,
+            layout_cache: std::cell::RefCell::new(None),
         }
     }
 
     /// Aktualisiert das geladene Hilfebuch (`help_de.html`, `help_en.html`, etc.), falls die Sprache umgeschaltet wurde.
     pub fn set_language(&mut self, lang_id: u8) {
+        self.last_setup_lang = lang_id;
+        self.user_lang_override = None;
         if self.book.language_id != lang_id {
             self.book = WinHelpBook::load_for_language(lang_id);
+            *self.layout_cache.borrow_mut() = None;
+        }
+    }
+
+    /// Synchronisiert die Setup-Sprache (`0` = EN, `1` = DE) bei `F1`-Aufrufen, ohne eine vom Nutzer
+    /// im Hilfe-Menü explizit gewählte Sprache (`FR`/`ES`/`IT`/`NL`/`GRK`) zu überschreiben.
+    pub fn sync_setup_language(&mut self, setup_lang: u8) {
+        if setup_lang != self.last_setup_lang {
+            self.set_language(setup_lang);
+        } else if self.user_lang_override.is_none() && self.book.language_id != setup_lang {
+            self.book = WinHelpBook::load_for_language(setup_lang);
+            *self.layout_cache.borrow_mut() = None;
+        }
+    }
+
+    /// Setzt die Hilfesprache explizit über das Hilfe-Dropdown-Menü (`Datei` / `File`).
+    pub fn set_language_manual(&mut self, lang_id: u8) {
+        self.user_lang_override = Some(lang_id);
+        if self.book.language_id != lang_id {
+            self.book = WinHelpBook::load_for_language(lang_id);
+            *self.layout_cache.borrow_mut() = None;
         }
     }
 
     /// Öffnet die aktuelle HTML-Hilfedatei (`help/help_<code>.html`) im System-Browser.
     /// Falls die `.exe` standalone ohne `help/`-Verzeichnis ausgeführt wird, wird die komprimiert
-    /// eingebettete HTML-Datei (samt den 16 Dialog-Grafiken `bm0.bmp`..`bm15.bmp`) in `%TEMP%\mod4win_help\` entpackt.
+    /// eingebettete HTML-Datei (samt den 16 Dialog-Grafiken `bm0.bmp`..`bm15.bmp`) in `%TEMP%\mod4win_help_<pid>\` entpackt.
     pub fn open_current_topic_in_browser(&self) {
         let is_ger = self.book.language_id == 1;
         let lang_code = WinHelpBook::lang_code_for_id(self.book.language_id);
         let fname = format!("help_{}.html", lang_code);
         let html_path = WinHelpBook::find_help_html_on_disk(&fname).unwrap_or_else(|| {
-            let fallback_dir = std::env::temp_dir().join("mod4win_help");
+            let fallback_dir = std::env::temp_dir().join(format!("mod4win_help_{}", std::process::id()));
             let img_dir = if is_ger {
                 fallback_dir.join("img")
             } else {
@@ -2719,18 +2758,41 @@ impl HelpViewerState {
         layout
     }
 
+    fn cached_layout_topic(
+        &self,
+        topic: &HelpTopic,
+        assets: &EmbeddedAssets,
+        max_w: i32,
+    ) -> std::rc::Rc<TopicLayout> {
+        if let Some((lang, ref tid, mw, ref rc)) = *self.layout_cache.borrow()
+            && lang == self.book.language_id
+            && mw == max_w
+            && tid == &topic.id
+        {
+            return std::rc::Rc::clone(rc);
+        }
+        let built = std::rc::Rc::new(self.layout_topic(topic, assets, max_w));
+        *self.layout_cache.borrow_mut() = Some((
+            self.book.language_id,
+            topic.id.clone(),
+            max_w,
+            std::rc::Rc::clone(&built),
+        ));
+        built
+    }
+
     pub fn max_scroll_y(&self, assets: &EmbeddedAssets) -> i32 {
         let Some(topic) = self.book.get_topic(&self.current_topic_id) else {
             return 0;
         };
-        let layout = self.layout_topic(topic, assets, 634);
+        let layout = self.cached_layout_topic(topic, assets, 634);
         (layout.total_height - 418).max(0)
     }
 
     /// Liefert die Bildschirm-Ursprungskoordinaten `(x, y)` einer eingebetteten Dialog-Bitmap (`bm0`..`bm15`) im aktuellen Hilfethema.
     pub fn bitmap_screen_origin(&self, bm_key: &str, assets: &EmbeddedAssets) -> Option<(i32, i32)> {
         let topic = self.book.get_topic(&self.current_topic_id)?;
-        let layout = self.layout_topic(topic, assets, 634);
+        let layout = self.cached_layout_topic(topic, assets, 634);
         let max_scroll = (layout.total_height - 418).max(0);
         let scroll_y = self.scroll_y.clamp(0, max_scroll);
         let lb = layout
@@ -2881,7 +2943,7 @@ impl HelpViewerState {
         fill_rect(frame, dw, dh, vp_x, vp_y, vp_w, vp_h, [255, 255, 255, 255]);
         draw_frame_3d_1px(frame, dw, dh, vp_x, vp_y, vp_w, vp_h, true);
 
-        let layout = self.layout_topic(topic, assets, 634);
+        let layout = self.cached_layout_topic(topic, assets, 634);
         let max_scroll = (layout.total_height - 418).max(0);
         let scroll_y = self.scroll_y.clamp(0, max_scroll);
 
@@ -3102,7 +3164,7 @@ impl HelpViewerState {
                 if (0..langs_h).contains(&rel_y) {
                     let idx = (rel_y / 16) as usize;
                     if let Some(&(lang_id, _, _)) = HELP_MENU_LANGUAGES.get(idx) {
-                        self.set_language(lang_id);
+                        self.set_language_manual(lang_id);
                     }
                     self.file_menu_open = false;
                     return HelpClickResult::Handled;
@@ -3157,13 +3219,19 @@ impl HelpViewerState {
             return HelpClickResult::Handled;
         }
 
-        // 2. Windows 3.1 Menüleiste (y = 21..=38)
+        // 2. Windows 3.1 Menüleiste (y = 21..=38) — sprachabhängige Spaltenbreite (DE vs. EN)
         if (21..=38).contains(&vy) {
-            if vx < 56 {
+            let is_ger = self.book.language_id == 1;
+            let (file_end, bm_start, help_start) = if is_ger {
+                (56, 132, 220)
+            } else {
+                (44, 84, 158)
+            };
+            if vx < file_end {
                 self.file_menu_open = !self.file_menu_open;
-            } else if (128..216).contains(&vx) {
+            } else if (bm_start..help_start).contains(&vx) {
                 self.open_topic("KnopfIndex");
-            } else if vx >= 216 {
+            } else if vx >= help_start {
                 self.open_topic("main_index");
             }
             return HelpClickResult::Handled;
@@ -3215,10 +3283,10 @@ impl HelpViewerState {
 
         // 5. Klick im Dokument-Viewport (Hotspots auf `bm0`..`bm15` & grüne Text-Links)
         if (vp_x..=vp_x + vp_w).contains(&vx) && (vp_y..=vp_y + vp_h).contains(&vy) {
-            let Some(topic) = self.book.get_topic(&self.current_topic_id).cloned() else {
+            let Some(topic) = self.book.get_topic(&self.current_topic_id) else {
                 return HelpClickResult::Handled;
             };
-            let layout = self.layout_topic(&topic, assets, 634);
+            let layout = self.cached_layout_topic(topic, assets, 634);
             let max_scroll = (layout.total_height - 418).max(0);
             let scroll_y = self.scroll_y.clamp(0, max_scroll);
 

@@ -554,14 +554,18 @@ impl Mod4WinApp {
                 self.open_window(event_loop, WindowKind::FileManager);
             }
             26 => {
-                let is_modern = {
+                let (is_modern, is_detached, pl_idx) = {
                     let st = self.shared_state.lock().unwrap();
-                    self.is_modern_skin(&st)
+                    (self.is_modern_skin(&st), st.playing_track_detached, st.playlist_idx)
                 };
                 if is_modern {
-                    // Im Modern Skin entfernt F7 direkt den aktuell gespielten/ausgewählten Eintrag aus der Playlist ohne Classic-Popup
-                    let idx = self.shared_state.lock().unwrap().playlist_idx;
-                    self.remove_playlist_item_and_update_cursor(idx);
+                    if self.active_window_kind == WindowKind::QuickSelect
+                        && self.kind_to_id.contains_key(&WindowKind::QuickSelect)
+                    {
+                        self.remove_selected_modern_playlist_items();
+                    } else if !is_detached {
+                        self.remove_playlist_item_and_update_cursor(pl_idx);
+                    }
                 } else {
                     self.confirm_action = Some(ConfirmAction::RemoveFromPlaylist);
                     self.open_window(event_loop, WindowKind::ConfirmDialog);
@@ -657,14 +661,17 @@ impl Mod4WinApp {
 
     #[inline]
     pub(crate) fn is_escape_stop_suppressed(&self) -> bool {
-        self.last_escape_close_at.is_some_and(|t| {
-            let ms = t.elapsed().as_millis();
-            (self.suppress_escape_stop && ms < 1500) || ms < 300
-        })
+        self.suppress_escape_stop
+            || self
+                .last_escape_close_at
+                .is_some_and(|t| t.elapsed().as_millis() < 300)
     }
 
     pub(crate) fn handle_key_press(&mut self, event_loop: &ActiveEventLoop, event: &KeyEvent) {
         let is_esc_key = matches!(&event.logical_key, Key::Named(NamedKey::Escape));
+        if is_esc_key && event.repeat {
+            return;
+        }
 
         // 0. Wenn gerade eine F7/F8 Sicherheitsabfrage offen ist:
         if let Some(action) = self.confirm_action {
@@ -791,22 +798,22 @@ impl Mod4WinApp {
                     return;
                 }
                 Key::Named(NamedKey::Enter) => {
-                    if !is_fb || self.fsel_dlg.active_list == 1 {
-                        if let Some(entry) = self.fsel_dlg.entries.get(self.fsel_dlg.cursor).cloned() {
-                            match entry {
-                                FileSelectEntry::Parent(p) | FileSelectEntry::Subdir(_, p) => {
-                                    self.fsel_dlg.current_dir = p;
-                                    self.fsel_dlg.refresh();
-                                    return;
-                                }
-                                FileSelectEntry::Drive(drv) => {
-                                    self.fsel_dlg.current_dir =
-                                        std::path::PathBuf::from(format!("{}:\\", drv));
-                                    self.fsel_dlg.refresh();
-                                    return;
-                                }
-                                _ => {}
+                    if (!is_fb || self.fsel_dlg.active_list == 1)
+                        && let Some(entry) = self.fsel_dlg.entries.get(self.fsel_dlg.cursor).cloned()
+                    {
+                        match entry {
+                            FileSelectEntry::Parent(p) | FileSelectEntry::Subdir(_, p) => {
+                                self.fsel_dlg.current_dir = p;
+                                self.fsel_dlg.refresh();
+                                return;
                             }
+                            FileSelectEntry::Drive(drv) => {
+                                self.fsel_dlg.current_dir =
+                                    std::path::PathBuf::from(format!("{}:\\", drv));
+                                self.fsel_dlg.refresh();
+                                return;
+                            }
+                            _ => {}
                         }
                     }
                     self.commit_file_select_ok();
@@ -1090,7 +1097,7 @@ impl Mod4WinApp {
                         return;
                     }
                     Key::Named(NamedKey::Escape) => {
-                        self.setup_cfg = self.setup_backup_cfg.clone();
+                        self.setup_cfg = self.archive_backup_cfg.clone();
                         self.close_window(WindowKind::ArchiveSetup);
                         return;
                     }
@@ -1099,7 +1106,7 @@ impl Mod4WinApp {
                         match c {
                             'O' => self.commit_archive_setup_ok(),
                             'C' | 'Q' => {
-                                self.setup_cfg = self.setup_backup_cfg.clone();
+                                self.setup_cfg = self.archive_backup_cfg.clone();
                                 self.close_window(WindowKind::ArchiveSetup);
                             }
                             'H' => self.open_help_topic(event_loop, "ArcOptDlg"),
@@ -2193,7 +2200,7 @@ impl Mod4WinApp {
                         return;
                     }
                 }
-                Key::Character(ch) if !ctrl && !alt => {
+                Key::Character(ch) if is_classic_quick_select && !ctrl && !alt => {
                     if let Some(c) = ch.chars().next()
                         && c.is_ascii_alphanumeric()
                     {
@@ -2220,9 +2227,7 @@ impl Mod4WinApp {
                             }
                         }
                     }
-                    if is_classic_quick_select {
-                        return;
-                    }
+                    return;
                 }
                 _ => {
                     if is_classic_quick_select {

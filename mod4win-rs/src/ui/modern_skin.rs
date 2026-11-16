@@ -11,7 +11,10 @@ use super::app::{
     ConfirmAction, Mod4WinApp, PlaylistReorderDrag, PressedButton, SetupEditFocus, UiSharedState,
     WindowKind,
 };
-#[cfg(any(not(target_os = "windows"), feature = "retro-win32"))]
+#[cfg(any(
+    all(not(target_os = "windows"), not(target_os = "linux")),
+    feature = "retro-win32"
+))]
 use super::app::FileSelectTarget;
 use super::cpu_sim::CpuProfile;
 use super::effects_win::{effect_id_from_cmd_op, effect_name_by_id};
@@ -907,8 +910,8 @@ impl Mod4WinApp {
         self.apply_skin_to_all_open_windows();
     }
 
-    /// Magnetisches Andocken (`SNAP_THRESHOLD = 12px`) an andere offene Fenster und Bildschirmkanten
-    /// (aktiv in ALLEN Skins: `2.30`, `2.40` und `Modern`) sowie synchrones Mitbewegen angedockter
+    /// Dezenter magnetischer „Schnapper“ (`MODERN_SNAP_THRESHOLD = 8px`) ausschließlich im Modern Skin
+    /// (Classic Skin bleibt ohne Magnetismus wie `MOD4WIN 2.40`) sowie synchrones Mitbewegen angedockter
     /// Unterfenster (`Info`, `Effects`, `Playlist/Open`), wenn das Hauptfenster (`Main`) gezogen wird.
     pub(crate) fn snap_window_position(
         &mut self,
@@ -1025,13 +1028,13 @@ impl Mod4WinApp {
         let mut best_y: Option<(i32, i32)> = None; // (dist, target_y)
         let mut consider_x = |target_x: i32| {
             let d = (pos_x - target_x).abs();
-            if d <= MODERN_SNAP_THRESHOLD && best_x.map_or(true, |(bd, _)| d < bd) {
+            if d <= MODERN_SNAP_THRESHOLD && best_x.is_none_or(|(bd, _)| d < bd) {
                 best_x = Some((d, target_x));
             }
         };
         let mut consider_y = |target_y: i32| {
             let d = (pos_y - target_y).abs();
-            if d <= MODERN_SNAP_THRESHOLD && best_y.map_or(true, |(bd, _)| d < bd) {
+            if d <= MODERN_SNAP_THRESHOLD && best_y.is_none_or(|(bd, _)| d < bd) {
                 best_y = Some((d, target_y));
             }
         };
@@ -1756,8 +1759,8 @@ impl Mod4WinApp {
             );
             stroke_rounded_rect(frame, dw, dh, ox, oy, ow, oh, 3, COL_CYAN_BRAND);
             let msg = self.locale.tr_or(
-                "confirm",
-                "remove_playlist",
+                "Main",
+                "confirm_remove_q",
                 "Remove current track from playlist? (F7)",
             );
             draw_modern_ui_text(frame, dw, dh, ox + 16, oy + 16, msg, COL_LCD_BRIGHT);
@@ -1947,9 +1950,9 @@ impl Mod4WinApp {
             }
         }
 
-        // Spalte 1, Zeile 3: 7er Transportleiste (y = 116..142, x = 6..374)
-        if (116..=142).contains(&vy) && (6..=374).contains(&vx) {
-            let idx = ((vx - 9).max(0) / 52).min(6);
+        // Spalte 1, Zeile 3: 7er Transportleiste (y = 116..142, x = 6..375, 53px-Raster)
+        if (116..=142).contains(&vy) && (6..=375).contains(&vx) {
+            let idx = ((vx - 6).max(0) / 53).min(6);
             match idx {
                 0 => {
                     let mut state = self.shared_state.lock().unwrap();
@@ -2239,7 +2242,7 @@ impl Mod4WinApp {
                 if self.is_window_open(WindowKind::HelpViewer) {
                     self.close_window(WindowKind::HelpViewer);
                 } else {
-                    self.open_help_topic(event_loop, "HauptDlg");
+                    self.open_help_topic(event_loop, "MiniState");
                 }
                 return;
             }
@@ -2429,12 +2432,16 @@ impl Mod4WinApp {
         draw_modern_lcd_box(frame, dw, dh, 6, 363, 568, 37);
         fill_rect(frame, dw, dh, 290, 368, 1, 27, [0x0f, 0x3d, 0x26, 255]);
 
-        let active_insts = state
+        let non_empty_insts = state
             .instruments
             .iter()
             .filter(|ins| ins.length > 0 || !ins.name.trim().is_empty())
-            .count()
-            .max(state.instruments.len());
+            .count();
+        let active_insts = if non_empty_insts > 0 {
+            non_empty_insts
+        } else {
+            state.instruments.len()
+        };
         let ch_str = state.num_channels.to_string();
         let inst_str = active_insts.to_string();
         let line1 = self.locale.tr_fmt(
@@ -2726,32 +2733,18 @@ impl Mod4WinApp {
         let max_scroll = total_items.saturating_sub(max_vis);
         let scroll = self.quick_select_scroll.min(max_scroll);
 
-        // O(1) Virtual-Scrolling: Nur die sichtbaren Zeilen (`scroll..scroll+max_vis`) auswerten,
-        // damit selbst bei 999.999 Songs in der Playlist 0 irrelevante Strings pro Frame allokiert werden!
-        let sorted_fallback = if self.quick_select_sort == 0 {
-            None
-        } else {
-            Some(self.sorted_quick_select_items(state))
-        };
-
+        // O(1) Virtual-Scrolling: Das Modern Playlist-Dock zeigt immer die echte Abspielreihenfolge
+        // und wertet pro Frame ausschließlich die sichtbaren Zeilen (`scroll..scroll+max_vis`) aus!
         for row in 0..max_vis {
-            let (orig_idx, label) = if let Some(ref sorted) = sorted_fallback {
-                let Some((idx, lbl)) = sorted.get(scroll + row) else {
-                    break;
-                };
-                (*idx, lbl.clone())
-            } else {
-                let idx = scroll + row;
-                let Some(p) = state.playlist.get(idx) else {
-                    break;
-                };
-                let lbl = p
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("module.mod")
-                    .to_lowercase();
-                (idx, lbl)
+            let orig_idx = scroll + row;
+            let Some(p) = state.playlist.get(orig_idx) else {
+                break;
             };
+            let label = p
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("module.mod")
+                .to_lowercase();
             let ry = 35 + (row as i32) * 16;
             let is_playing = !state.playing_track_detached && orig_idx == state.playlist_idx;
             let is_selected = self.quick_select_all_selected
@@ -3035,22 +3028,45 @@ impl Mod4WinApp {
         };
         let tot = state.playlist.len();
         #[cfg(not(feature = "retro-win32"))]
-        let total_pl_secs: u64 = state
-            .playlist
-            .iter()
-            .enumerate()
-            .map(|(i, p)| {
-                if !state.playing_track_detached && i == state.playlist_idx && state.total_time_secs > 0 {
-                    state.total_time_secs as u64
-                } else {
-                    self.playlist_meta_cache
-                        .get(&UiSharedState::playlist_path_key(p))
-                        .and_then(|m| m.as_ref())
-                        .map(|m| m.duration_secs as u64)
-                        .unwrap_or(0)
-                }
-            })
-            .sum();
+        let total_pl_secs: u64 = {
+            let active_secs = if state.playing_track_detached {
+                0
+            } else {
+                state.total_time_secs
+            };
+            let cache_key = (
+                state.playlist_generation,
+                self.playlist_meta_cache.len(),
+                active_secs,
+            );
+            let (cg, cl, ca, csum) = self.cached_playlist_total_secs.get();
+            if (cg, cl, ca) == cache_key {
+                csum
+            } else {
+                let sum: u64 = state
+                    .playlist
+                    .iter()
+                    .enumerate()
+                    .map(|(i, p)| {
+                        if !state.playing_track_detached
+                            && i == state.playlist_idx
+                            && state.total_time_secs > 0
+                        {
+                            state.total_time_secs as u64
+                        } else {
+                            self.playlist_meta_cache
+                                .get(&UiSharedState::playlist_path_key(p))
+                                .and_then(|m| m.as_ref())
+                                .map(|m| m.duration_secs as u64)
+                                .unwrap_or(0)
+                        }
+                    })
+                    .sum();
+                self.cached_playlist_total_secs
+                    .set((cache_key.0, cache_key.1, cache_key.2, sum));
+                sum
+            }
+        };
         #[cfg(feature = "retro-win32")]
         let total_pl_secs: u64 = state.total_time_secs as u64;
 
@@ -3147,18 +3163,12 @@ impl Mod4WinApp {
         }
         if (35..=list_bottom).contains(&vy) && (10..=554).contains(&vx) {
             let row = ((vy - 35) / 16).clamp(0, max_vis.saturating_sub(1) as i32) as usize;
-            let orig_idx_opt = if self.quick_select_sort == 0 {
+            let orig_idx_opt = {
                 let total_len = self.shared_state.lock().unwrap().playlist.len();
                 let max_scroll = total_len.saturating_sub(max_vis);
                 let scroll = self.quick_select_scroll.min(max_scroll);
                 let idx = scroll + row;
                 (idx < total_len).then_some(idx)
-            } else {
-                let st_snap = self.shared_state.lock().unwrap();
-                let items = self.sorted_quick_select_items(&st_snap);
-                let max_scroll = items.len().saturating_sub(max_vis);
-                let scroll = self.quick_select_scroll.min(max_scroll);
-                items.get(scroll + row).map(|(orig_idx, _)| *orig_idx)
             };
             if let Some(orig_idx) = orig_idx_opt {
                 if vx >= 534 {
@@ -3170,6 +3180,9 @@ impl Mod4WinApp {
                         .map(|&i| if i > orig_idx { i - 1 } else { i })
                         .collect();
                     self.playlist_selected = shifted;
+                    if self.playlist_anchor > orig_idx {
+                        self.playlist_anchor -= 1;
+                    }
                     self.playlist_reorder_drag = None;
                     self.remove_playlist_item_and_update_cursor(orig_idx);
                     return;
@@ -3210,31 +3223,11 @@ impl Mod4WinApp {
                     if !ctrl {
                         self.playlist_selected.clear();
                     }
-                    if self.quick_select_sort == 0 {
-                        let a = self.playlist_anchor.min(orig_idx);
-                        let b = self.playlist_anchor.max(orig_idx);
-                        let len = self.shared_state.lock().unwrap().playlist.len();
-                        for i in a..=b.min(len.saturating_sub(1)) {
-                            self.playlist_selected.insert(i);
-                        }
-                    } else {
-                        let st_snap = self.shared_state.lock().unwrap();
-                        let items = self.sorted_quick_select_items(&st_snap);
-                        let anchor_pos = items
-                            .iter()
-                            .position(|(idx, _)| *idx == self.playlist_anchor)
-                            .unwrap_or(0);
-                        let target_pos = items
-                            .iter()
-                            .position(|(idx, _)| *idx == orig_idx)
-                            .unwrap_or(0);
-                        let a = anchor_pos.min(target_pos);
-                        let b = anchor_pos.max(target_pos);
-                        for i in a..=b {
-                            if let Some((oidx, _)) = items.get(i) {
-                                self.playlist_selected.insert(*oidx);
-                            }
-                        }
+                    let a = self.playlist_anchor.min(orig_idx);
+                    let b = self.playlist_anchor.max(orig_idx);
+                    let len = self.shared_state.lock().unwrap().playlist.len();
+                    for i in a..=b.min(len.saturating_sub(1)) {
+                        self.playlist_selected.insert(i);
                     }
                     self.quick_select_cursor = orig_idx;
                 } else if ctrl {
@@ -3309,7 +3302,7 @@ impl Mod4WinApp {
                     }
                     return;
                 }
-                #[cfg(not(target_os = "windows"))]
+                #[cfg(all(not(target_os = "windows"), not(target_os = "linux")))]
                 {
                     self.fsel_dlg = super::setup_dlg::FileSelectState::new(
                         FileSelectTarget::PlaylistAdd,
@@ -3317,7 +3310,7 @@ impl Mod4WinApp {
                     );
                     self.open_window(event_loop, WindowKind::FileSelectDialog);
                 }
-                #[cfg(target_os = "windows")]
+                #[cfg(any(target_os = "windows", target_os = "linux"))]
                 let _ = event_loop;
                 return;
             } else if (108..=170).contains(&vx) {
@@ -3360,14 +3353,29 @@ impl Mod4WinApp {
                     if !loaded.is_empty() {
                         st.playlist = loaded;
                         st.playlist_idx = 0;
-                        st.playing_track_detached = false;
-                        st.rebuild_number_list();
                         if st.ini_config.play_on_load
-                            && let Some(first) = st.playlist.first().cloned() {
-                                st.pending_load_file = Some(first);
-                                st.is_playing = true;
-                                st.is_paused = false;
+                            && let Some(first) = st.playlist.first().cloned()
+                        {
+                            st.playing_track_detached = false;
+                            st.pending_load_file = Some(first);
+                            st.is_playing = true;
+                            st.is_paused = false;
+                        } else if let Some(ref cur_path) = st.current_file_path {
+                            let cur_key = UiSharedState::playlist_path_key(cur_path);
+                            if let Some(pos) = st
+                                .playlist
+                                .iter()
+                                .position(|p| UiSharedState::playlist_path_key(p) == cur_key)
+                            {
+                                st.playlist_idx = pos;
+                                st.playing_track_detached = false;
+                            } else {
+                                st.playing_track_detached = true;
                             }
+                        } else {
+                            st.playing_track_detached = false;
+                        }
+                        st.rebuild_number_list();
                     }
                     st.sync_runtime_to_ini();
                     let fname = mol_path
@@ -3397,27 +3405,21 @@ impl Mod4WinApp {
                     };
                     (dir, st.playlist.clone())
                 };
-                if let Some(mol_path) = native_save_mol_dialog(&start_dir) {
-                    if super::archive_mol::save_mol_file(&mol_path, &playlist_snap).is_ok() {
-                        let mut st = self.shared_state.lock().unwrap();
-                        if let Some(parent) = mol_path.parent() {
-                            st.ini_config.last_playlist_dir = parent.to_string_lossy().into_owned();
-                        }
-                        let fname = mol_path
-                            .file_name()
-                            .and_then(|n| n.to_str())
-                            .unwrap_or("PLAYLIST.MOL");
-                        st.set_status_banner(format!("SAVED {}", fname.to_ascii_uppercase()));
-                        let _ = st
-                            .ini_config
-                            .save_to_file(&Mod4WinIniConfig::default_ini_path());
-                    }
-                    return;
-                }
-                #[cfg(not(target_os = "windows"))]
+                if let Some(mol_path) = native_save_mol_dialog(&start_dir)
+                    && super::archive_mol::save_mol_file(&mol_path, &playlist_snap).is_ok()
                 {
-                    let mol_path = PathBuf::from(&start_dir).join("PLAYLIST.MOL");
-                    let _ = super::archive_mol::save_mol_file(&mol_path, &playlist_snap);
+                    let mut st = self.shared_state.lock().unwrap();
+                    if let Some(parent) = mol_path.parent() {
+                        st.ini_config.last_playlist_dir = parent.to_string_lossy().into_owned();
+                    }
+                    let fname = mol_path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("PLAYLIST.MOL");
+                    st.set_status_banner(format!("SAVED {}", fname.to_ascii_uppercase()));
+                    let _ = st
+                        .ini_config
+                        .save_to_file(&Mod4WinIniConfig::default_ini_path());
                 }
                 return;
             }
@@ -4168,13 +4170,16 @@ impl Mod4WinApp {
                 if let Some(chosen_dir) = native_browse_folder_dialog(&self.setup_cfg.hd_path) {
                     let mut p = chosen_dir.to_string_lossy().into_owned();
                     if !p.ends_with('\\') && !p.ends_with('/') {
-                        p.push('\\');
+                        p.push(std::path::MAIN_SEPARATOR);
                     }
                     self.setup_cfg.hd_path = p;
                     self.sync_live_setup_to_state();
                     return;
                 }
-                #[cfg(any(not(target_os = "windows"), feature = "retro-win32"))]
+                #[cfg(any(
+                    all(not(target_os = "windows"), not(target_os = "linux")),
+                    feature = "retro-win32"
+                ))]
                 {
                     self.fsel_dlg = super::setup_dlg::FileSelectState::new(
                         FileSelectTarget::SetupRecDir,
@@ -4182,7 +4187,10 @@ impl Mod4WinApp {
                     );
                     self.open_window(event_loop, WindowKind::FileSelectDialog);
                 }
-                #[cfg(all(target_os = "windows", not(feature = "retro-win32")))]
+                #[cfg(all(
+                    any(target_os = "windows", target_os = "linux"),
+                    not(feature = "retro-win32")
+                ))]
                 let _ = event_loop;
                 return;
             }
@@ -4450,14 +4458,7 @@ fn native_open_files_dialog(initial_dir: &str) -> Option<Vec<PathBuf>> {
             dlg = dlg.set_directory(p);
         }
     }
-    #[cfg(target_os = "windows")]
-    {
-        Some(dlg.pick_files().unwrap_or_default())
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        dlg.pick_files()
-    }
+    Some(dlg.pick_files().unwrap_or_default())
 }
 
 #[cfg(all(target_os = "windows", feature = "retro-win32"))]

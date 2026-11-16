@@ -53,7 +53,7 @@
     <P><B>À propos de MOD4WIN &amp; Utilisation :</B></P>
     <DL>
       <DD><A HREF="#Features">Qu'est-ce que MOD4WIN et que peut-il faire ?</A></DD>
-      <DD><A HREF="#new_in_v30">Nouveautés de MOD4WIN 3.10 (Skins, Sim CPU Rétro, Moteur IT &amp; CLI)</A></DD>
+      <DD><A HREF="#new_in_v30">Nouveautés de MOD4WIN 3.12 (Skins, Sim CPU Rétro, Moteur IT &amp; CLI)</A></DD>
       <DD><A HREF="#KnopfIndex" REL="popup">Commandes &amp; Boîtes de dialogue de MOD4WIN...</A></DD>
       <DD><A HREF="#KeyIndex" REL="popup">Raccourcis clavier dans MOD4WIN...</A></DD>
       <DD><A HREF="#Effects">Effets Tracker supportés</A></DD>
@@ -138,7 +138,7 @@
       <DD>ainsi que sur les appareils ARM tels que le Raspberry Pi (aarch64)</DD>
     </DL>
     <UL TYPE="DISC">
-      <LI>MOD4WIN 3.10 offre :</LI>
+      <LI>MOD4WIN 3.12 offre :</LI>
       <LI><B>Réimplémentation complète native 64 bits en Rust</B> (Windows 10/11 &amp; Linux x86 &amp; ARM) sans DLL 16 bits, <A HREF="#accuracy_9997">99,97 % identique au bit près</A> sur <A HREF="#test_suite">10 000 modules de test (Suite de Référence)</A> par rapport à MOD4WIN Beta 2.40</LI>
       <LI>Modules NoiseTracker (*.NST), Pro-, Fast- et TakeTracker (*.MOD), FastTracker II (*.XM), Grave Composer (*.WOW), Oktalyzer (*.OKT), ScreamTracker 2.x (*.STM), ScreamTracker 3.x (*.S3M), Composer 669 et UNIS 669 (*.669), Farandole Composer (*.FAR), MultiTracker (*.MTM), Impulse Tracker (*.IT avec filtres résonants, NNAs &amp; Sinc FIR 8-taps), Unreal Music Package (*.UMX) et UltraTracker (*.ULT) jusqu'à 64 canaux et 256 voix virtuelles</LI>
       <LI>Fréquences d'échantillonnage de 11 à 48 kHz</LI>
@@ -173,7 +173,7 @@
       <LI><A HREF="#new_in_v30">Build 32 bits optionnel pour Windows 3.11/Win32s et Windows 95/98/NT</A> avec toutes les fonctionnalités sauf la suite de tests</LI>
     </UL>
     <P>
-      <B>Voir aussi :</B> <A HREF="#new_in_v30">Toutes les nouveautés de MOD4WIN 3.10 en détail (Skins, Simulateur CPU Rétro, Moteur IT, PeakSearch &amp; Ligne de commande)</A>
+      <B>Voir aussi :</B> <A HREF="#new_in_v30">Toutes les nouveautés de MOD4WIN 3.12 en détail (Skins, Simulateur CPU Rétro, Moteur IT, PeakSearch &amp; Ligne de commande)</A>
     </P>
 <!-- /TOPIC -->
           </FONT></TD>
@@ -3113,7 +3113,7 @@
       Cette option devrait toujours être active. Il n'y a qu'un très petit nombre de modules qui ne jouent pas correctement avec la vitesse BPM active. Parmi ceux-ci le fameux &quot;Klisje paa klisje&quot; et quelques modules de Jogeir Liljedahl. Pour les jouer, désactivez cette option.
     </P>
     <P>
-      <I>Note historique (MOD4WIN 3.10) : Dans le code original de PLAYER32.PAS (<TT>search_time</TT>), lors du calcul préalable de la durée, la durée de la ligne actuelle est déjà accumulée avant l'évaluation d'un <TT>Dxx</TT> (Pattern Break) sur le même canal et reportée dans les lignes suivantes du pattern déjà quitté. Par conséquent, MOD4WIN (aussi bien 2.40 que 3.00) calcule curieusement pour <TT>faceday.mod</TT> (24:46 au lieu de 22:14) et <TT>crusinth.mod</TT> (5:14 au lieu de 4:49) une durée totale encore plus longue avec BPM désactivé qu'avec BPM activé – alors que l'aide anglaise originale affirmait en plaisantant que <TT>faceday.mod</TT> durait trois heures avec BPM. Cette bizarrerie de calcul historique a été délibérément conservée comme clin d'œil d'époque.</I>
+      <I>Note historique (MOD4WIN 3.12) : Dans le code original de PLAYER32.PAS (<TT>search_time</TT>), lors du calcul préalable de la durée, la durée de la ligne actuelle est déjà accumulée avant l'évaluation d'un <TT>Dxx</TT> (Pattern Break) sur le même canal et reportée dans les lignes suivantes du pattern déjà quitté. Par conséquent, MOD4WIN (aussi bien 2.40 que 3.00) calcule curieusement pour <TT>faceday.mod</TT> (24:46 au lieu de 22:14) et <TT>crusinth.mod</TT> (5:14 au lieu de 4:49) une durée totale encore plus longue avec BPM désactivé qu'avec BPM activé – alors que l'aide anglaise originale affirmait en plaisantant que <TT>faceday.mod</TT> durait trois heures avec BPM. Cette bizarrerie de calcul historique a été délibérément conservée comme clin d'œil d'époque.</I>
     </P>
 <!-- /TOPIC -->
       <P ALIGN="RIGHT"><FONT FACE="MS Sans Serif, Arial, Helvetica" SIZE="1"><A HREF="#HauptDlg">[ ^ Dialog ]</A> &nbsp; <A HREF="#main_index">[ ^ Contenu ]</A></FONT></P>
@@ -4142,7 +4142,7 @@
       Si votre niveau de <A HREF="#setup_PreAmp" REL="popup">Préamplification</A> est réglé trop haut, la sortie au niveau du mélangeur peut devenir trop élevée pour une gamme possible de 8 ou 16 bits respectivement. Sans limiteur, ceci peut causer des dépassements de capacité et devenir audible. Apparaissent alors des craquements très ennuyeux, des crachements et des distortions. Pour éviter celà, la sortie mélangée peut être limitée à une amplitude maximum. Quand des surmodulations arrivent, la sortie limitée ne causera que de légères distortions, inaudibles pour la plupart.  Si vous souhaitez obtenir une qualité sonore optimum, vous devriez désactiver le limiteur et ajuster le <A HREF="#main_PreAmp" REL="popup">Curseur PréAmp</A> à une valeur assez basse pour éviter la surmodulation.<BR>
       Vous pouvez également commuter le limiteur temporairement à partir de la <A HREF="#HauptDlg">Boite de Dialogue Principale</A>.<BR>
       Note: En mode <A HREF="#hardware_mode">Support Direct de Matériel</A>, ce commutateur est toujours hors service.<BR><BR>
-      <B>Nouveau dans MOD4WIN 3.10 – De-Click (CL+DC) :</B><BR>
+      <B>Nouveau dans MOD4WIN 3.12 – De-Click (CL+DC) :</B><BR>
       Dans la boîte de dialogue Setup (option <B>De-Click (CL+DC)</B>) ou via le commutateur à 3 positions <A HREF="#Main_clip" REL="popup">Clip / CL+DC</A> de la fenêtre principale (clic ou <B>F9</B> : <I>Inactif &rarr; Clip &rarr; CL+DC</I>), vous pouvez activer le filtre <B>De-Click par canal</B>. Il élimine les craquements présents dans de nombreux modules lors des changements brusques de notes, aux raccords de boucles discontinus et à la fin des échantillons mal coupés grâce à de courtes rampes de lissage (~1,5 ms).
     </P>
 <!-- /TOPIC -->
@@ -7698,7 +7698,7 @@
       <TABLE WIDTH="100%" BORDER="1" CELLPADDING="2" CELLSPACING="0" BGCOLOR="#000080">
         <TR>
           <TD WIDTH="18" ALIGN="CENTER" BGCOLOR="#C0C0C0"><FONT FACE="MS Sans Serif, Arial, Helvetica" SIZE="2" COLOR="#000000"><B>-</B></FONT></TD>
-          <TD ALIGN="CENTER" BGCOLOR="#000080"><FONT FACE="MS Sans Serif, Arial, Helvetica" SIZE="2" COLOR="#FFFFFF"><B>MOD4WIN 3.12 - Aide (Francais) - Nouveautés de MOD4WIN 3.10</B></FONT></TD>
+          <TD ALIGN="CENTER" BGCOLOR="#000080"><FONT FACE="MS Sans Serif, Arial, Helvetica" SIZE="2" COLOR="#FFFFFF"><B>MOD4WIN 3.12 - Aide (Francais) - Nouveautés de MOD4WIN 3.12</B></FONT></TD>
           <TD WIDTH="18" ALIGN="CENTER" BGCOLOR="#C0C0C0"><FONT FACE="MS Sans Serif, Arial, Helvetica" SIZE="1" COLOR="#000000"><B>&#9660;</B></FONT></TD>
           <TD WIDTH="18" ALIGN="CENTER" BGCOLOR="#C0C0C0"><FONT FACE="MS Sans Serif, Arial, Helvetica" SIZE="1" COLOR="#000000"><B>&#9650;</B></FONT></TD>
         </TR>
@@ -7729,15 +7729,15 @@
       <TABLE WIDTH="100%" BORDER="0" CELLPADDING="10" CELLSPACING="0" BGCOLOR="#FFFFFF">
         <TR>
           <TD><FONT FACE="Times New Roman, Times, Georgia, serif" SIZE="3">
-<!-- TOPIC id="new_in_v30" ids="new_in_v30" title="Nouveautés de MOD4WIN 3.10" browse="Features: 012" popup="false" -->
-    <H2 ALIGN="CENTER"><FONT COLOR="#0000FF">Nouveautés de MOD4WIN 3.10 en détail</FONT></H2>
+<!-- TOPIC id="new_in_v30" ids="new_in_v30" title="Nouveautés de MOD4WIN 3.12" browse="Features: 012" popup="false" -->
+    <H2 ALIGN="CENTER"><FONT COLOR="#0000FF">Nouveautés de MOD4WIN 3.12 en détail</FONT></H2>
     <P>
-      Trente ans après la dernière version historique (v2.30 / Beta 2.40 de 1995), <B>MOD4WIN 3.10</B> fait revivre le programme sous la forme d'une réimplémentation complète et sûre en mémoire en <B>Rust</B> – nativement sous Windows 10/11 64 bits, Linux (x86_64 &amp; ARM64 / Raspberry Pi) ainsi qu'en version rétro 32 bits optionnelle pour Windows 3.11 (Win32s) et Windows 95/98/NT.
+      Trente ans après la dernière version historique (v2.30 / Beta 2.40 de 1995), <B>MOD4WIN 3.12</B> fait revivre le programme sous la forme d'une réimplémentation complète et sûre en mémoire en <B>Rust</B> – nativement sous Windows 10/11 64 bits, Linux (x86_64 &amp; ARM64 / Raspberry Pi) ainsi qu'en version rétro 32 bits optionnelle pour Windows 3.11 (Win32s) et Windows 95/98/NT.
     </P>
 
     <H3>1. Deux interfaces utilisateur (Skin Classic 2.40 &amp; Modern Skin) + Mise à l'échelle libre</H3>
     <P>
-      MOD4WIN 3.10 réunit deux interfaces totalement différentes dans un seul fichier exécutable, entre lesquelles vous pouvez basculer à tout moment via la touche <B>[G]</B>, dans la <A HREF="#SetupDlg">Boîte de dialogue Setup</A> ou en ligne de commande (<I>--skin 2.40</I> ou <I>--skin modern</I>) :
+      MOD4WIN 3.12 réunit deux interfaces totalement différentes dans un seul fichier exécutable, entre lesquelles vous pouvez basculer à tout moment via la touche <B>[G]</B>, dans la <A HREF="#SetupDlg">Boîte de dialogue Setup</A> ou en ligne de commande (<I>--skin 2.40</I> ou <I>--skin modern</I>) :
     </P>
     <UL TYPE="DISC">
       <LI><B>Skin Classic 2.40 :</B> L'interface originale au pixel près de la Beta 2.40 inédite de 1995 avec tous ses cadres 3D historiques, afficheurs LCD à segments, boutons bitmap et boîtes de dialogue Windows 3.1.</LI>
@@ -7750,7 +7750,7 @@
       Sur les processeurs multicœurs modernes, le calcul de 32 canaux tracker sollicite moins de 0,1 % du CPU. Sans simulation, les deux indicateurs à barres emblématiques de 1995 <B>CPU time</B> et <B>Buffers filled</B> resteraient bloqués en permanence à 0 % et 100 %.
     </P>
     <P>
-      C'est pourquoi MOD4WIN 3.10 intègre un <B>modèle de performance CPU historique authentique</B> proposant <B>10 processeurs des années 1990–1999</B> (ainsi que <I>Native</I> pour le vrai CPU hôte) :
+      C'est pourquoi MOD4WIN 3.12 intègre un <B>modèle de performance CPU historique authentique</B> proposant <B>10 processeurs des années 1990–1999</B> (ainsi que <I>Native</I> pour le vrai CPU hôte) :
     </P>
     <TABLE WIDTH="100%" BORDER="1" CELLPADDING="4" CELLSPACING="0" BGCOLOR="#F8F8F8">
       <TR BGCOLOR="#E0E0E0">
@@ -7786,7 +7786,7 @@
 
     <H3>3. Impulse Tracker (*.IT) &amp; Unreal Music (*.UMX) – Deux univers sonores &amp; 7 niveaux IDO</H3>
     <P>
-      Outre les dix formats classiques de 1995, MOD4WIN 3.10 prend entièrement en charge <B>Impulse Tracker (*.IT)</B> ainsi que les <B>Unreal / Unreal Tournament Music Packages (*.UMX)</B> jusqu'à 64 canaux, 256 voix virtuelles (<I>New Note Actions / NNA</I> : Cut, Continue, Note Off, Note Fade), enveloppes de hauteur/filtre et <B>filtres résonants à 2 pôles (Zxx)</B>.
+      Outre les dix formats classiques de 1995, MOD4WIN 3.12 prend entièrement en charge <B>Impulse Tracker (*.IT)</B> ainsi que les <B>Unreal / Unreal Tournament Music Packages (*.UMX)</B> jusqu'à 64 canaux, 256 voix virtuelles (<I>New Note Actions / NNA</I> : Cut, Continue, Note Off, Note Fade), enveloppes de hauteur/filtre et <B>filtres résonants à 2 pôles (Zxx)</B>.
     </P>
     <P>
       Pour les modules <I>*.IT</I> et <I>*.UMX</I>, vous pouvez choisir dans le dialogue Setup entre deux architectures de mixage complètes :
@@ -7800,7 +7800,7 @@
 
     <H3>3b. Commutateur Clip / CL+DC à 3 positions (Filtre De-Click par canal)</H3>
     <P>
-      De nombreux modules historiques présentent des clics audibles dans tous les lecteurs en raison d'échantillons mal découpés dans les modules eux-mêmes. MOD4WIN 3.10 étend l'indicateur classique <B>Clip</B> de la fenêtre principale (clic ou touche <B>[F9]</B>, ainsi que dans le <A HREF="#SetupDlg">dialogue Setup</A>) en un commutateur à 3 positions (<B>Clip Inactif &rarr; Clip &rarr; CL+DC</B>) :
+      De nombreux modules historiques présentent des clics audibles dans tous les lecteurs en raison d'échantillons mal découpés dans les modules eux-mêmes. MOD4WIN 3.12 étend l'indicateur classique <B>Clip</B> de la fenêtre principale (clic ou touche <B>[F9]</B>, ainsi que dans le <A HREF="#SetupDlg">dialogue Setup</A>) en un commutateur à 3 positions (<B>Clip Inactif &rarr; Clip &rarr; CL+DC</B>) :
     </P>
     <UL TYPE="DISC">
       <LI><B>Transitions de notes &amp; coupures douces :</B> Prolonge la rampe de fondu interne <I>@SlideOut</I> à ~1,5 ms lorsque <B>CL+DC</B> est actif et atténue en douceur les canaux coupés brusquement.</LI>
@@ -7813,18 +7813,18 @@
       Dans l'original de 1995, le <B>PeakSearch</B> (une analyse silencieuse préalable de tout le morceau pour déterminer la préamplification optimale sans saturation) n'était utilisé que lors de l'<A HREF="#d2d_mode">export WAV Direct-To-Disk</A>, car il prenait de nombreuses secondes sur un 486.
     </P>
     <P>
-      Sur les processeurs actuels, l'analyse complète d'un morceau de 5 minutes ne prend que quelques millisecondes ! Si vous activez <B>Auto-PreAmp (PeakSearch)</B> dans le Setup, MOD4WIN 3.10 détermine automatiquement le niveau de crête exact au chargement de chaque morceau et enregistre durablement la valeur PreAmp optimale (selon la taille du fichier et son CRC 16 bits) dans <B>MOD4WIN.PKS</B> (ainsi que sous <I>[Peaks]</I> dans <I>MOD4WIN.INI</I>). Lors de la lecture suivante, le volume idéal est connu instantanément sans nouvelle analyse.
+      Sur les processeurs actuels, l'analyse complète d'un morceau de 5 minutes ne prend que quelques millisecondes ! Si vous activez <B>Auto-PreAmp (PeakSearch)</B> dans le Setup, MOD4WIN 3.12 détermine automatiquement le niveau de crête exact au chargement de chaque morceau et enregistre durablement la valeur PreAmp optimale (selon la taille du fichier et son CRC 16 bits) dans <B>MOD4WIN.PKS</B> (ainsi que sous <I>[Peaks]</I> dans <I>MOD4WIN.INI</I>). Lors de la lecture suivante, le volume idéal est connu instantanément sans nouvelle analyse.
     </P>
 
     <H3>5. Moteur d'archives natif en mémoire (*.ZIP, *.LHA/*.LZH, *.ARJ) &amp; Jukebox 999 999 titres</H3>
     <UL TYPE="DISC">
-      <LI><B>Plus besoin de décompresseurs DOS externes :</B> En 1995, MOD4WIN nécessitait des programmes DOS 16 bits externes (<I>PKUNZIP.EXE</I>, <I>ARJ.EXE</I>, <I>LHA.EXE</I>) qui ne fonctionnent plus sous Windows 64 bits. MOD4WIN 3.10 décompresse <B>*.ZIP</B>, <B>*.LHA / *.LZH</B> (y compris <I>-lh0-</I> et <I>-lh5-</I>) ainsi que <B>*.ARJ</B> (méthodes 0..3) de manière totalement native en mémoire vive – sans fichiers temporaires sur le disque dur.</LI>
+      <LI><B>Plus besoin de décompresseurs DOS externes :</B> En 1995, MOD4WIN nécessitait des programmes DOS 16 bits externes (<I>PKUNZIP.EXE</I>, <I>ARJ.EXE</I>, <I>LHA.EXE</I>) qui ne fonctionnent plus sous Windows 64 bits. MOD4WIN 3.12 décompresse <B>*.ZIP</B>, <B>*.LHA / *.LZH</B> (y compris <I>-lh0-</I> et <I>-lh5-</I>) ainsi que <B>*.ARJ</B> (méthodes 0..3) de manière totalement native en mémoire vive – sans fichiers temporaires sur le disque dur.</LI>
       <LI><B>Collections géantes de MODs :</B> Le jukebox et les listes de lecture (<I>*.MOL</I>) prennent désormais en charge jusqu'à <B>999 999 modules</B> (à partir de 10 000 titres, l'afficheur LCD classique à 4 chiffres passe automatiquement en notation compacte <I>K</I> telle que <I>10K</I>).</LI>
     </UL>
 
     <H3>6. Options de ligne de commande, Export WAV sans interface &amp; Mode Console</H3>
     <P>
-      MOD4WIN 3.10 peut également être entièrement piloté via la ligne de commande (PowerShell, CMD ou terminal Linux/SSH) :
+      MOD4WIN 3.12 peut également être entièrement piloté via la ligne de commande (PowerShell, CMD ou terminal Linux/SSH) :
     </P>
     <TABLE WIDTH="100%" BORDER="1" CELLPADDING="4" CELLSPACING="0" BGCOLOR="#F8F8F8">
       <TR BGCOLOR="#E0E0E0">
@@ -7913,7 +7913,7 @@
 
     <H3>1. Contexte : Pourquoi un environnement de test 16 bits avec OTVDM ?</H3>
     <P>
-      MOD4WIN 3.10 intègre directement dans son exécutable une <B>Suite de Tests de Référence Multicœur</B> entièrement automatisée (<I>--batch-diff</I> et <I>--diff-suite</I>). Son objectif est de prouver mathématiquement, sur des dizaines de milliers de modules classiques (*.MOD, *.XM, *.S3M, *.MTM, *.669, *.ULT, *.FAR, *.STM, *.OKT, *.WOW), que notre nouveau moteur audio Rust 64 bits génère dans les quatre niveaux d'interpolation (<B>IDO 0</B> = Off, <B>IDO 1</B> = Linéaire, <B>IDO 2</B> = CPU Cubic, <B>IDO 3</B> = FPU Cubic) <B>échantillon par échantillon (0 LSB d'écart)</B> exactement la même forme d'onde audio que l'original historique <B>MOD4WIN 2.40 Beta (1995)</B>.
+      MOD4WIN 3.12 intègre directement dans son exécutable une <B>Suite de Tests de Référence Multicœur</B> entièrement automatisée (<I>--batch-diff</I> et <I>--diff-suite</I>). Son objectif est de prouver mathématiquement, sur des dizaines de milliers de modules classiques (*.MOD, *.XM, *.S3M, *.MTM, *.669, *.ULT, *.FAR, *.STM, *.OKT, *.WOW), que notre nouveau moteur audio Rust 64 bits génère dans les quatre niveaux d'interpolation (<B>IDO 0</B> = Off, <B>IDO 1</B> = Linéaire, <B>IDO 2</B> = CPU Cubic, <B>IDO 3</B> = FPU Cubic) <B>échantillon par échantillon (0 LSB d'écart)</B> exactement la même forme d'onde audio que l'original historique <B>MOD4WIN 2.40 Beta (1995)</B>.
     </P>
     <P>
       Pour chaque module, la suite de tests lance en arrière-plan le programme 16 bits original <B>MOD4WIN.EXE</B> accompagné de sa bibliothèque DPMI 16/32 bits <B>PLAYER32.DLL</B> en mode <A HREF="#d2d_mode">Direct-To-Disk</A> (DeviceID=-2), lui fait écrire un fichier WAV de référence, puis le compare octet par octet avec le rendu du moteur Rust. Comme Windows 64 bits ne contient plus de sous-système 16 bits (NTVDM), la couche de compatibilité 16 bits <B>otvdm / winevdm</B> (<I>otvdmw.exe</I>) est nécessaire sous Windows 10/11.
@@ -7965,7 +7965,7 @@
       Le programme 16 bits historique <B>MOD4WIN.EXE</B> (v2.40 Beta) n'avait jamais été conçu pour un fonctionnement par lots sans surveillance : en mode Direct-To-Disk (<I>DeviceID=-2</I>), il forçait toujours <I>OverSamp := 3</I>, ignorait le niveau d'interpolation de <I>MOD4WIN.INI</I>, restait ouvert après l'export WAV et écrasait <I>MOD4WIN.INI</I> de manière concurrente à la fermeture.
     </P>
     <P>
-      C'est pourquoi MOD4WIN 3.10 possède un <B>Auto-Patcher 16 bits intégré</B> : au lancement de <I>--batch-diff</I>, il crée automatiquement des copies de sauvegarde (<I>.bak</I>) et génère quatre exécutables sans interface (<B>MOD4WIN_IDO0.EXE</B> à <B>MOD4WIN_IDO3.EXE</B>) ainsi qu'une <B>PLAYER32.DLL</B> patchée :
+      C'est pourquoi MOD4WIN 3.12 possède un <B>Auto-Patcher 16 bits intégré</B> : au lancement de <I>--batch-diff</I>, il crée automatiquement des copies de sauvegarde (<I>.bak</I>) et génère quatre exécutables sans interface (<B>MOD4WIN_IDO0.EXE</B> à <B>MOD4WIN_IDO3.EXE</B>) ainsi qu'une <B>PLAYER32.DLL</B> patchée :
     </P>
     <TABLE WIDTH="100%" BORDER="1" CELLPADDING="4" CELLSPACING="0" BGCOLOR="#F8F8F8">
       <TR BGCOLOR="#E0E0E0">
@@ -8062,7 +8062,7 @@
 
     <H3>1. Que signifie « 99,97 % identique au bit près sur plus de 10 000 modules » ?</H3>
     <P>
-      Lors du développement de MOD4WIN 3.10, nous avons confronté le nouveau moteur audio Rust 64 bits via notre <A HREF="#test_suite">Suite de Tests de Référence</A> à plus de <B>10 000 modules tracker réels</B> issus de la scène démo (soit plus de <B>40 000 exports WAV complets</B> sur les quatre niveaux d'interpolation <A HREF="#setup_IDO" REL="popup">IDO</A> 0..3) face à l'original 16 bits <B>MOD4WIN 2.40 Beta (1995)</B>.
+      Lors du développement de MOD4WIN 3.12, nous avons confronté le nouveau moteur audio Rust 64 bits via notre <A HREF="#test_suite">Suite de Tests de Référence</A> à plus de <B>10 000 modules tracker réels</B> issus de la scène démo (soit plus de <B>40 000 exports WAV complets</B> sur les quatre niveaux d'interpolation <A HREF="#setup_IDO" REL="popup">IDO</A> 0..3) face à l'original 16 bits <B>MOD4WIN 2.40 Beta (1995)</B>.
     </P>
     <P>
       Le résultat : dans <B>99,97 %</B> des cas, le nouveau lecteur Rust 64 bits en <B>Emulation Mode</B> génère sur des millions d'échantillons stéréo <B>au bit près (0 LSB d'écart)</B> exactement le même fichier WAV que le code assembleur DPMI 16/32 bits de 1995 – incluant les quatre polynômes IDO, le tampon circulaire surround ProLogic, les rampes anti-clic (<I>@SlideOut</I>) et le scan de normalisation préalable <I>PeakSearch</I>.
@@ -8078,7 +8078,7 @@
       Pour atteindre 99,97 % d'identité bit à bit (0 LSB) sur plus de 10 000 modules, il ne suffisait pas de porter les formules documentées des trackers. Au désassembleur, nous avons constaté que la <I>PLAYER32.DLL</I> originale de 1995 comportait plusieurs <B>véritables bogues de programmation et erreurs mémoire Borland Pascal</B> qui influencent subtilement le signal audio.
     </P>
     <P>
-      Afin que notre moteur réussisse d'une part la preuve stricte bit à bit face à l'original de 1995, tout en pouvant jouer de la musique au quotidien sans bogues historiques, MOD4WIN 3.10 propose deux modes de fonctionnement commutables dans la <A HREF="#SetupDlg">Boîte de dialogue Setup</A> (<B>Mode Moteur</B> / touche <B>[CTRL+F9]</B> / <I>CleanMode=0/1</I> dans <I>MOD4WIN.INI</I>) :
+      Afin que notre moteur réussisse d'une part la preuve stricte bit à bit face à l'original de 1995, tout en pouvant jouer de la musique au quotidien sans bogues historiques, MOD4WIN 3.12 propose deux modes de fonctionnement commutables dans la <A HREF="#SetupDlg">Boîte de dialogue Setup</A> (<B>Mode Moteur</B> / touche <B>[CTRL+F9]</B> / <I>CleanMode=0/1</I> dans <I>MOD4WIN.INI</I>) :
     </P>
     <UL TYPE="DISC">
       <LI><B>Emulation Mode (Par défaut pour 100 % d'authenticité historique &amp; suite de tests) :</B> Reproduit même les bogues déterministes de structures et de pile de 1995 exactement tels que Borland Pascal 7.0 les avait compilés.</LI>
@@ -8182,9 +8182,9 @@
     <H2 ALIGN="CENTER"><FONT COLOR="#0000FF">Licence &amp; Mentions légales (Édition Open-Source)</FONT></H2>
 <P><B>Remarque :</B> Le règlement de licence et les notes shareware historiques de 1995 se trouvent sous <A HREF="#lizenz_hist">Règlement de licence historique (Versions &lt; 3.0)</A>. MOD4WIN est aujourd'hui un logiciel libre Open-Source – veuillez ne plus envoyer de frais d'enregistrement !</P>
     <P>
-      <B>1. MOD4WIN 3.10 (Native 64-Bit-Reimplementierung / Rust-Codebasis)</B><BR>
+      <B>1. MOD4WIN 3.12 (Native 64-Bit-Reimplementierung / Rust-Codebasis)</B><BR>
       <B>MIT License</B><BR>
-      Copyright (c) 2026 Moderne 64-Bit-Portierung / MOD4WIN 3.10 Contributors
+      Copyright (c) 2026 Markus Herrmann (Rust Port / Rewrite coded with Google Gemini 4 Argon; reviewed with Claude Opus 5.5 &amp; Claude Fable 5.2)
     </P>
     <P>
       Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the &quot;Software&quot;), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:<BR>
@@ -8193,7 +8193,7 @@
     </P>
     <P>
       <B>2. Impulse Tracker (*.IT) Playback-Engine (Referenz-Implementierung)</B><BR>
-      Die in MOD4WIN 3.10 enthaltene Impulse-Tracker-Abspiel-Engine (<B>it.rs</B> / <B>it_engine.rs</B>) basiert in Teilen auf der Architektur und den Filter-/Interpolations-Algorithmen von <B>libopenmpt / OpenMPT</B> sowie <B>Schism Tracker</B>:<BR>
+      Die in MOD4WIN 3.12 enthaltene Impulse-Tracker-Abspiel-Engine (<B>it.rs</B> / <B>it_engine.rs</B>) basiert in Teilen auf der Architektur und den Filter-/Interpolations-Algorithmen von <B>libopenmpt / OpenMPT</B> sowie <B>Schism Tracker</B>:<BR>
       <B>BSD-3-Clause License (OpenMPT / libopenmpt Contributors)</B><BR>
       Copyright (c) 2004-2026, OpenMPT Project Developers and Contributors<BR>
       Copyright (c) 1997-2003, Olivier Lapicque<BR>
@@ -8876,7 +8876,7 @@
     <TD><FONT FACE="Times New Roman, Times, Georgia, serif" SIZE="3">
 <!-- TOPIC id="setup_fpu" ids="setup_fpu,main_fpu" title="" browse="" popup="true" -->
     <H2 ALIGN="CENTER"><FONT COLOR="#0000FF">IDO-FPU (Suréchantillonnage FPU cubique)</FONT></H2>
-    <P>Dans MOD4WIN 3.10, le 4e niveau IDO (IDO-FPU, OverSamp = 3) calcule l'interpolation par spline cubique à 4 points via la table de splines du coprocesseur mathématique (80x87 FPU).</P>
+    <P>Dans MOD4WIN 3.12, le 4e niveau IDO (IDO-FPU, OverSamp = 3) calcule l'interpolation par spline cubique à 4 points via la table de splines du coprocesseur mathématique (80x87 FPU).</P>
 <!-- /TOPIC -->
       <P ALIGN="RIGHT"><FONT FACE="MS Sans Serif, Arial, Helvetica" SIZE="1"><A HREF="#main_index">[ ^ Dialog ]</A> &nbsp; <A HREF="#main_index">[ ^ Contenu ]</A></FONT></P>
     </FONT></TD>

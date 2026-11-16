@@ -756,12 +756,11 @@ pub fn load_and_prepare_module_isolated(
 
 /// Scannt im Hintergrund (ohne PCM-Mixing) Titel, Kurz-Format-Tag, Kanalzahl und Gesamtlänge eines Playlist-Eintrags.
 pub fn scan_playlist_track_metadata(path: &Path) -> Option<super::app::PlaylistTrackMeta> {
-    let (file_data, ext_opt) = read_module_bytes_universal(path).ok()?;
     let new_mod = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        load_module_with_ext(&file_data, ext_opt.as_deref())
+        let (file_data, ext_opt) = read_module_bytes_universal(path).ok()?;
+        load_module_with_ext(&file_data, ext_opt.as_deref()).ok()
     }))
-    .ok()?
-    .ok()?;
+    .ok()??;
 
     let mod_name_len = new_mod.state.mi.mod_name_len as usize;
     let title = decode_tracker_text(&new_mod.state.mi.mod_name[..mod_name_len.min(40)]);

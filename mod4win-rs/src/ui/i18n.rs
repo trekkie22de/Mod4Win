@@ -73,10 +73,14 @@ impl LocaleCatalog {
             catalog.parse_and_merge_ini(EMBEDDED_DE_INI);
         }
 
-        // 3. Vorrangig externe `lang/<code>.ini` von der Festplatte laden und darüberlegen
+        // 3. Vorrangig externe `lang/<code>.ini` von der Festplatte laden und darüberlegen (UTF-8 + CP1252-Fallback)
         let file_code = if is_de { "de" } else { catalog.code.as_str() };
         if let Some(disk_path) = Self::find_lang_ini_on_disk(file_code)
-            && let Ok(disk_content) = fs::read_to_string(&disk_path) {
+            && let Ok(raw_bytes) = fs::read(&disk_path) {
+                let disk_content = match String::from_utf8(raw_bytes) {
+                    Ok(s) => s,
+                    Err(e) => e.into_bytes().into_iter().map(|b| b as char).collect(),
+                };
                 catalog.parse_and_merge_ini(&disk_content);
             }
 
@@ -121,6 +125,7 @@ impl LocaleCatalog {
                     dirs.push(parent.join("lang"));
                 }
             }
+        #[cfg(debug_assertions)]
         dirs.push(Path::new(env!("CARGO_MANIFEST_DIR")).join("lang"));
         dirs
     }

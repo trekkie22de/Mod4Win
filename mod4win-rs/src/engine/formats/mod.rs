@@ -240,11 +240,32 @@ fn reverse_loop_segment(src: &[u8], is_16bit: bool) -> Vec<u8> {
 /// sprengt (`ARENA_LARGE` = `64 KB` unter Wine `ntdll/heap.c`, `_HEAP_VIRTUAL_ALLOC_ENTRY` = `4 KB`
 /// unter Windows `ntdll`), kopiert `RtlReAllocateHeap` per `memcpy(ret, ptr, old_data_size)` nur
 /// `data_size` Bytes in den neuen, null-initialisierten Block und nullt dadurch den Überhang.
+/// Regionsmodell des Large-Block-Heaps unter `GlobalReAlloc16` -> `RtlReAllocateHeap`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PlayMemHeapModel {
+    /// 64-KB-Regionsgranularität (`dwAllocationGranularity` / Wine `ntdll/heap.c` `REGION_ALIGN = 0x10000`).
+    /// Standard auf allen Plattformen, damit Windows- und Linux-Builds bit-exakt identisches PCM liefern.
+    WineNtdll64K,
+    /// Strikte 4-KB-Seitengrenze (`0x1000`, ohne In-Place-Reserve-Wachstum über Seitengrenzen).
+    WinNtPage4K,
+}
+
+impl PlayMemHeapModel {
+    #[inline]
+    pub const fn region_mask(self) -> usize {
+        match self {
+            Self::WineNtdll64K => 0xFFFF,
+            Self::WinNtPage4K => 0x0FFF,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct PlayMemArena {
     play_mem_top: usize,
     data_size: usize,
     region_end: usize,
+    region_mask: usize,
 }
 
 impl PlayMemArena {
@@ -253,18 +274,21 @@ impl PlayMemArena {
         play_mem_top: usize::MAX,
         data_size: usize::MAX,
         region_end: usize::MAX,
+        region_mask: 0xFFFF,
     };
-
-    #[cfg(target_os = "linux")]
-    const LARGE_REGION_MASK: usize = 0xFFFF; // Wine ntdll/heap.c: REGION_ALIGN = 64 KB
-    #[cfg(not(target_os = "linux"))]
-    const LARGE_REGION_MASK: usize = 0x0FFF; // Windows ntdll VirtualAlloc Large-Block = 4 KB
 
     const HEAP_LARGE_HEADER: usize = 0x20; // sizeof(ARENA_LARGE) / sizeof(_HEAP_VIRTUAL_ALLOC_ENTRY) (32-Bit)
     const HEAP_MIN_LARGE_BLOCK: usize = 0x7EFF8; // Wine HEAP_MIN_LARGE_BLOCK_SIZE (520.184 Bytes)
 
-    /// Initialisiert `PlayMemTop` analog zu `GetPlayMem(Longint(MI.FileSiz) * 1024)` (`playdefs.pas` Z. 1391).
+    /// Initialisiert `PlayMemTop` analog zu `GetPlayMem(Longint(MI.FileSiz) * 1024)` (`playdefs.pas` Z. 1391)
+    /// mit plattformunabhängig identischem `WineNtdll64K`-Referenzmodell (`0 LSB` Parität).
     pub fn from_file_len(file_len: usize) -> Self {
+        Self::from_file_len_with_model(file_len, PlayMemHeapModel::WineNtdll64K)
+    }
+
+    /// Initialisiert `PlayMemTop` mit explizit wählbarem Heap-Regionsmodell.
+    pub fn from_file_len_with_model(file_len: usize, model: PlayMemHeapModel) -> Self {
+        let region_mask = model.region_mask();
         let file_siz_kb = (file_len / 1024) as u16 as usize;
         let init_req = file_siz_kb * 1024 + 8192 + 65536;
         let size = (init_req + 31) & !31;
@@ -274,7 +298,7 @@ impl PlayMemArena {
             size
         };
         let region_end = if size + 8 >= Self::HEAP_MIN_LARGE_BLOCK {
-            (Self::HEAP_LARGE_HEADER + size + Self::LARGE_REGION_MASK) & !Self::LARGE_REGION_MASK
+            (Self::HEAP_LARGE_HEADER + size + region_mask) & !region_mask
         } else {
             size
         };
@@ -282,6 +306,7 @@ impl PlayMemArena {
             play_mem_top,
             data_size: size,
             region_end,
+            region_mask,
         }
     }
 
@@ -305,8 +330,7 @@ impl PlayMemArena {
                 if sample_mem.len() > self.data_size {
                     sample_mem[self.data_size..].fill(0);
                 }
-                self.region_end =
-                    (needed_total + Self::LARGE_REGION_MASK) & !Self::LARGE_REGION_MASK;
+                self.region_end = (needed_total + self.region_mask) & !self.region_mask;
             }
         } else {
             self.region_end = size;
@@ -1059,6 +1083,17 @@ mod tests {
         assert_eq!(mem2[0x14E0FB], 0x11);
         assert_eq!(mem2[0x14E11F], 0x66);
         assert!(mem2[0x14E120..].iter().all(|&b| b == 0));
+
+        // 3. Explizites 4-KB-Seitenmodell (`WinNtPage4K`): Regionswechsel bereits ab 0x127000
+        let mut arena4k =
+            PlayMemArena::from_file_len_with_model(960_775, PlayMemHeapModel::WinNtPage4K);
+        let mut mem4k = vec![0x5Au8; 0x126290];
+        arena4k.ensure_capacity(&mut mem4k, 0x12629A);
+        arena4k.ensure_capacity(&mut mem4k, 0x126FF8);
+        mem4k.resize(0x126FEE, 0x77);
+        arena4k.ensure_capacity(&mut mem4k, 0x127D84);
+        assert_eq!(mem4k[0x12629F], 0x77);
+        assert!(mem4k[0x1262A0..].iter().all(|&b| b == 0));
     }
 }
 

@@ -646,10 +646,28 @@ fn detect_batch_mod_format(path: &Path) -> Option<(&'static str, &'static str)> 
         if let Some(mapped) = map_token(&ext_lower) {
             return Some(mapped);
         }
-        // Nicht-Modul-Artefakte (z. B. `mod.song.0.TXT`, `.wav`, `.zip`) niemals als Amiga-Präfix werten
+        // Nicht-Modul-Artefakte (z. B. `mod.song.0.TXT`, `mod.nfo`, `xm.jpg`, `.wav`, `.zip`) niemals als Amiga-Präfix werten
         if matches!(
             ext_lower.as_str(),
             "txt"
+                | "nfo"
+                | "diz"
+                | "doc"
+                | "rtf"
+                | "pdf"
+                | "htm"
+                | "html"
+                | "xml"
+                | "jpg"
+                | "jpeg"
+                | "png"
+                | "gif"
+                | "iff"
+                | "ilbm"
+                | "info"
+                | "mp3"
+                | "ogg"
+                | "flac"
                 | "wav"
                 | "log"
                 | "bak"
@@ -663,11 +681,13 @@ fn detect_batch_mod_format(path: &Path) -> Option<(&'static str, &'static str)> 
                 | "zip"
                 | "7z"
                 | "rar"
+                | "arj"
                 | "lha"
                 | "lzh"
                 | "gz"
                 | "xz"
                 | "bz2"
+                | "tar"
                 | "md"
                 | "json"
                 | "csv"
@@ -964,9 +984,9 @@ mod linux_wine {
             m4w_dir: &Path,
             template_dir: &Path,
         ) -> Result<Self, String> {
-            let worker_tag = format!("W{}", worker_id);
-            let wine_prefix = work_dir.join(format!("pfx_{}", worker_tag));
-            let worker_m4w_dir = work_dir.join(format!("m4w_{}", worker_tag));
+            let worker_tag = format!("P{}_W{}", std::process::id(), worker_id);
+            let wine_prefix = work_dir.join(format!("pfx_W{}", worker_id));
+            let worker_m4w_dir = work_dir.join(format!("m4w_W{}", worker_id));
 
             let _ = Command::new("wineserver")
                 .arg("-k9")
@@ -1037,7 +1057,7 @@ mod linux_wine {
 
         pub fn start_warm_wineserver(&self) {
             let _ = Command::new("wineserver")
-                .arg("-p")
+                .arg("-p10")
                 .env("WINEPREFIX", &self.wine_prefix)
                 .env("WINEARCH", "win32")
                 .env("WINEDEBUG", "-all")
@@ -1325,11 +1345,12 @@ pub fn run_batch_m4w_diff(opts: &BatchM4wDiffOptions) -> Result<(), Box<dyn std:
                         ) {
                             Ok(g) => Some(g),
                             Err(e) => {
+                                eprintln!("[{}] FATAL WINE SETUP ERROR: {}", prefix, e);
                                 append_line_utf8(
                                     &debug_log,
                                     &format!("WINE SETUP ERROR ({}): {}", prefix, e),
                                 );
-                                None
+                                return;
                             }
                         }
                     }

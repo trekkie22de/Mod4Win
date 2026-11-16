@@ -359,6 +359,8 @@ pub struct UiSharedState {
     /// Zeigt an, ob `De-Hiss` für das aktuell geladene 16-Bit-`.XM`/`.IT`-Modul automatisch deaktiviert wurde,
     /// damit `ini_config.dehiss` beim Modulwechsel auf ein 8-Bit-Modul wiederhergestellt bleibt.
     pub dehiss_auto_disabled: bool,
+    /// Monoton steigender Generationszähler bei Änderungen an der Playlist (für O(1)-Fast-Path in Scanner & UI-Caches).
+    pub playlist_generation: u64,
 }
 
 impl UiSharedState {
@@ -463,6 +465,7 @@ impl UiSharedState {
             title_scroll_epoch: Instant::now(),
             info_scroll_epoch: Instant::now(),
             dehiss_auto_disabled: false,
+            playlist_generation: 1,
         }
     }
 
@@ -799,6 +802,7 @@ impl UiSharedState {
 
     /// Synchronisiert die aktuellen Laufzeit-Einstellungen und (falls `state_saver` aktiv) den Wiedergabezustand zurück nach `self.ini_config`.
     pub fn sync_runtime_to_ini(&mut self) {
+        self.playlist_generation = self.playlist_generation.wrapping_add(1);
         self.ini_config.sample_rate = self.sound_settings.samplerate.max(4000) as u32;
         self.ini_config.bits_per_sample = self.sound_settings.bits;
         self.ini_config.channels = self.sound_settings.stereo.clamp(1, 2);
@@ -1005,6 +1009,15 @@ impl UiSharedState {
 
     /// Sammelt alle Tracker-Dateien aus einer einzelnen Datei, einer `.MOL`-Playlist, einem `.ZIP`-Archiv oder rekursiv aus einem Ordner.
     pub fn collect_tracker_files(path: &std::path::Path, out: &mut Vec<PathBuf>) {
+        Self::collect_tracker_files_inner(path, out, 0);
+    }
+
+    fn collect_tracker_files_inner(path: &std::path::Path, out: &mut Vec<PathBuf>, depth: usize) {
+        const MAX_COLLECT_FILES: usize = 16_384;
+        const MAX_DIR_DEPTH: usize = 16;
+        if out.len() >= MAX_COLLECT_FILES || depth > MAX_DIR_DEPTH {
+            return;
+        }
         // 1. Fast-Path für bekannte Tracker-Dateiendungen: unter Windows 0 Disk-Syscalls (`GetFileAttributesW` entfällt komplett)!
         if Self::is_tracker_file(path) {
             #[cfg(target_os = "windows")]
@@ -1039,6 +1052,9 @@ impl UiSharedState {
                 let mut subdirs = Vec::new();
                 let mut files = Vec::new();
                 for entry in entries.flatten() {
+                    if out.len() + files.len() >= MAX_COLLECT_FILES {
+                        break;
+                    }
                     let Ok(ft) = entry.file_type() else {
                         continue;
                     };
@@ -1061,7 +1077,10 @@ impl UiSharedState {
                 out.extend(files);
                 subdirs.sort();
                 for d in subdirs {
-                    Self::collect_tracker_files(&d, out);
+                    if out.len() >= MAX_COLLECT_FILES {
+                        break;
+                    }
+                    Self::collect_tracker_files_inner(&d, out, depth + 1);
                 }
             }
     }
@@ -1070,6 +1089,7 @@ impl UiSharedState {
     /// Im Shuffle-Modus wird eine echte Permutation erzeugt, sodass kein Song doppelt läuft,
     /// bevor alle Einträge der Playlist einmal gespielt wurden.
     pub fn rebuild_number_list(&mut self) {
+        self.playlist_generation = self.playlist_generation.wrapping_add(1);
         let len = self.playlist.len();
         if len == 0 {
             self.number_list.clear();
@@ -1270,9 +1290,7 @@ impl UiSharedState {
             }
             self.playlist = new_playlist;
 
-            if !self.playing_track_detached && self.playlist_idx < n {
-                self.playlist_idx = old_to_new[self.playlist_idx];
-            } else if self.playing_track_detached && self.playlist_idx < n {
+            if self.playlist_idx < n {
                 self.playlist_idx = old_to_new[self.playlist_idx];
             }
 
@@ -1285,15 +1303,11 @@ impl UiSharedState {
                     }
                 } else {
                     self.number_list = (0..n).collect();
-                    if !self.playing_track_detached {
-                        self.playlist_pos = self.playlist_idx.min(n - 1);
-                    }
+                    self.playlist_pos = self.playlist_idx.min(n - 1);
                 }
             } else {
                 self.rebuild_number_list();
-                if !self.playing_track_detached
-                    && let Some(pos) = self.number_list.iter().position(|&i| i == self.playlist_idx)
-                {
+                if let Some(pos) = self.number_list.iter().position(|&i| i == self.playlist_idx) {
                     self.playlist_pos = pos;
                 }
             }
@@ -2024,11 +2038,18 @@ pub struct Mod4WinApp {
     #[cfg(not(feature = "retro-win32"))]
     pub(crate) playlist_meta_rx:
         Option<std::sync::mpsc::Receiver<(String, Option<PlaylistTrackMeta>)>>,
+    #[cfg(not(feature = "retro-win32"))]
+    pub(crate) playlist_meta_in_flight: Vec<String>,
+    #[cfg(not(feature = "retro-win32"))]
+    pub(crate) playlist_meta_done_gen: u64,
+    #[cfg(not(feature = "retro-win32"))]
+    pub(crate) cached_playlist_total_secs: std::cell::Cell<(u64, usize, u32, u64)>,
     pub(crate) playlist_scroll_dragging: bool, // Ziehen des vertikalen Scrollbalkens im Modern Playlist-Dock
     pub(crate) modern_playlist_rows: usize, // Anzahl sichtbarer Zeilen im Modern Playlist-Dock (`5..=36`, Standard `9`)
     pub(crate) open_dlg: OpenDialogState, // Commander-Zustand für „Open Module“ (newopen.pas)
     pub(crate) setup_cfg: Mod4WinIniConfig, // Arbeitskopie der Einstellungen im geöffneten Setup-Dialog (`dsetup.pas`)
     pub(crate) setup_backup_cfg: Mod4WinIniConfig, // Backup zum Wiederherstellen bei Cancel im Setup-Dialog
+    pub(crate) archive_backup_cfg: Mod4WinIniConfig, // Snapshot beim Öffnen von `ArchiveSetup` (`tarcopt`)
     pub(crate) setup_edit_focus: SetupEditFocus,
     pub(crate) setup_paused_playback: bool,
     pub(crate) wav_ask_dlg: WavAskState, // Zustand des `TAskWin`-Dialogs für Direct-to-Disk `.WAV`-Export
@@ -2060,6 +2081,7 @@ pub struct Mod4WinApp {
     pub(crate) bringing_to_front: bool,
     pub(crate) last_bring_to_front: Instant,
     pub(crate) last_redraw_poll: Instant,
+    pub(crate) ini_save_dirty: bool,
     pub(crate) render_scratch_buf: Vec<u8>,
 }
 
@@ -2119,11 +2141,18 @@ impl Mod4WinApp {
             playlist_meta_cache: HashMap::new(),
             #[cfg(not(feature = "retro-win32"))]
             playlist_meta_rx: None,
+            #[cfg(not(feature = "retro-win32"))]
+            playlist_meta_in_flight: Vec::new(),
+            #[cfg(not(feature = "retro-win32"))]
+            playlist_meta_done_gen: 0,
+            #[cfg(not(feature = "retro-win32"))]
+            cached_playlist_total_secs: std::cell::Cell::new((0, 0, 0, 0)),
             playlist_scroll_dragging: false,
             modern_playlist_rows: init_playlist_rows,
             open_dlg: OpenDialogState::new_lazy(initial_dir, &initial_playlist),
             setup_cfg: initial_ini.clone(),
             setup_backup_cfg: initial_ini.clone(),
+            archive_backup_cfg: initial_ini.clone(),
             setup_edit_focus: SetupEditFocus::None,
             setup_paused_playback: false,
             wav_ask_dlg: WavAskState {
@@ -2164,6 +2193,7 @@ impl Mod4WinApp {
             bringing_to_front: false,
             last_bring_to_front: now,
             last_redraw_poll: now,
+            ini_save_dirty: false,
             render_scratch_buf: Vec::with_capacity(580 * 505 * 4),
         }
     }
@@ -2818,26 +2848,32 @@ impl Mod4WinApp {
             }
             if worker_done {
                 self.playlist_meta_rx = None;
+                for k in self.playlist_meta_in_flight.drain(..) {
+                    self.playlist_meta_cache.entry(k).or_insert(None);
+                }
             }
-            if updated {
-                if let Some(&id) = self
+            if updated
+                && let Some(&id) = self
                     .kind_to_id
                     .get(&WindowKind::QuickSelect)
                     .or_else(|| self.kind_to_id.get(&WindowKind::OpenDialog))
-                    && let Some(surf) = self.windows.get(&id)
-                {
-                    surf.window.request_redraw();
-                }
+                && let Some(surf) = self.windows.get(&id)
+            {
+                surf.window.request_redraw();
             }
             if self.playlist_meta_rx.is_some() {
                 return;
             }
-            let batch: Vec<(String, PathBuf)> = {
+            let (cur_gen, batch, should_prune): (u64, Vec<(String, PathBuf)>, Option<std::collections::HashSet<String>>) = {
                 let st = self.shared_state.lock().unwrap();
                 if !self.is_modern_skin(&st) || st.playlist.is_empty() {
                     return;
                 }
-                st.playlist
+                if self.playlist_meta_done_gen == st.playlist_generation {
+                    return;
+                }
+                let batch: Vec<(String, PathBuf)> = st
+                    .playlist
                     .iter()
                     .filter_map(|p| {
                         let k = UiSharedState::playlist_path_key(p);
@@ -2848,11 +2884,29 @@ impl Mod4WinApp {
                         }
                     })
                     .take(32)
-                    .collect()
+                    .collect();
+                let prune = if batch.is_empty()
+                    && self.playlist_meta_cache.len() > st.playlist.len().saturating_add(512)
+                {
+                    Some(
+                        st.playlist
+                            .iter()
+                            .map(|p| UiSharedState::playlist_path_key(p))
+                            .collect(),
+                    )
+                } else {
+                    None
+                };
+                (st.playlist_generation, batch, prune)
             };
+            if let Some(valid_keys) = should_prune {
+                self.playlist_meta_cache.retain(|k, _| valid_keys.contains(k));
+            }
             if batch.is_empty() {
+                self.playlist_meta_done_gen = cur_gen;
                 return;
             }
+            self.playlist_meta_in_flight = batch.iter().map(|(k, _)| k.clone()).collect();
             let (tx, rx) = std::sync::mpsc::channel();
             self.playlist_meta_rx = Some(rx);
             std::thread::spawn(move || {
@@ -2974,13 +3028,15 @@ impl Mod4WinApp {
     /// Liefert den aktuell obersten modalen Dialog (`MakeDlg` / `Parent^.Disable` in `MULBOX.PAS` & `newopen.pas`),
     /// der Tastatureingaben und Mausklicks auf dahinterliegende Fenster exklusiv abfängt.
     pub(crate) fn topmost_modal_dialog(&self, is_modern: bool) -> Option<WindowKind> {
-        if self.kind_to_id.contains_key(&WindowKind::ConfirmDialog) || self.confirm_action.is_some() {
+        if self.kind_to_id.contains_key(&WindowKind::ConfirmDialog)
+            || (is_modern && self.confirm_action.is_some())
+        {
             return Some(WindowKind::ConfirmDialog);
         }
         let modal_stack_top = [
             WindowKind::FileSelectDialog,
-            WindowKind::WavAskDialog,
             WindowKind::FileManager,
+            WindowKind::WavAskDialog,
             WindowKind::HotkeyEditor,
             WindowKind::ArchiveSetup,
             WindowKind::SetupDialog,
@@ -3127,6 +3183,7 @@ impl Mod4WinApp {
                 self.setup_cfg = state.ini_config.clone();
                 self.setup_backup_cfg = state.ini_config.clone();
             }
+            self.archive_backup_cfg = self.setup_cfg.clone();
             self.archive_dlg = ArchiveSetupState::default();
         } else if kind == WindowKind::About {
             self.about_opened_at = Instant::now();
@@ -4191,7 +4248,7 @@ impl ApplicationHandler for Mod4WinApp {
                 } else if kind == WindowKind::SetupDialog {
                     self.cancel_setup_dialog();
                 } else if kind == WindowKind::ArchiveSetup {
-                    self.setup_cfg = self.setup_backup_cfg.clone();
+                    self.setup_cfg = self.archive_backup_cfg.clone();
                     self.close_window(WindowKind::ArchiveSetup);
                 } else {
                     self.close_window(kind);
@@ -4211,16 +4268,14 @@ impl ApplicationHandler for Mod4WinApp {
                     // statt die bestehende Playlist zu überschreiben!
                     let accepted = {
                         let mut state = self.shared_state.lock().unwrap();
-                        let ok = state.append_dropped_to_playlist(&dropped_path);
-                        if ok {
-                            let _ = state
-                                .ini_config
-                                .save_to_file(&Mod4WinIniConfig::default_ini_path());
-                        }
-                        ok
+                        state.append_dropped_to_playlist(&dropped_path)
                     };
-                    if accepted && let Some(surf) = self.windows.get(&id) {
-                        surf.window.request_redraw();
+                    if accepted {
+                        self.ini_save_dirty = true;
+                        self.last_drop_time = Some(Instant::now());
+                        if let Some(surf) = self.windows.get(&id) {
+                            surf.window.request_redraw();
+                        }
                     }
                 } else {
                     // Drag & Drop aufs Hauptfenster (`wmDropFiles` in `mod4win.pas`):
@@ -4232,15 +4287,10 @@ impl ApplicationHandler for Mod4WinApp {
                         .unwrap_or(true);
                     let accepted = {
                         let mut state = self.shared_state.lock().unwrap();
-                        let ok = state.handle_dropped_batch_item(&dropped_path, first_of_batch);
-                        if ok {
-                            let _ = state
-                                .ini_config
-                                .save_to_file(&Mod4WinIniConfig::default_ini_path());
-                        }
-                        ok
+                        state.handle_dropped_batch_item(&dropped_path, first_of_batch)
                     };
                     if accepted {
+                        self.ini_save_dirty = true;
                         if first_of_batch {
                             self.quick_select_all_selected = false;
                             self.playlist_selected.clear();
@@ -4262,13 +4312,29 @@ impl ApplicationHandler for Mod4WinApp {
             WindowEvent::Focused(false) => {
                 if kind == WindowKind::Main {
                     self.suppress_escape_stop = false;
+                    self.preamp_dragging = false;
+                } else if kind == WindowKind::QuickSelect {
+                    self.playlist_reorder_drag = None;
+                    self.playlist_scroll_dragging = false;
                 }
+                self.pressed_btn = None;
             }
             WindowEvent::Moved(pos) => {
-                // Speichere die neue Fensterposition (falls nicht minimiert auf -32000,-32000)
+                // Speichere die neue Fensterposition (falls nicht minimiert auf -32000,-32000).
+                // Echos unserer eigenen Follower-`set_outer_position`-Aufrufe (`pos == last_outer_pos`)
+                // werden direkt verbucht, ohne erneut durch `snap_window_position` zu laufen!
                 if pos.x >= -100 && pos.y >= -100 {
-                    let (sx, sy) = self.snap_window_position(id, pos.x, pos.y);
-                    self.record_window_position(kind, sx, sy);
+                    let is_echo = self
+                        .windows
+                        .get(&id)
+                        .and_then(|s| s.last_outer_pos)
+                        .is_some_and(|(lx, ly)| lx == pos.x && ly == pos.y);
+                    if is_echo {
+                        self.record_window_position(kind, pos.x, pos.y);
+                    } else {
+                        let (sx, sy) = self.snap_window_position(id, pos.x, pos.y);
+                        self.record_window_position(kind, sx, sy);
+                    }
                 }
             }
             WindowEvent::Resized(new_size) => {
@@ -4605,12 +4671,11 @@ impl ApplicationHandler for Mod4WinApp {
                             self.open_dlg.classic_drag_dir = None;
                             self.file_man_dlg.classic_drag_dir = None;
                         }
-                    } else if button == MouseButton::Right {
-                        if let Some(close_kind) = self.pending_right_click_close.take()
-                            && close_kind == kind
-                        {
-                            self.close_window(close_kind);
-                        }
+                    } else if button == MouseButton::Right
+                        && let Some(close_kind) = self.pending_right_click_close.take()
+                        && close_kind == kind
+                    {
+                        self.close_window(close_kind);
                     }
                     return;
                 }
@@ -4740,7 +4805,7 @@ impl ApplicationHandler for Mod4WinApp {
                             let max_scroll = pl_len.saturating_sub(max_vis);
                             self.quick_select_scroll =
                                 (self.quick_select_scroll as i32 + lines).clamp(0, max_scroll as i32) as usize;
-                        } else {
+                        } else if lines != 0 {
                             let (_, _, vis_rows, vis_cols, total_cols, _) =
                                 self.classic_quick_select_layout(pl_len);
                             let max_col_off = total_cols.saturating_sub(vis_cols);
@@ -4863,6 +4928,20 @@ impl ApplicationHandler for Mod4WinApp {
         self.poll_held_button_repeat();
         let _ = self.poll_touch_long_press_and_kinetic(event_loop);
         self.poll_playlist_meta_scanner();
+
+        if self.ini_save_dirty
+            && self
+                .last_drop_time
+                .map(|t| t.elapsed().as_millis() >= 250)
+                .unwrap_or(true)
+        {
+            self.ini_save_dirty = false;
+            let mut st = self.shared_state.lock().unwrap();
+            st.sync_runtime_to_ini();
+            let _ = st
+                .ini_config
+                .save_to_file(&Mod4WinIniConfig::default_ini_path());
+        }
 
         let pending_ps = {
             let mut st = self.shared_state.lock().unwrap();

@@ -587,15 +587,15 @@ impl OpenDialogState {
         self.status_msg = format!("Cleared {} module(s) from playlist.", count);
     }
 
-    /// Fügt per `F5` auf `Directories` den markierten Ordner / `.MOL` / `.ZIP` / Laufwerk rekursiv zur rechten Playlist hinzu (`newopen.pas`).
+    /// Fügt per `F5` auf `Directories` den markierten Ordner / `.MOL` / `.ZIP` rekursiv zur rechten Playlist hinzu (`newopen.pas`).
+    /// Laufwerksbuchstaben (`[C:]`) werden wie im Original ignoriert, um keinen synchronen Vollplatten-Scan auszulösen.
     pub fn append_highlighted_dir_to_playlist(&mut self) {
         let Some(item) = self.mid_dirs.get(self.mid_cursor).cloned() else {
             return;
         };
         let target_path = match item.kind {
-            OpenDirKind::Parent(_) => return,
+            OpenDirKind::Parent(_) | OpenDirKind::Drive(_) => return,
             OpenDirKind::Subdir(p) | OpenDirKind::MolFile(p) | OpenDirKind::ZipFile(p) => p,
-            OpenDirKind::Drive(drv) => PathBuf::from(format!("{}:\\", drv)),
         };
         let added = self.append_dropped_path(&target_path);
         self.status_msg = format!("Added {} module(s) from {} to playlist.", added, item.label);
@@ -629,8 +629,14 @@ impl OpenDialogState {
     /// Wechselt in das Wurzelverzeichnis des aktuellen Laufwerks (`Ctrl+\` in `newopen.pas`).
     pub fn navigate_root_dir(&mut self) {
         let cur = self.current_dir_path();
-        let root = cur
+        let abs = if cur.is_absolute() {
+            cur
+        } else {
+            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"))
+        };
+        let root = abs
             .ancestors()
+            .filter(|p| !p.as_os_str().is_empty())
             .last()
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|| PathBuf::from("/"));
@@ -1438,8 +1444,13 @@ impl Mod4WinApp {
         }
         let base_dir = {
             let st = self.shared_state.lock().unwrap();
-            if !st.ini_config.last_playlist_dir.is_empty() && !fname.contains('/') && !fname.contains('\\') {
-                PathBuf::from(&st.ini_config.last_playlist_dir)
+            let candidate = PathBuf::from(&st.ini_config.last_playlist_dir);
+            if !st.ini_config.last_playlist_dir.is_empty()
+                && !fname.contains('/')
+                && !fname.contains('\\')
+                && candidate.is_dir()
+            {
+                candidate
             } else {
                 self.open_dlg.current_dir_path()
             }

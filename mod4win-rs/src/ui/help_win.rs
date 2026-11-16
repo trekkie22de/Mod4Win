@@ -45,7 +45,7 @@ impl Mod4WinApp {
     }
 
     pub(crate) fn open_help_topic(&mut self, event_loop: &ActiveEventLoop, topic_id: &str) {
-        self.help_dlg.set_language(self.setup_cfg.language);
+        self.help_dlg.sync_setup_language(self.setup_cfg.language);
         self.help_dlg.open_topic(topic_id);
         self.open_window(event_loop, WindowKind::HelpViewer);
     }

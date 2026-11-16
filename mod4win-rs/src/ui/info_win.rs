@@ -565,11 +565,9 @@ impl Mod4WinApp {
             let track_w = (sb_w.saturating_sub(30)).max(8);
             let thumb_w = ((track_w as usize * vis_cols) / total_cols.max(1)).clamp(14, track_w as usize) as u32;
             let avail_w = track_w.saturating_sub(thumb_w);
-            let thumb_off = if max_col_off > 0 {
-                ((avail_w as usize * col_off) / max_col_off) as i32
-            } else {
-                0
-            };
+            let thumb_off = (avail_w as usize * col_off)
+                .checked_div(max_col_off)
+                .unwrap_or(0) as i32;
             draw_3d_panel(frame, dw, dh, track_x + thumb_off, sb_y, thumb_w, sb_h, false, col_gray);
             fill_rect(frame, dw, dh, track_x + thumb_off + (thumb_w as i32 / 2), sb_y + 4, 1, sb_h.saturating_sub(8), col_dark);
         }
@@ -697,7 +695,15 @@ impl Mod4WinApp {
     ) {
         let (dw, dh, items, cur_pl_idx, classic_input) = {
             let st = self.shared_state.lock().unwrap();
-            let (dw, dh, _) = self.window_dimensions(WindowKind::QuickSelect, &st);
+            let (dw, dh) = self
+                .kind_to_id
+                .get(&WindowKind::QuickSelect)
+                .and_then(|id| self.windows.get(id))
+                .map(|s| (s.width, s.height))
+                .unwrap_or_else(|| {
+                    let (ew, eh, _) = self.window_dimensions(WindowKind::QuickSelect, &st);
+                    (ew, eh)
+                });
             let items = self.sorted_quick_select_items(&st);
             (dw, dh, items, st.playlist_idx, st.classic_input)
         };

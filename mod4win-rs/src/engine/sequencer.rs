@@ -4417,6 +4417,10 @@ impl Sequencer {
         if clamped_order > 0 || target_row > 0 {
             let max_ticks: u32 = 500_000;
             let mut ticks_run: u32 = 0;
+            let saved_peak_search = self.mix_mem.peak_search;
+            // `search_time` in `PLAYER32.PAS` ruft `Play(..., Search = True)` auf ->
+            // `EventChg` bleibt analog zu `PeakSearch` während des Schnellvorlaufs sticky (`play.inc` Z. 1396).
+            self.mix_mem.peak_search = true;
 
             while !(self.module.state.curr_pattern == clamped_order
                 && self.module.state.curr_note >= target_row)
@@ -4454,6 +4458,7 @@ impl Sequencer {
                     break;
                 }
             }
+            self.mix_mem.peak_search = saved_peak_search;
         }
         self.only_one_pattern = saved_only_one_pattern;
 

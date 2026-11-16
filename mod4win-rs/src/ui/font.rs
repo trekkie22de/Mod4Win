@@ -119,8 +119,12 @@ pub fn draw_char(
         &FONT_5X7[95] // Vollblock für unbekannte Zeichen
     };
 
+    if dst_width == 0 || dst_height == 0 {
+        return;
+    }
+    let safe_h = (dst.len() / ((dst_width as usize) * 4)).min(dst_height as usize) as i32;
     let dw = dst_width as i32;
-    let dh = dst_height as i32;
+    let dh = safe_h;
 
     for col in 0..5 {
         let px = x + col;
@@ -183,10 +187,13 @@ pub fn fill_rect(
     h: u32,
     color: [u8; 4],
 ) {
+    if dst_width == 0 || dst_height == 0 {
+        return;
+    }
     let dw = dst_width as i32;
-    let dh = dst_height as i32;
-    let x_end = (x + w as i32).min(dw);
-    let y_end = (y + h as i32).min(dh);
+    let dh = (dst.len() / ((dst_width as usize) * 4)).min(dst_height as usize) as i32;
+    let x_end = (x.saturating_add(w as i32)).min(dw);
+    let y_end = (y.saturating_add(h as i32)).min(dh);
     let x_start = x.max(0);
     let y_start = y.max(0);
 
@@ -287,9 +294,13 @@ pub fn draw_bmp_text_16x20(
             '»' => '>',
             other => other,
         };
-        let up = mapped.to_ascii_uppercase() as u8;
-        let k = if (32..96).contains(&up) {
-            (up - 32) as u32
+        let k = if mapped.is_ascii() {
+            let up = mapped.to_ascii_uppercase() as u8;
+            if (32..96).contains(&up) {
+                (up - 32) as u32
+            } else {
+                0
+            }
         } else {
             0
         };
@@ -680,8 +691,11 @@ pub fn draw_oem_char(
         return;
     }
 
+    if dst_width == 0 || dst_height == 0 {
+        return;
+    }
     let dw = dst_width as i32;
-    let dh = dst_height as i32;
+    let dh = (dst.len() / ((dst_width as usize) * 4)).min(dst_height as usize) as i32;
 
     for row in 0..12i32 {
         let py = y + row;
@@ -710,6 +724,7 @@ pub fn draw_oem_char(
 pub fn char_to_oem_code(c: char) -> u8 {
     match c {
         '☺' => 0x01,
+        '§' => 0x15,
         '«' => 0xAE,
         '»' => 0xAF,
         'ä' => 0x84,
@@ -719,7 +734,41 @@ pub fn char_to_oem_code(c: char) -> u8 {
         'ü' => 0x81,
         'Ü' => 0x9A,
         'ß' => 0xE1,
-        _ if (c as u32) <= 0xFF => c as u8,
+        'Ç' => 0x80,
+        'é' => 0x82,
+        'â' => 0x83,
+        'à' => 0x85,
+        'å' => 0x86,
+        'ç' => 0x87,
+        'ê' => 0x88,
+        'ë' => 0x89,
+        'è' => 0x8A,
+        'ï' => 0x8B,
+        'î' => 0x8C,
+        'ì' => 0x8D,
+        'Å' => 0x8F,
+        'É' => 0x90,
+        'æ' => 0x91,
+        'Æ' => 0x92,
+        'ô' => 0x93,
+        'ò' => 0x95,
+        'û' => 0x96,
+        'ù' => 0x97,
+        'ÿ' => 0x98,
+        '¢' => 0x9B,
+        '£' => 0x9C,
+        '¥' => 0x9D,
+        'á' => 0xA0,
+        'í' => 0xA1,
+        'ó' => 0xA2,
+        'ú' => 0xA3,
+        'ñ' => 0xA4,
+        'Ñ' => 0xA5,
+        '¿' => 0xA8,
+        '¡' => 0xAD,
+        '°' => 0xF8,
+        'µ' => 0xE6,
+        _ if c.is_ascii() => c as u8,
         _ => b'?',
     }
 }
